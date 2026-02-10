@@ -19,7 +19,9 @@ Built‑in indicators provide only basic status. ChargeMonitor gathers more cont
   - power source and adapter name/manufacturer (when available);
   - charging state and time remaining to full (when available);
   - charging power (W) and fast‑charging indicator;
-  - battery metrics like cycle count and maximum capacity (if available);
+  - power consumption (W);
+  - time remainig to discharge;
+  - battery cycle count;
   - "Using Significant Energy": apps with noticeable energy impact.
 - Quick actions:
   - open the project’s GitHub page;
