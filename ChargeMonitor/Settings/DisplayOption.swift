@@ -8,6 +8,7 @@ enum DisplayOption: String, CaseIterable, Identifiable, Codable {
 	case significantEnergyApps
 	case cycleCount
 	case uptime
+	case timeRemaining
 	case startAtLogin
 	case preventSleeping
 	
@@ -22,6 +23,7 @@ enum DisplayOption: String, CaseIterable, Identifiable, Codable {
 		case .significantEnergyApps: return "Significant Energy Apps"
 		case .cycleCount: return "Cycle Count"
 		case .uptime: return "Uptime"
+		case .timeRemaining: return "Time Remaining"
 		case .startAtLogin: return "Start at Login"
 		case .preventSleeping: return "Prevent Sleeping"
 		}

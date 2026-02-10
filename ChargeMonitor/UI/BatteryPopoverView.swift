@@ -157,13 +157,13 @@ struct BatteryInfoFormatter {
 		} else if let line = timeToFullLine {
 			lines.append(line)
 		}
-		
+
 		lines.append(chargingStatusLine)
 		
 		appendIfPresent(chargingPowerLine, to: &lines)
 		appendIfPresent(currentPowerLine, to: &lines)
 		appendIfPresent(cycleCountLine, to: &lines)
-		appendIfPresent(maximumCapacityLine, to: &lines)
+		appendIfPresent(timeToEmptyLine, to: &lines)
 		appendIfPresent(uptimeLine, to: &lines)
 		
 		if snapshot.powerSource == .powerAdapter {
@@ -201,7 +201,23 @@ struct BatteryInfoFormatter {
 		
 		return "Time to Full: \(value)"
 	}
-	
+
+	private var timeToEmptyLine: String? {
+		guard enabledOptions.contains(.timeRemaining) else { return nil }
+		guard snapshot.powerSource == .battery, !snapshot.isCharging else { return nil }
+		guard let minutes = snapshot.timeToEmptyMinutes, minutes > 0 else { return nil }
+
+		let hours = minutes / 60
+		let mins = minutes % 60
+
+		let value: String
+		if hours > 0, mins > 0 { value = "\(hours)h \(mins)m" }
+		else if hours > 0 { value = "\(hours)h" }
+		else { value = "\(mins)m" }
+
+		return "Time Remaining: \(value)"
+	}
+
 	private var chargingStatusLine: String {
 		if snapshot.isFull { return "Charging: Fully Charged" }
 		
@@ -229,11 +245,6 @@ struct BatteryInfoFormatter {
 	private var cycleCountLine: String? {
 		guard enabledOptions.contains(.cycleCount) else { return nil }
 		return "Cycle Count: \(snapshot.cycleCount.map(String.init) ?? "—")"
-	}
-	
-	private var maximumCapacityLine: String? {
-		guard let cap = snapshot.maximumCapacityPercent, (0...100).contains(cap), cap < 100 else { return nil }
-		return "Maximum Capacity: \(cap)%"
 	}
 	
 	private var uptimeLine: String? {

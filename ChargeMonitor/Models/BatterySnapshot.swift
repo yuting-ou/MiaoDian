@@ -9,10 +9,10 @@ struct BatterySnapshot: Equatable {
 	var adapterManufacturer: String?
 	
 	var cycleCount: Int?
-	var maximumCapacityPercent: Int?
 	var stateOfChargePercent: Int?
 	var timeToFullChargeMinutes: Int?
-	
+	var timeToEmptyMinutes: Int?
+
 	var chargingPowerW: Double?
 	var currentPowerW: Double?
 	var isFastCharging: Bool = false

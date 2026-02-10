@@ -9,7 +9,6 @@ struct AdapterInfo {
 
 struct BatteryMetrics {
 	var cycleCount: Int?
-	var maximumCapacityPercent: Int?
 	var stateOfChargePercent: Int?
 	var chargingPowerW: Double?
 	var currentPowerW: Double?
@@ -33,6 +32,7 @@ struct IOKitBatteryReader {
 	private static let keyPSType = kIOPSTypeKey as String
 	private static let keyIsCharging = kIOPSIsChargingKey as String
 	private static let keyTimeToFull = kIOPSTimeToFullChargeKey as String
+	private static let keyTimeToEmpty = kIOPSTimeToEmptyKey as String
 	private static let keyCurrentCapacity = kIOPSCurrentCapacityKey as String
 	
 	func readSnapshot() async -> BatterySnapshot {
@@ -44,6 +44,7 @@ struct IOKitBatteryReader {
 		let isCharging = internalBattery?.bool(Self.keyIsCharging) ?? false
 		let metrics = readBatteryMetrics(internalBattery: internalBattery, powerSource: powerSource, isCharging: isCharging)
 		let timeToFull = readTimeToFullChargeMinutes(internalBattery: internalBattery)
+		let timeToEmpty = readTimeToEmptyMinutes(internalBattery: internalBattery)
 		let isExternalPowerConnected = metrics.isExternalPowerConnected ?? (adapter != nil) || (powerSource == .powerAdapter)
 		
 		let chargingByWire = isExternalPowerConnected
@@ -63,9 +64,9 @@ struct IOKitBatteryReader {
 		}
 		
 		snapshot.cycleCount = metrics.cycleCount
-		snapshot.maximumCapacityPercent = metrics.maximumCapacityPercent
 		snapshot.stateOfChargePercent = metrics.stateOfChargePercent
 		snapshot.timeToFullChargeMinutes = timeToFull
+		snapshot.timeToEmptyMinutes = timeToEmpty
 		snapshot.chargingPowerW = metrics.chargingPowerW
 		snapshot.currentPowerW = metrics.currentPowerW
 		
@@ -123,6 +124,15 @@ struct IOKitBatteryReader {
 		else { return nil }
 		return minutes
 	}
+
+	private func readTimeToEmptyMinutes(internalBattery: [String: Any]?) -> Int? {
+		guard
+			let internalBattery,
+			let minutes = internalBattery.int(Self.keyTimeToEmpty),
+			minutes >= 0
+		else { return nil }
+		return minutes
+	}
 	
 	private func readBatteryMetrics(
 		internalBattery: [String: Any]?,
@@ -137,7 +147,6 @@ struct IOKitBatteryReader {
 		}
 		
 		let stateOfCharge = readStateOfCharge(internalBattery: internalBattery) ?? props.int("StateOfCharge")
-		let maximumCapacityPercent = readMaximumCapacityPercent(props: props)
 		let externalPowerConnected = readExternalPowerConnected(props: props, powerSource: powerSource)
 		let power = readPower(
 			props: props,
@@ -150,7 +159,6 @@ struct IOKitBatteryReader {
 		
 		return BatteryMetrics(
 			cycleCount: props.int("CycleCount"),
-			maximumCapacityPercent: maximumCapacityPercent,
 			stateOfChargePercent: stateOfCharge,
 			chargingPowerW: power?.charging,
 			currentPowerW: power?.current,
@@ -160,25 +168,6 @@ struct IOKitBatteryReader {
 	
 	private func readStateOfCharge(internalBattery: [String: Any]?) -> Int? {
 		internalBattery?.int(Self.keyCurrentCapacity)
-	}
-	
-	private func readMaximumCapacityPercent(props: [String: Any]) -> Int? {
-		if let value = props.int("MaximumCapacityPercent"), (0...100).contains(value) { return value }
-		
-		guard
-			let design = props.int("DesignCapacity"),
-			design > 0,
-			let maxCapacity = readMaxCapacity(props: props),
-			maxCapacity > 0
-		else { return nil }
-		
-		return Int((Double(maxCapacity) / Double(design) * 100.0).rounded())
-	}
-	
-	private func readMaxCapacity(props: [String: Any]) -> Int? {
-		props.int("AppleRawMaxCapacity")
-		?? props.int("NominalChargeCapacity")
-		?? props.int("MaxCapacity")
 	}
 	
 	private func readPower(
