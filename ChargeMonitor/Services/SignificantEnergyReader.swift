@@ -251,7 +251,10 @@ final class SignificantEnergyReader {
 		var pids = [pid_t](repeating: 0, count: capacity)
 		
 		let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(pids.count * MemoryLayout<pid_t>.stride))
-		guard bytes > 0 else { return [] }
+		guard bytes > 0 else {
+			DiagnosticLog.failureOnce("proc-listpids-failed", category: "SignificantEnergyReader", "proc_listpids 返回 \(bytes)，能耗采样不可用，高能耗列表将为空")
+			return []
+		}
 		
 		let count = Int(bytes) / MemoryLayout<pid_t>.stride
 		return pids.prefix(count).filter { $0 > 0 }

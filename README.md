@@ -1,3 +1,5 @@
+> **汉化 fork 说明**：本仓库是 ChargeMonitor 的汉化版本。下文的 Homebrew / GitHub Releases 安装方式属于上游英文原版；汉化版通过工作区根目录的 `build.sh` 本地构建，产物输出到 `输出/妙电.app`，详见工作区根目录的 `AGENTS.md`。
+
 <p align="center">
   <img width="128" height="128" alt="AppIcon-iOS-Dark-128x128@1x"
        src="https://github.com/user-attachments/assets/97cff96a-0a80-4f75-a4fc-4b8feb237421" />

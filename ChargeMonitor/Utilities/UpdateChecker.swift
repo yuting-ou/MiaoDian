@@ -20,12 +20,13 @@ final class UpdateChecker {
 			let latest = AppVersion(release.tagName)
 			
 			if latest > current {
-				showAlert(text: "New version \(release.tagName) is available on GitHub", includeGitHubButton: true)
+				showAlert(text: "GitHub 上有新版本 \(release.tagName) 可用。\n注意：更新检查指向的是上游英文原版仓库，下载覆盖安装将丢失汉化；如需保留汉化，请在本地同步上游代码后重新构建。", includeGitHubButton: true)
 			} else {
-				showAlert(text: "You are up to date")
+				showAlert(text: "当前已是最新版本")
 			}
 		} catch {
-			showAlert(text: "Failed to check for updates")
+			DiagnosticLog.failureOnce("update-check-failed", category: "UpdateChecker", "检查更新失败：\(error.localizedDescription)")
+			showAlert(text: "检查更新失败")
 		}
 	}
 	
@@ -39,9 +40,9 @@ final class UpdateChecker {
 		alert.alertStyle = .informational
 		alert.messageText = ""
 		alert.informativeText = text
-		alert.addButton(withTitle: "OK")
+		alert.addButton(withTitle: "好")
 		if includeGitHubButton {
-			alert.addButton(withTitle: "GitHub")
+			alert.addButton(withTitle: "前往 GitHub")
 		}
 		
 		let response = alert.runModal()
@@ -88,6 +89,7 @@ private extension Bundle {
 	}
 }
 
+// 上游英文原版仓库：汉化版无独立发布通道，更新提示中已声明覆盖安装会丢失汉化
 enum AppLinks {
 	static let github = URL(string: "https://github.com/CrashSystemZ/ChargeMonitor")!
 	static let latestReleaseAPI = URL(string: "https://api.github.com/repos/CrashSystemZ/ChargeMonitor/releases/latest")!
