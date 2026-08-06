@@ -112,7 +112,7 @@ struct PowerEvent: Codable, Equatable, Identifiable {
 }
 
 // 一次合盖睡眠的掉电记录
-struct SleepDrainRecord: Codable, Equatable {
+nonisolated struct SleepDrainRecord: Codable, Equatable, Sendable {
 	let sleepDate: Date
 	let wakeDate: Date
 	let startPercent: Int

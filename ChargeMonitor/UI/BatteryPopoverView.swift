@@ -908,31 +908,18 @@ private struct BatteryHeaderView: View {
 	private var remainingText: String? {
 		if snapshot.isCharging, !snapshot.isFull,
 		   let minutes = snapshot.timeToFullChargeMinutes, minutes > 0 {
-			return "约 \(DurationFormatter.chinese(minutes: minutes)) 后充满（\(Self.clockText(after: minutes))）"
+			return "约 \(DurationFormatter.chinese(minutes: minutes)) 后充满（\(DurationFormatter.clockText(afterMinutes: minutes))）"
 		}
 		if snapshot.powerSource == .battery, !snapshot.isCharging {
 			if let minutes = snapshot.timeToEmptyMinutes, minutes > 0 {
-				return "预计还能用 \(DurationFormatter.chinese(minutes: minutes))（到 \(Self.clockText(after: minutes))）"
+				return "预计还能用 \(DurationFormatter.chinese(minutes: minutes))（到 \(DurationFormatter.clockText(afterMinutes: minutes))）"
 			}
 			if let minutes = drainEstimate?.estimatedMinutesRemaining, minutes > 0 {
-				return "预计还能用 \(DurationFormatter.chinese(minutes: minutes))（到 \(Self.clockText(after: minutes))）"
+				return "预计还能用 \(DurationFormatter.chinese(minutes: minutes))（到 \(DurationFormatter.clockText(afterMinutes: minutes))）"
 			}
 		}
 		return nil
 	}
-	
-	// 从现在算起 N 分钟后的时刻，跨天时加“明天”免得误以为是今天
-	private static func clockText(after minutes: Int) -> String {
-		let target = Date().addingTimeInterval(TimeInterval(minutes) * 60)
-		let time = clockFormatter.string(from: target)
-		return Calendar.current.isDateInTomorrow(target) ? "明天 " + time : time
-	}
-	
-	private static let clockFormatter: DateFormatter = {
-		let formatter = DateFormatter()
-		formatter.dateFormat = "HH:mm"
-		return formatter
-	}()
 }
 
 // 今日小结：电池模式掉了多少、充进去多少、充了几次；有多天数据时附七天柱状图

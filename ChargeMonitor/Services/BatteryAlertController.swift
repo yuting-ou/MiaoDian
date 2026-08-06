@@ -41,9 +41,14 @@ final class BatteryAlertController: ObservableObject {
 	private static let deviceLowResetMargin = 5
 	private static let highDrainResetMargin = 5.0
 	// 睡眠掉电异常：合盖≥ 1 小时、掉电≥ 5% 且折算≥ 2%/小时才提醒
-	private static let sleepDrainAlertMinMinutes = 60
-	private static let sleepDrainAlertMinPercent = 5
-	private static let sleepDrainAlertMinPerHour = 2.0
+	// nonisolated：纯判定函数 shouldAlertSleepDrain 要在非隔离上下文读它们
+	nonisolated private static let sleepDrainAlertMinMinutes = 60
+	nonisolated private static let sleepDrainAlertMinPercent = 5
+	nonisolated private static let sleepDrainAlertMinPerHour = 2.0
+	// 只对醒来后这段时间内的记录报警，启动时从磁盘捧出来的旧记录不算
+	nonisolated private static let sleepDrainAlertFreshnessSeconds: TimeInterval = 10 * 60
+	// 已报过的那一觉（按 wakeDate 记）：醒来 10 分钟内重启应用不能把同一条通知再发一遍
+	private static let sleepDrainAlertedKey = "lastSleepDrainAlertWakeDate"
 	// 低电预判：按当前掉速距警示线不足 45 分钟就提前喊一声
 	private static let lowForecastLeadMinutes = 45.0
 	// 温度骤升：5 分钟内涨 3°C 且已到 35°C 以上
@@ -301,7 +306,7 @@ final class BatteryAlertController: ObservableObject {
 		send(
 			id: "full-forecast",
 			title: "开始充电",
-			body: "预计 \(Self.clockText(after: minutes)) 充满（还需 \(DurationFormatter.chinese(minutes: minutes))）"
+			body: "预计 \(DurationFormatter.clockText(afterMinutes: minutes)) 充满（还需 \(DurationFormatter.chinese(minutes: minutes))）"
 		)
 	}
 	
@@ -391,19 +396,27 @@ final class BatteryAlertController: ObservableObject {
 	// 睡眠掉电异常：合盖一觉掉得太多，多半是有应用在阻止休眠或“断电时唤醒”在捣鬼
 	private func evaluateSleepDrain(_ record: SleepDrainRecord) {
 		guard isEnabled, configuration.enabledOptions.contains(.sleepDrainReport) else { return }
-		// 只对刚醒来的记录报警，启动时从磁盘捧出来的旧记录不算
-		guard Date().timeIntervalSince(record.wakeDate) < 10 * 60 else { return }
-		guard
-			record.durationMinutes >= Self.sleepDrainAlertMinMinutes,
-			record.droppedPercent >= Self.sleepDrainAlertMinPercent,
-			record.dropPerHour >= Self.sleepDrainAlertMinPerHour
-		else { return }
+		let lastAlerted = defaults.object(forKey: Self.sleepDrainAlertedKey) as? Date
+		guard Self.shouldAlertSleepDrain(record: record, now: Date(), lastAlertedWakeDate: lastAlerted) else { return }
+		// 先记账再发：哪怕通知投递失败，也不靠重复轰炸来“补偿”
+		defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
 		
 		send(
 			id: "sleep-drain",
 			title: "睡眠掉电偏多",
 			body: String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
 		)
+	}
+	
+	// 纯判定，供单测直接调：
+	// 同一觉已报过不重发（重启后订阅会立刻回放磁盘里的旧记录）；
+	// 醒来超过新鲜窗口不报；时长/掉电/折算任一不达标不报
+	nonisolated static func shouldAlertSleepDrain(record: SleepDrainRecord, now: Date, lastAlertedWakeDate: Date?) -> Bool {
+		if let lastAlertedWakeDate, lastAlertedWakeDate == record.wakeDate { return false }
+		guard now.timeIntervalSince(record.wakeDate) < sleepDrainAlertFreshnessSeconds else { return false }
+		return record.durationMinutes >= sleepDrainAlertMinMinutes
+			&& record.droppedPercent >= sleepDrainAlertMinPercent
+			&& record.dropPerHour >= sleepDrainAlertMinPerHour
 	}
 	
 	// 每周电池周报：周日 20 点后第一次有机会时发；错过就顺延到下次启动
@@ -455,19 +468,6 @@ final class BatteryAlertController: ObservableObject {
 		}
 		return parts.joined(separator: "；")
 	}
-	
-	// N 分钟后的时刻，跨天加“明天”
-	private static func clockText(after minutes: Int) -> String {
-		let target = Date().addingTimeInterval(TimeInterval(minutes) * 60)
-		let time = clockFormatter.string(from: target)
-		return Calendar.current.isDateInTomorrow(target) ? "明天 " + time : time
-	}
-	
-	private static let clockFormatter: DateFormatter = {
-		let formatter = DateFormatter()
-		formatter.dateFormat = "HH:mm"
-		return formatter
-	}()
 	
 	// 夜间免打扰：23 点到早 8 点之间非紧急通知不发（低电量这种紧急的照发）
 	private var isInQuietHours: Bool {

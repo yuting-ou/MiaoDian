@@ -73,9 +73,13 @@ final class BatteryMonitor: ObservableObject {
 			snapshot = nextSnapshot
 		}
 		
-		let nextApps = energyReader.computeSignificantApps()
-		if nextApps.map(\.id) != significantEnergyApps.map(\.id) {
-			significantEnergyApps = nextApps
+		// 高耗电列表只有面板在看，后台不做全进程采样（每次要扫遍所有进程）；
+		// 重新打开面板后 2 秒轮询会很快重新积累出结果
+		if isPopoverOpen {
+			let nextApps = energyReader.computeSignificantApps()
+			if nextApps.map(\.id) != significantEnergyApps.map(\.id) {
+				significantEnergyApps = nextApps
+			}
 		}
 		
 		recordPowerSample(from: nextSnapshot)

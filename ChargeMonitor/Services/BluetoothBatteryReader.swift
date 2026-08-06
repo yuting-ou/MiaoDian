@@ -5,7 +5,12 @@ import IOKit
 // 数据源有两个：HID 事件服务的 BatteryPercent 属性，
 // 以及系统配件电源通道（pmset -g accps，第三方鼠标多走这里）
 // 涉及子进程调用，设计为可在后台线程执行
-nonisolated struct BluetoothBatteryReader: Sendable {
+nonisolated final class BluetoothBatteryReader: @unchecked Sendable {
+	// 设备类型缓存：minorType 基本不变，而 system_profiler 很慢（数百毫秒级），
+	// 只在出现没见过的设备名时才跑一次，其余时候直接命中缓存
+	private let lock = NSLock()
+	private var kindCache: [String: BluetoothDeviceKind] = [:]
+	
 	func readDevices() -> [BluetoothDeviceBattery] {
 		var devices = readHIDDevices()
 		
@@ -14,13 +19,39 @@ nonisolated struct BluetoothBatteryReader: Sendable {
 			devices.append(accessory)
 		}
 		
+		let names = Set(devices.map(\.name))
+		var kindByName = cachedKinds(for: names)
+		let unknownNames = names.subtracting(kindByName.keys)
+		if !unknownNames.isEmpty {
+			let reported = readDeviceKinds()
+			for name in unknownNames {
+				// 报告里查不到的设备按名字猜一个也存进缓存，
+				// 否则这类设备每 30 秒都会白跑一次 system_profiler
+				kindByName[name] = reported[name] ?? Self.kindFromName(name)
+			}
+			storeKinds(kindByName, for: names)
+		}
+		
 		// 用系统蓝牙报告里的真实设备类型标注，拿不到时按名字猜
-		let kindByName = readDeviceKinds()
 		return devices.map { device in
 			var device = device
 			device.kind = kindByName[device.name] ?? Self.kindFromName(device.name)
 			return device
 		}
+	}
+	
+	private func cachedKinds(for names: Set<String>) -> [String: BluetoothDeviceKind] {
+		lock.lock()
+		defer { lock.unlock() }
+		// 顺手清掉已不在场设备的条目，避免缓存无限增长
+		kindCache = kindCache.filter { names.contains($0.key) }
+		return kindCache
+	}
+	
+	private func storeKinds(_ kinds: [String: BluetoothDeviceKind], for names: Set<String>) {
+		lock.lock()
+		defer { lock.unlock() }
+		kindCache = kinds.filter { names.contains($0.key) }
 	}
 	
 	// MARK: - HID 通道（Apple 外设、部分蓝牙设备）
