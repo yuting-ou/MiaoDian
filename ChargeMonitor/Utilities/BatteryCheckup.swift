@@ -2,7 +2,7 @@ import Foundation
 
 // 电池体检评分：健康度、循环次数、温度、充电习惯四项加权，0~100 分 + 一句评语
 // 纯计算逻辑，nonisolated 方便单元测试直接调
-struct BatteryCheckup: Equatable {
+nonisolated struct BatteryCheckup: Equatable, Sendable {
 	let score: Int
 	let verdict: String
 	

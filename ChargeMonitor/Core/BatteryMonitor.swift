@@ -22,10 +22,10 @@ final class BatteryMonitor: ObservableObject {
 	private var isPopoverOpen = false
 	
 	private let activeInterval: TimeInterval = 2
-	private let backgroundInterval: TimeInterval = 5
+	private let backgroundInterval: TimeInterval = 10
 	// 功耗曲线保留最近 5 分钟
 	private let powerSampleWindow: TimeInterval = 5 * 60
-	// 采样间隔超过这个值说明系统睡眠过（正常后台才 5 秒），断开重画
+	// 采样间隔超过这个值说明系统睡眠过（正常后台才 10 秒），断开重画
 	private let powerSampleGapSeconds: TimeInterval = 30
 	// 温度变化慢，曲线看最近 30 分钟，15 秒记一点足够
 	private let temperatureSampleWindow: TimeInterval = 30 * 60

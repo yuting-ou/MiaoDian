@@ -25,7 +25,10 @@ enum DurationFormatter {
 		let formatter = clockFormatter.copy() as! DateFormatter
 		formatter.timeZone = timeZone
 		let time = formatter.string(from: target)
-		return calendar.isDateInTomorrow(target) ? "明天 " + time : time
+		// “明天”以注入的 now 为锚（不用 isDateInTomorrow——它锚在系统当前日期，注入就失效了）
+		let startOfToday = calendar.startOfDay(for: now)
+		let isTomorrow = calendar.startOfDay(for: target) == calendar.date(byAdding: .day, value: 1, to: startOfToday)
+		return isTomorrow ? "明天 " + time : time
 	}
 	
 	// 每次调用复制一份再设时区，静态实例本身保持无状态

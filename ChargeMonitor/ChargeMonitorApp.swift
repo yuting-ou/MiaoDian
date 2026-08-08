@@ -13,6 +13,10 @@ struct ChargeMonitorApp: App {
 	@StateObject private var iconAnimator: MenuBarIconAnimator
 	
 	init() {
+		// 单实例：已有同 bundle ID 进程在先，后来者直接退出
+		// 否则会出现双菜单栏图标、重复通知、两个写手竞写同一份设置
+		Self.exitIfAnotherInstanceRunning()
+		
 		let monitor = BatteryMonitor()
 		let configurationManager = ConfigurationManager.shared
 		
@@ -183,6 +187,19 @@ struct ChargeMonitorApp: App {
 			}
 			let percent = percentText(from: snapshot)
 			return snapshot.isCharging ? "⚡︎\(percent)" : percent
+		}
+	}
+	
+	// 单实例保护：查有没有同 bundle ID 的在先进程；有就让后来者立刻退出
+	// 此刻尚未建任何状态，直接 exit 最干净，不走正常退出流程
+	private static func exitIfAnotherInstanceRunning() {
+		guard let bundleID = Bundle.main.bundleIdentifier else { return }
+		let selfPID = ProcessInfo.processInfo.processIdentifier
+		let hasPrior = NSRunningApplication
+			.runningApplications(withBundleIdentifier: bundleID)
+			.contains { $0.processIdentifier != selfPID }
+		if hasPrior {
+			exit(0)
 		}
 	}
 	

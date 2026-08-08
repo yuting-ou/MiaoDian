@@ -1,6 +1,6 @@
 import Foundation
 
-struct BatterySnapshot: Equatable {
+nonisolated struct BatterySnapshot: Equatable, Sendable {
 	var powerSource: PowerSourceType = .battery
 	var isCharging: Bool = false
 	var isFull: Bool = false
@@ -42,12 +42,12 @@ struct BatterySnapshot: Equatable {
 	}
 }
 
-enum PowerSourceType: Equatable {
+nonisolated enum PowerSourceType: Equatable, Sendable {
 	case battery
 	case powerAdapter
 }
 
-struct PowerTier: Equatable {
+nonisolated struct PowerTier: Equatable, Sendable {
 	var maxVoltageMV: Int
 	var maxCurrentMA: Int
 }

@@ -1,32 +1,32 @@
 import Foundation
 
 // 功耗曲线的采样点
-struct PowerSample: Equatable {
+nonisolated struct PowerSample: Equatable, Sendable {
 	let date: Date
 	let watts: Double
 }
 
 // 温度曲线的采样点
-struct TemperatureSample: Equatable {
+nonisolated struct TemperatureSample: Equatable, Sendable {
 	let date: Date
 	let celsius: Double
 }
 
 // 掉电速度估算结果
-struct DrainRateEstimate: Equatable {
+nonisolated struct DrainRateEstimate: Equatable, Sendable {
 	let percentPerHour: Double
 	let estimatedMinutesRemaining: Int?
 }
 
 // 充电曲线采样点：相对会话开始的分钟数 + 当时电量
 // 只在电量变化时记一笔，一次会话最多百来个点，体积很小
-struct ChargePoint: Codable, Equatable {
+nonisolated struct ChargePoint: Codable, Equatable, Sendable {
 	let minuteOffset: Int
 	let percent: Int
 }
 
 // 一次充电会话记录
-struct ChargeSession: Codable, Equatable, Identifiable {
+nonisolated struct ChargeSession: Codable, Equatable, Identifiable, Sendable {
 	let startDate: Date
 	var endDate: Date
 	let startPercent: Int
@@ -43,7 +43,7 @@ struct ChargeSession: Codable, Equatable, Identifiable {
 }
 
 // 当天用电累计：电池模式掉了多少、充进去多少，外加插电/电池时长占比
-struct DailyUsage: Codable, Equatable {
+nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	var dayKey: String
 	var drainedPercent: Int = 0
 	var chargedPercent: Int = 0
@@ -82,14 +82,14 @@ struct DailyUsage: Codable, Equatable {
 }
 
 // 每日健康度采样
-struct HealthSample: Codable, Equatable {
+nonisolated struct HealthSample: Codable, Equatable, Sendable {
 	let date: Date
 	let healthPercent: Int
 	let cycleCount: Int?
 }
 
 // 24 小时电量曲线的采样点
-struct SOCSample: Codable, Equatable {
+nonisolated struct SOCSample: Codable, Equatable, Sendable {
 	let date: Date
 	let percent: Int
 	let isCharging: Bool
@@ -104,7 +104,7 @@ nonisolated enum PowerEventKind: String, Codable, Sendable {
 	case wake
 }
 
-struct PowerEvent: Codable, Equatable, Identifiable {
+nonisolated struct PowerEvent: Codable, Equatable, Identifiable, Sendable {
 	let date: Date
 	let kind: PowerEventKind
 	
@@ -131,7 +131,7 @@ nonisolated struct SleepDrainRecord: Codable, Equatable, Sendable {
 }
 
 // 充电器档案：记住见过的充电器，插上时能认出老朋友还是新面孔
-struct ChargerProfile: Codable, Equatable {
+nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	let key: String
 	var name: String
 	var ratedWatts: Int?

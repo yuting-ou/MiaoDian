@@ -14,7 +14,7 @@ struct DrainRateEstimator {
 	private static let minimumSpanSeconds: TimeInterval = 10 * 60
 	// 只用最近 1 小时的数据，反映当前使用习惯
 	private static let windowSeconds: TimeInterval = 60 * 60
-	// 两次采样间隔超过这个值，说明系统睡眠过（正常后台轮询才 5 秒）
+	// 两次采样间隔超过这个值，说明系统睡眠过（正常后台轮询才 10 秒）
 	private static let sleepGapSeconds: TimeInterval = 3 * 60
 	
 	mutating func record(snapshot: BatterySnapshot, at date: Date = Date()) {

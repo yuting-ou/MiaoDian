@@ -2,12 +2,12 @@ import Foundation
 
 // 充电习惯洞察：纯本地统计电源事件，学出"通常几点插电、几点拔"的规律，
 // 据此给软性建议（不做充电限制那种危险操作，只提示）
-struct ChargingHabitInsight: Equatable {
+nonisolated struct ChargingHabitInsight: Equatable, Sendable {
 	let message: String
 	let symbol: String
 }
 
-enum ChargingHabitAnalyzer {
+nonisolated enum ChargingHabitAnalyzer {
 	// 至少这么多次插/拔样本才敢下结论，否则规律没意义
 	private static let minSamples = 4
 	// 长期插电的判定：最近几天插电占比都超过这个值

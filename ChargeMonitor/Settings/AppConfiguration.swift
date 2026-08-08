@@ -1,6 +1,6 @@
 import Foundation
 
-struct AppConfiguration: Codable, Equatable {
+nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	var enabledOptions: Set<DisplayOption> = Self.defaultEnabledOptions
 	var knownOptions: Set<DisplayOption> = Set(DisplayOption.allCases)
 	var menuBarContent: MenuBarContent = .percent

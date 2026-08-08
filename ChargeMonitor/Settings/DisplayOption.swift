@@ -1,6 +1,6 @@
 import Foundation
 
-enum DisplayOption: String, CaseIterable, Identifiable, Codable {
+nonisolated enum DisplayOption: String, CaseIterable, Identifiable, Codable, Sendable {
 	// 电源信息
 	case adapterManufacturer
 	case adapterName
@@ -152,7 +152,7 @@ enum DisplayOption: String, CaseIterable, Identifiable, Codable {
 }
 
 // 菜单栏显示内容
-enum MenuBarContent: String, CaseIterable, Identifiable, Codable {
+nonisolated enum MenuBarContent: String, CaseIterable, Identifiable, Codable, Sendable {
 	case percent
 	case icon
 	case iconAndPercent

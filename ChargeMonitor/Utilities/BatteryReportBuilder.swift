@@ -118,13 +118,14 @@ struct BatteryReportBuilder {
 		return String(format: "\(Self.dateTimeFormatter.string(from: record.sleepDate)) 起合盖 \(record.durationMinutes) 分钟，掉了 \(record.droppedPercent)%%（%.1f%%/小时）", record.dropPerHour)
 	}
 	
-	// 当前接着的充电器身份键（与 recorder 的建档规则一致：名称|厂商|额定）
+	// 当前接着的充电器身份键：与 recorder 的建档规则同源，不再各拼一份
 	private var currentChargerKey: String? {
 		guard snapshot.powerSource == .powerAdapter else { return nil }
-		let name = snapshot.adapterName ?? ""
-		let manufacturer = snapshot.adapterManufacturer ?? ""
-		let rated = snapshot.adapterRatedWatts ?? 0
-		return "\(name)|\(manufacturer)|\(rated)"
+		return BatteryHistoryRecorder.chargerKey(
+			name: snapshot.adapterName ?? "",
+			manufacturer: snapshot.adapterManufacturer ?? "",
+			ratedWatts: snapshot.adapterRatedWatts ?? 0
+		)
 	}
 	
 	private static func eventTitle(_ kind: PowerEventKind) -> String {
