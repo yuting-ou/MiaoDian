@@ -204,14 +204,15 @@ struct UsageCalendarSection: View {
 // 网格永远以「真实今天」为右下锚点，而非最后一条数据的日期——
 // 否则今天还没产生用电数据时，日历会以昨天为基准，日期整体错位
 enum UsageCalendarLayout {
-	static let dayFormatter: DateFormatter = {
-		let formatter = DateFormatter()
-		// 与 dayKey 主键同源，固定 POSIX 公历，避免非公历系统下日期错乱
-		formatter.locale = Locale(identifier: "en_US_POSIX")
-		formatter.dateFormat = "yyyy-MM-dd"
-		return formatter
-	}()
-	
+	// 与 dayKey 主键同源，固定 POSIX 公历，避免非公历系统下日期错乱；
+	// 时区跟随 buildColumns 注入的 calendar（生产时 .current 即系统时区，行为不变）
+	static func dayKey(_ date: Date, calendar: Calendar) -> String {
+		var gregorian = Calendar(identifier: .gregorian)
+		gregorian.timeZone = calendar.timeZone
+		let c = gregorian.dateComponents([.year, .month, .day], from: date)
+		return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+	}
+
 	static func buildColumns(_ history: [DailyUsage], weeks: Int, today: Date, calendar: Calendar) -> [[DailyUsage?]] {
 		let byKey = Dictionary(history.map { ($0.dayKey, $0) }, uniquingKeysWith: { _, b in b })
 		let todayStart = calendar.startOfDay(for: today)
@@ -228,8 +229,7 @@ enum UsageCalendarLayout {
 				if cursor > todayStart {
 					week.append(nil)
 				} else {
-					let key = dayFormatter.string(from: cursor)
-					week.append(byKey[key])
+					week.append(byKey[dayKey(cursor, calendar: calendar)])
 				}
 				cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? cursor
 			}

@@ -634,12 +634,30 @@ do {
 	cal.locale = Locale(identifier: "th_TH_u_ca_buddhist")
 	// 即使传入佛历 calendar，buildColumns 内部用 startOfDay + 公历键，历史仍应命中
 	let today = Date(timeIntervalSince1970: 1_800_000_000)
-	let todayKey = UsageCalendarLayout.dayFormatter.string(from: today)
+	let todayKey = UsageCalendarLayout.dayKey(today, calendar: cal)
 	expect(todayKey.hasPrefix("2027-"), "日期键：POSIX 公历下输出公历年份而非佛历 2570")
 	let history = [DailyUsage(dayKey: todayKey, drainedPercent: 25, chargedPercent: 20)]
 	let columns = UsageCalendarLayout.buildColumns(history, weeks: 10, today: today, calendar: cal)
 	let found = columns.flatMap { $0 }.compactMap { $0 }.first { $0.dayKey == todayKey }
 	expect(found?.drainedPercent == 25, "用电日历：佛历系统区域下仍能定位历史数据")
+}
+
+// 跨时区回归：日期/月份键必须跟随注入 calendar 的时区，而不是系统时区。
+// 取 2026-08-01 01:00 上海 = 2026-07-31 17:00 UTC 的边界点：
+// CI（UTC）上若退回系统时区，键会偏成 07-31/2026-07，断言即失败。
+do {
+	var sh = Calendar(identifier: .gregorian)
+	sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+	// 上海 8/1 01:00，即 UTC 7/31 17:00，跨了月/日两条边界
+	let boundary = sh.date(from: DateComponents(year: 2026, month: 8, day: 1, hour: 1))!
+
+	expectEqual(UsagePatternAnalyzer.monthKeyString(boundary, calendar: sh), "2026-08", "月份键：跟随注入时区跨月不偏")
+	expectEqual(UsageCalendarLayout.dayKey(boundary, calendar: sh), "2026-08-01", "日期键：跟随注入时区跨日不偏")
+
+	// 与系统时区比对：当系统时区≠注入时区时，结果应不同（否则说明又在用系统时区）
+	if TimeZone.current != sh.timeZone {
+		expect(UsagePatternAnalyzer.monthKeyString(boundary, calendar: sh) != UsagePatternAnalyzer.monthKeyString(boundary, calendar: .current), "月份键：系统时区不同时应产生不同键")
+	}
 }
 
 // 时长格式化：三处重复已收敛为 DurationFormatter 单一工具，锁死边界

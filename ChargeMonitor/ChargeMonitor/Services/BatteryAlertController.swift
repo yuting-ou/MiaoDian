@@ -545,18 +545,18 @@ final class BatteryAlertController: ObservableObject {
 		guard let dueMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: due)),
 			  let prevMonthStart = calendar.date(byAdding: .month, value: -1, to: dueMonthStart)
 		else { return "" }
-		let prefix = UsagePatternAnalyzer.monthKeyString(prevMonthStart)
+		let prefix = UsagePatternAnalyzer.monthKeyString(prevMonthStart, calendar: calendar)
 
 		let monthDays = history.filter { $0.dayKey.hasPrefix(prefix) }
 		let drained = monthDays.reduce(0) { $0 + $1.drainedPercent }
 		let charged = monthDays.reduce(0) { $0 + $1.chargedPercent }
-		let sessionCount = sessions.filter { UsagePatternAnalyzer.monthKeyString($0.startDate).hasPrefix(prefix) }.count
+		let sessionCount = sessions.filter { UsagePatternAnalyzer.monthKeyString($0.startDate, calendar: calendar).hasPrefix(prefix) }.count
 		guard drained > 0 || charged > 0 || sessionCount > 0 else { return "" }
 
 		let dayCount = calendar.range(of: .day, in: .month, for: prevMonthStart)?.count ?? 30
 		var parts = [String(format: "上月用电 %d%%、充入 %d%%、充电 %d 次", drained, charged, sessionCount)]
 		parts.append(String(format: "日均用电 %.0f%%", Double(drained) / Double(dayCount)))
-		if let lastHealth = healthSamples.last(where: { UsagePatternAnalyzer.monthKeyString($0.date).hasPrefix(prefix) }) {
+		if let lastHealth = healthSamples.last(where: { UsagePatternAnalyzer.monthKeyString($0.date, calendar: calendar).hasPrefix(prefix) }) {
 			parts.append("月末健康度 \(lastHealth.healthPercent)%")
 		}
 		return parts.joined(separator: "；")

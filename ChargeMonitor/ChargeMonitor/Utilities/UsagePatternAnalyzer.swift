@@ -170,15 +170,13 @@ nonisolated enum UsagePatternAnalyzer {
 		dayKeyFormatter.string(from: date)
 	}
 
-	// 月份前缀键（"yyyy-MM"），与 dayKey 同源的 POSIX 公历；月报按它匹配自然月
-	private static let monthKeyFormatter: DateFormatter = {
-		let formatter = DateFormatter()
-		formatter.locale = Locale(identifier: "en_US_POSIX")
-		formatter.dateFormat = "yyyy-MM"
-		return formatter
-	}()
-
-	static func monthKeyString(_ date: Date) -> String {
-		monthKeyFormatter.string(from: date)
+	// 月份前缀键（"yyyy-MM"），与 dayKey 同源公历；月报按它匹配自然月。
+	// 必须跟随传入 calendar 的时区（而不是系统时区），否则注入非本地时区测试/跨时区运行会错位；
+	// 且强制公历年月，避免佛历等系统日历把年份偏成 2570。
+	static func monthKeyString(_ date: Date, calendar: Calendar = .current) -> String {
+		var gregorian = Calendar(identifier: .gregorian)
+		gregorian.timeZone = calendar.timeZone
+		let c = gregorian.dateComponents([.year, .month], from: date)
+		return String(format: "%04d-%02d", c.year ?? 0, c.month ?? 0)
 	}
 }

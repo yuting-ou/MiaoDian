@@ -22,7 +22,7 @@ macOS 菜单栏电池监控工具,基于开源项目 [ChargeMonitor](https://git
 只需 Command Line Tools,无需完整 Xcode:
 
 ```bash
-bash build.sh    # 先跑单元测试(309 项断言),全过才编译打包
+bash build.sh    # 先跑单元测试(352 项断言),全过才编译打包
 ```
 
 产物输出到 `输出/妙电.app`。`bash 打包.sh` 额外生成可分发的 DMG。
