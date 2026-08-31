@@ -1,8 +1,14 @@
-ChargeMonitor.xcodeproj/xcuserdata/
+# 构建产物：由 build.sh / 打包.sh 重建，体积大且可复现
+输出/
+
+# 本地 Qoder 会话设置
+.qoder/
+
 # macOS
 .DS_Store
 
 # Xcode
+ChargeMonitor/ChargeMonitor.xcodeproj/xcuserdata/
 *.xcuserstate
 xcuserdata/
 DerivedData/
