@@ -33,24 +33,9 @@ final class ConfigurationManager: ObservableObject {
         update { $0.menuBarContent = content }
     }
 
-    func setLowBatteryThreshold(_ percent: Int) {
-        update { $0.lowBatteryThresholdPercent = percent }
-    }
-
-    func setHighTemperatureThreshold(_ celsius: Int) {
-        update { $0.highTemperatureThresholdC = celsius }
-    }
-
-    func setChargeCareThreshold(_ percent: Int) {
-        update { $0.chargeCareThresholdPercent = percent }
-    }
-
-    func setDeviceLowThreshold(_ percent: Int) {
-        update { $0.deviceLowThresholdPercent = percent }
-    }
-
-    func setHighDrainThreshold(_ percentPerHour: Int) {
-        update { $0.highDrainThresholdPerHour = percentPerHour }
+    // 数值型配置统一走键路径写入（设置窗口数据驱动），归一化后落盘
+    func setValue(_ value: Int, at keyPath: WritableKeyPath<AppConfiguration, Int>) {
+        update { $0[keyPath: keyPath] = value }
     }
 
     // 图表卡片折叠/展开，状态随配置持久化

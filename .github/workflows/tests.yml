@@ -1,0 +1,15 @@
+name: 单元测试
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # 测试编译用 -default-isolation MainActor，需要 Swift 6.2+（Xcode 26，macos-26 镜像自带）
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: 运行单元测试（与主程序共用源文件）
+        run: bash 测试/run_tests.sh

@@ -1,6 +1,7 @@
 import Foundation
 
-extension Dictionary where Key == String, Value == Any {
+// IOKit 注册表字典取值：纯取数，nonisolated 让读取层纯函数可放心调用
+nonisolated extension Dictionary where Key == String, Value == Any {
 	func int(_ key: String) -> Int? {
 		switch self[key] {
 		case let v as Int: return v
@@ -44,9 +45,16 @@ extension Dictionary where Key == String, Value == Any {
 		default: return nil
 		}
 	}
+
+	func data(_ key: String) -> Data? {
+		switch self[key] {
+		case let v as Data: return v
+		default: return nil
+		}
+	}
 }
 
-extension NSDictionary {
+nonisolated extension NSDictionary {
 	func string(_ key: String) -> String? {
 		switch self[key] {
 		case let v as String: return v

@@ -45,6 +45,16 @@ nonisolated enum ChargingHabitAnalyzer {
 			}
 		}
 
+		// 场景三：用电异常——近 7 天日均用电显著高于之前三周基线（>35%）时点一句
+		if let anomaly = UsagePatternAnalyzer.drainAnomaly(dailyHistory: dailyHistory, todayKey: UsagePatternAnalyzer.dayKeyString(now)),
+		   anomaly.recentAvg >= anomaly.baselineAvg * 1.35 {
+			return ChargingHabitInsight(
+				message: String(format: "最近一周日均用电 %.0f%%，比前三周（日均 %.0f%%）多出约 %.0f%%，可留意是哪里变了",
+								anomaly.recentAvg, anomaly.baselineAvg, (anomaly.recentAvg / anomaly.baselineAvg - 1) * 100),
+				symbol: "exclamationmark.triangle.fill"
+			)
+		}
+
 		return nil
 	}
 
@@ -57,5 +67,39 @@ nonisolated enum ChargingHabitAnalyzer {
 			.filter { $0 >= 21 || $0 <= 2 }
 		guard plugHours.count >= minSamples else { return nil }
 		return Set(plugHours)
+	}
+
+	// 充电器偏慢洞察：当前正在充电，但协商功率明显低于这只充电器的额定值，
+	// 而用户手上还有一只额定更高、之前用过的充电器——提示换一只充得更快。
+	// 典型场景：插了只 30W 的线/口，却用它充一台能吃 65W 的机器
+	static func analyzeCharger(
+		snapshot: BatterySnapshot,
+		currentCharger: ChargerProfile?,
+		knownChargers: [ChargerProfile]
+	) -> ChargingHabitInsight? {
+		guard snapshot.powerSource == .powerAdapter, snapshot.isCharging else { return nil }
+		guard let currentCharger, let rated = currentCharger.ratedWatts, rated > 0 else { return nil }
+		guard
+			let voltageMV = snapshot.negotiatedVoltageMV,
+			let currentMA = snapshot.negotiatedCurrentMA,
+			voltageMV > 0, currentMA > 0
+		else { return nil }
+
+		let negotiated = Double(voltageMV) * Double(currentMA) / 1_000_000.0
+		// 协商低于额定 60% 才叫"偏慢"，避免刚插上还没握手就误报
+		guard negotiated < Double(rated) * 0.6 else { return nil }
+
+		// 找一只用户用过的、额定更高的充电器
+		guard let faster = knownChargers
+			.filter({ ($0.ratedWatts ?? 0) > rated })
+			.max(by: { ($0.ratedWatts ?? 0) < ($1.ratedWatts ?? 0) }),
+			let fasterRated = faster.ratedWatts
+		else { return nil }
+
+		return ChargingHabitInsight(
+			message: String(format: "当前协商仅 %.0fW（充电器额定 %dW），偏慢；你之前用过的 %@（%@）能充得更快",
+							negotiated, rated, faster.name, "\(fasterRated)W"),
+			symbol: "bolt.badge.clock"
+		)
 	}
 }

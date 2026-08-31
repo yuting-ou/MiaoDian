@@ -54,6 +54,21 @@ struct ChargeMonitorApp: App {
 			menuBarLabel
 		}
 		.menuBarExtraStyle(.window)
+
+		// 独立偏好设置窗口：面板里 30+ 个开关从子菜单迁到这里，
+		// 面板"设置"行通过 openSettings() 打开本窗口
+		Settings {
+			SettingsView()
+		}
+
+		// 充电曲线独立窗口：面板点击会话行时打开（单窗口复用，选择走共享对象）。
+		// 不用 sheet——sheet 挂在菜单栏弹窗的窗口上，关闭时面板会跟着跳动；
+		// 独立窗口与设置窗口同一条路径，稳定且能带到前台
+		Window("充电曲线", id: "charge-curve") {
+			ChargeCurveWindowHost(historyRecorder: historyRecorder)
+		}
+		.windowResizability(.contentSize)
+		.defaultLaunchBehavior(.suppressed)
 	}
 	
 	// 菜单栏标签：自绘精确电量图标 + 等宽数字，避免宽度抖动
@@ -114,18 +129,45 @@ struct ChargeMonitorApp: App {
 					.foregroundStyle(lowBattery ? Color.red : Color.primary)
 			}
 		case .rotating:
-			Text(menuBarTitle)
-				.font(.system(size: 12, weight: .medium).monospacedDigit())
-				.foregroundStyle(rotatingTint(snapshot))
+			// 三页文本常驻（仅当前页可见），容器宽度取最宽一页，
+			// 避免每 5 秒轮换时菜单栏项因内容宽度不同而左右挪动
+			ZStack {
+				rotatingPage(index: 0, snapshot: snapshot)
+				rotatingPage(index: 1, snapshot: snapshot)
+				rotatingPage(index: 2, snapshot: snapshot)
+			}
 		}
 	}
 	
+	// 轮换显示的单页文本；非当前页 opacity 0 常驻占位，并从朗读里剔除
+	@ViewBuilder
+	private func rotatingPage(index: Int, snapshot: BatterySnapshot) -> some View {
+		let isActive = iconAnimator.rotationIndex == index
+		Text(rotatingPageTitle(index: index, snapshot: snapshot))
+			.font(.system(size: 12, weight: .medium).monospacedDigit())
+			.foregroundStyle(rotatingTint(index: index, snapshot: snapshot))
+			.opacity(isActive ? 1 : 0)
+			.accessibilityHidden(!isActive)
+	}
+
 	// 轮换页的警示色跟随当前页内容：电量页低电变红，温度页高温变橙
-	private func rotatingTint(_ snapshot: BatterySnapshot) -> Color {
-		switch iconAnimator.rotationIndex {
+	private func rotatingTint(index: Int, snapshot: BatterySnapshot) -> Color {
+		switch index {
 		case 0 where isLowBattery(snapshot): return .red
 		case 1 where isHotBattery(snapshot): return .orange
 		default: return .primary
+		}
+	}
+
+	private func rotatingPageTitle(index: Int, snapshot: BatterySnapshot) -> String {
+		switch index {
+		case 1:
+			return snapshot.temperatureC.map { String(format: "%.0f°", $0) } ?? "—°"
+		case 2:
+			return (snapshot.currentPowerW ?? snapshot.chargingPowerW).map { String(format: "%.1fW", $0) } ?? "—W"
+		default:
+			let percent = percentText(from: snapshot)
+			return snapshot.isCharging ? "⚡︎\(percent)" : percent
 		}
 	}
 	
@@ -148,7 +190,7 @@ struct ChargeMonitorApp: App {
 	private var menuBarTitle: String {
 		let snapshot = monitor.snapshot
 		switch configurationManager.configuration.menuBarContent {
-		case .percent, .icon, .iconAndPercent, .sparkline:
+		case .percent, .icon, .iconAndPercent, .sparkline, .rotating:
 			let percent = percentText(from: snapshot)
 			return snapshot.isCharging ? "⚡︎\(percent)" : percent
 		case .temperature:
@@ -171,36 +213,25 @@ struct ChargeMonitorApp: App {
 				}
 			}
 			return percentText(from: snapshot)
-		case .rotating:
-			// 三页轮换：电量 → 温度 → 功耗，缺数据的页退回电量
-			switch iconAnimator.rotationIndex {
-			case 1:
-				if let temperature = snapshot.temperatureC {
-					return String(format: "%.0f°", temperature)
-				}
-			case 2:
-				if let watts = snapshot.currentPowerW ?? snapshot.chargingPowerW {
-					return String(format: "%.1fW", watts)
-				}
-			default:
-				break
-			}
-			let percent = percentText(from: snapshot)
-			return snapshot.isCharging ? "⚡︎\(percent)" : percent
 		}
 	}
 	
-	// 单实例保护：查有没有同 bundle ID 的在先进程；有就让后来者立刻退出
-	// 此刻尚未建任何状态，直接 exit 最干净，不走正常退出流程
+	// 单实例保护：查有没有同 bundle ID 的在先进程；有就让后来者提示后退出
 	private static func exitIfAnotherInstanceRunning() {
 		guard let bundleID = Bundle.main.bundleIdentifier else { return }
 		let selfPID = ProcessInfo.processInfo.processIdentifier
 		let hasPrior = NSRunningApplication
 			.runningApplications(withBundleIdentifier: bundleID)
 			.contains { $0.processIdentifier != selfPID }
-		if hasPrior {
-			exit(0)
-		}
+		guard hasPrior else { return }
+		// 弹一句提示再退，免得用户双击后像“点了没反应”
+		let alert = NSAlert()
+		alert.messageText = "妙电已在菜单栏运行"
+		alert.informativeText = "点击菜单栏上的电池图标即可查看电量信息。"
+		alert.alertStyle = .informational
+		alert.addButton(withTitle: "好")
+		_ = alert.runModal()
+		exit(0)
 	}
 	
 	// 菜单栏寸土寸金，用 “3:25” 这种时钟式写法而非“3小时25分钟”

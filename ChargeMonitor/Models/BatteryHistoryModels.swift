@@ -6,6 +6,16 @@ nonisolated struct PowerSample: Equatable, Sendable {
 	let watts: Double
 }
 
+// 电量跳变事件：电池模式下相邻两次采样电量突变 ≥2%（如 95% 直接跳 97%），
+// 是电量计（Gas Gauge）失准的典型表现；攒多了提示做一次完整充放循环校准
+nonisolated struct SocJumpEvent: Codable, Equatable, Sendable, Identifiable {
+	let date: Date
+	let fromPercent: Int
+	let toPercent: Int
+
+	var id: Date { date }
+}
+
 // 温度曲线的采样点
 nonisolated struct TemperatureSample: Equatable, Sendable {
 	let date: Date
@@ -138,6 +148,63 @@ nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	let firstSeen: Date
 	var lastSeen: Date
 	var connectCount: Int
+}
+
+// 充电器/线材质量诊断：按充电器累计多次充电的协商功率，识别"协商功率长期低于额定"的劣质线/口
+nonisolated struct ChargerPowerStats: Codable, Equatable, Sendable {
+	let key: String
+	var ratedWatts: Int?
+	var sampleCount: Int = 0
+	var sumWatts: Double = 0
+	var maxWatts: Double = 0
+
+	// 平均协商功率；无样本时为 nil
+	var avgWatts: Double? {
+		sampleCount > 0 ? sumWatts / Double(sampleCount) : nil
+	}
+
+	// 协商平均显著低于额定（<60%）且样本足够 → 疑似线材/接口质量不佳
+	var isSuspiciouslySlow: Bool {
+		guard sampleCount >= 5, let rated = ratedWatts, rated > 0, let avg = avgWatts else { return false }
+		return avg < Double(rated) * 0.6
+	}
+}
+
+// 时段用电累计：按一天 24 小时分桶累计电池模式的掉电，看哪个时段用电最凶
+nonisolated struct HourlyDrainStats: Codable, Equatable, Sendable {
+	// 每小时桶累计掉的百分点（下标 0~23）
+	var drainedByHour: [Double]
+	// 有效累计天数（跨天时 +1，用于摊平成"日均"）
+	var accumulatedDays: Int
+	// 最近一次累计所在的日期键（跨天判定用）
+	var lastDayKey: String
+
+	init() {
+		self.drainedByHour = Array(repeating: 0, count: 24)
+		self.accumulatedDays = 0
+		self.lastDayKey = ""
+	}
+
+	// 归一化桶（防越界）
+	func bucket(_ hour: Int) -> Int {
+		min(max(hour, 0), 23)
+	}
+}
+
+// 应用耗电累计：按天记录每个应用处于"高耗电"状态的秒数，回答"到底谁最费电"
+nonisolated struct AppEnergyUsage: Codable, Equatable, Sendable, Identifiable {
+	let bundleId: String
+	var name: String
+	// dayKey -> 当天累计秒数（只保留最近 30 天）
+	var secondsByDay: [String: Double]
+	var lastSeen: Date
+
+	var id: String { bundleId }
+
+	// 指定日期集合内的累计秒数（如最近 7 天）
+	func seconds(within dayKeys: Set<String>) -> Double {
+		dayKeys.reduce(0) { $0 + (secondsByDay[$1] ?? 0) }
+	}
 }
 
 // 蓝牙外设类型（来自系统蓝牙报告的 minorType，名字关键词兜底）

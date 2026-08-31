@@ -47,6 +47,22 @@ nonisolated enum PowerSourceType: Equatable, Sendable {
 	case powerAdapter
 }
 
+// 电池身份证：出厂写入硬件的静态信息（序列号、电芯厂商、生产日期、电芯配置），
+// 启动时读一次即可，不随轮询变化；电芯电压取读取时刻的快照（均衡度变化很慢）
+nonisolated struct BatteryIdentity: Equatable, Sendable {
+	let serialNumber: String?
+	let cellVendorName: String?
+	let manufactureDateText: String?
+	let designCapacityMAh: Int?
+	// 各串联电芯的电压（mV），用于展示电芯数与压差（均衡度）
+	let cellVoltagesMV: [Int]
+
+	// 至少有一项可用信息才值得展示
+	var isMeaningful: Bool {
+		serialNumber != nil || cellVendorName != nil || manufactureDateText != nil || !cellVoltagesMV.isEmpty
+	}
+}
+
 nonisolated struct PowerTier: Equatable, Sendable {
 	var maxVoltageMV: Int
 	var maxCurrentMA: Int

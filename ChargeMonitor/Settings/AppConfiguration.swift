@@ -11,6 +11,9 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	var chargeCareThresholdPercent: Int = 80
 	var deviceLowThresholdPercent: Int = 20
 	var highDrainThresholdPerHour: Int = 20
+	// 夜间免打扰时段（小时，可跨零点，如 23 点–次日 8 点）
+	var quietHoursStartHour: Int = 23
+	var quietHoursEndHour: Int = 8
 	// 被用户折叠起来的图表卡片（存 DisplayOption rawValue）
 	var collapsedCards: Set<String> = []
 	
@@ -33,7 +36,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 			.alertFull, .alertLowBattery, .alertLowForecast, .alertFullForecast,
 			.alertHighTemperature, .alertTempSurge, .alertSlowCharge,
 			.alertHighDrain, .alertDeviceLow, .alertHealthMilestone, .quietHours,
-			.usageCalendar, .habitInsight
+			.usageCalendar, .habitInsight, .hourlyDrainChart
 		])
 	}
 	
@@ -49,8 +52,11 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		copy.lowBatteryThresholdPercent = min(max(copy.lowBatteryThresholdPercent, 5), 50)
 		copy.highTemperatureThresholdC = min(max(copy.highTemperatureThresholdC, 35), 50)
 		copy.chargeCareThresholdPercent = min(max(copy.chargeCareThresholdPercent, 60), 95)
-		copy.deviceLowThresholdPercent = min(max(copy.deviceLowThresholdPercent, 5), 40)
-		copy.highDrainThresholdPerHour = min(max(copy.highDrainThresholdPerHour, 10), 40)
+	copy.deviceLowThresholdPercent = min(max(copy.deviceLowThresholdPercent, 5), 40)
+	copy.highDrainThresholdPerHour = min(max(copy.highDrainThresholdPerHour, 10), 40)
+	// 免打扰时段夹到 0~23，防手改配置文件写出离谱值
+	copy.quietHoursStartHour = min(max(copy.quietHoursStartHour, 0), 23)
+	copy.quietHoursEndHour = min(max(copy.quietHoursEndHour, 0), 23)
 		// 折叠状态只保留仍然存在的卡片选项
 		let validCardIDs = Set(DisplayOption.allCases.map(\.rawValue))
 		copy.collapsedCards = copy.collapsedCards.intersection(validCardIDs)
@@ -66,6 +72,8 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case chargeCareThresholdPercent
 		case deviceLowThresholdPercent
 		case highDrainThresholdPerHour
+		case quietHoursStartHour
+		case quietHoursEndHour
 		case collapsedCards
 	}
 
@@ -103,6 +111,14 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 			Int.self,
 			forKey: .highDrainThresholdPerHour
 		) ?? 20
+		self.quietHoursStartHour = try container.decodeIfPresent(
+			Int.self,
+			forKey: .quietHoursStartHour
+		) ?? 23
+		self.quietHoursEndHour = try container.decodeIfPresent(
+			Int.self,
+			forKey: .quietHoursEndHour
+		) ?? 8
 		self.collapsedCards = try container.decodeIfPresent(
 			Set<String>.self,
 			forKey: .collapsedCards

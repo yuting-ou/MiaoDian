@@ -59,6 +59,10 @@ final class BatteryAlertController: ObservableObject {
 	private static let healthMilestones = [90, 85, 80]
 	private static let healthMilestoneKey = "healthMilestoneLastSeen"
 	private static let weeklyDigestDateKey = "lastWeeklyDigestDate"
+	private static let monthlyDigestDateKey = "lastMonthlyDigestDate"
+	// 电量计校准提醒的冷却键：30 天内不重复提醒（跳变条件可能长期成立）
+	private static let gaugeCalibrationAlertKey = "gaugeCalibrationAlertedAt"
+	private static let gaugeCalibrationCooldownSeconds: TimeInterval = 30 * 86400
 	
 	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil) {
 		self.monitor = monitor
@@ -95,6 +99,14 @@ final class BatteryAlertController: ObservableObject {
 			.removeDuplicates()
 			.sink { [weak self] record in
 				self?.evaluateSleepDrain(record)
+			}
+			.store(in: &cancellables)
+
+		// 电量跳变攒够阈值时提醒校准电量计
+		historyRecorder?.$socJumpEvents
+			.removeDuplicates()
+			.sink { [weak self] events in
+				self?.evaluateGaugeCalibration(events)
 			}
 			.store(in: &cancellables)
 	}
@@ -142,6 +154,7 @@ final class BatteryAlertController: ObservableObject {
 		evaluateFullForecast(snapshot)
 		evaluateHealthMilestone(snapshot)
 		checkWeeklyDigest()
+		checkMonthlyDigest()
 	}
 	
 	private func evaluateFull(_ snapshot: BatterySnapshot) {
@@ -419,6 +432,26 @@ final class BatteryAlertController: ObservableObject {
 			&& record.dropPerHour >= sleepDrainAlertMinPerHour
 	}
 	
+	// 电量计校准提醒：30 天内跳变攒够阈值提醒做一次完整充放循环；
+	// 条件可能长期成立（老化的电量计跳变是常态），用时间冷却而不是边沿重置防轰炸
+	private func evaluateGaugeCalibration(_ events: [SocJumpEvent]) {
+		guard isEnabled, alertEnabled(.alertGaugeCalibration) else { return }
+		let now = Date()
+		let count = UsagePatternAnalyzer.socJumpCount(events, withinDays: 30, now: now)
+		guard UsagePatternAnalyzer.gaugeNeedsCalibration(jumpCount: count) else { return }
+		// 先记账再发：投递失败也不靠重复轰炸补偿
+		if let lastAlerted = defaults.object(forKey: Self.gaugeCalibrationAlertKey) as? Date,
+			now.timeIntervalSince(lastAlerted) < Self.gaugeCalibrationCooldownSeconds {
+			return
+		}
+		defaults.set(now, forKey: Self.gaugeCalibrationAlertKey)
+		send(
+			id: "gauge-calibration",
+			title: "电量计可能失准",
+			body: "最近 30 天记录到 \(count) 次电量跳变（电量突然变化 2% 以上）。建议做一次完整的充放循环，帮电量计重新校准"
+		)
+	}
+
 	// 每周电池周报：周日 20 点后第一次有机会时发；错过就顺延到下次启动
 	private func checkWeeklyDigest() {
 		guard isEnabled, configuration.enabledOptions.contains(.weeklyDigest) else { return }
@@ -468,22 +501,92 @@ final class BatteryAlertController: ObservableObject {
 		}
 		return parts.joined(separator: "；")
 	}
+
+	// MARK: - 每月电池月报
+
+	// 每月 1 号 9 点后第一次有机会时发上月小结；错过顺延到下次启动
+	// 与周报共用 weeklyDigest 开关（同为"定期小结"）
+	private func checkMonthlyDigest() {
+		guard isEnabled, configuration.enabledOptions.contains(.weeklyDigest) else { return }
+		guard let due = Self.mostRecentMonthlyDigestDue(before: Date()) else { return }
+		guard let lastSent = defaults.object(forKey: Self.monthlyDigestDateKey) as? Date else {
+			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+			return
+		}
+		guard lastSent < due, let recorder = historyRecorder else { return }
+		defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+
+		let body = Self.monthlyDigestBody(
+			history: recorder.dailyHistory,
+			sessions: recorder.recentSessions,
+			healthSamples: recorder.healthSamples,
+			due: due
+		)
+		guard !body.isEmpty else { return }
+		send(id: "monthly-digest", title: "上月电池小结", body: body)
+	}
+
+	// 最近一个已到点的"本月 1 号 09:00"；本月 1 号 9 点前返回上月的
+	nonisolated static func mostRecentMonthlyDigestDue(before now: Date, calendar: Calendar = .current) -> Date? {
+		guard let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) else { return nil }
+		guard let due = calendar.date(byAdding: .hour, value: 9, to: monthStart) else { return nil }
+		if now >= due { return due }
+		return calendar.date(byAdding: .month, value: -1, to: due)
+	}
+
+	// 月报正文：汇总 due 所在月的上一个自然月；没数据返回空串不发
+	nonisolated static func monthlyDigestBody(
+		history: [DailyUsage],
+		sessions: [ChargeSession],
+		healthSamples: [HealthSample],
+		due: Date,
+		calendar: Calendar = .current
+	) -> String {
+		guard let dueMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: due)),
+			  let prevMonthStart = calendar.date(byAdding: .month, value: -1, to: dueMonthStart)
+		else { return "" }
+		let prefix = UsagePatternAnalyzer.monthKeyString(prevMonthStart)
+
+		let monthDays = history.filter { $0.dayKey.hasPrefix(prefix) }
+		let drained = monthDays.reduce(0) { $0 + $1.drainedPercent }
+		let charged = monthDays.reduce(0) { $0 + $1.chargedPercent }
+		let sessionCount = sessions.filter { UsagePatternAnalyzer.monthKeyString($0.startDate).hasPrefix(prefix) }.count
+		guard drained > 0 || charged > 0 || sessionCount > 0 else { return "" }
+
+		let dayCount = calendar.range(of: .day, in: .month, for: prevMonthStart)?.count ?? 30
+		var parts = [String(format: "上月用电 %d%%、充入 %d%%、充电 %d 次", drained, charged, sessionCount)]
+		parts.append(String(format: "日均用电 %.0f%%", Double(drained) / Double(dayCount)))
+		if let lastHealth = healthSamples.last(where: { UsagePatternAnalyzer.monthKeyString($0.date).hasPrefix(prefix) }) {
+			parts.append("月末健康度 \(lastHealth.healthPercent)%")
+		}
+		return parts.joined(separator: "；")
+	}
 	
-	// 夜间免打扰：23 点到早 8 点之间非紧急通知不发（低电量这种紧急的照发）
+	// 夜间免打扰：设定时段内非紧急通知不发（低电量这种紧急的照发）；
+	// 时段可跨零点（如 23 点–次日 8 点），起止相同视为关闭，避免全天静音
+	nonisolated static func isQuietHour(_ hour: Int, start: Int, end: Int) -> Bool {
+		guard start != end else { return false }
+		if start < end { return hour >= start && hour < end }
+		return hour >= start || hour < end
+	}
+
 	private var isInQuietHours: Bool {
 		guard configuration.enabledOptions.contains(.quietHours) else { return false }
 		let hour = Calendar.current.component(.hour, from: Date())
-		return hour >= 23 || hour < 8
+		return Self.isQuietHour(hour, start: configuration.quietHoursStartHour, end: configuration.quietHoursEndHour)
 	}
-	
+
 	private func send(id: String, title: String, body: String, urgent: Bool = false) {
 		if isInQuietHours, !urgent { return }
-		
+
 		let content = UNMutableNotificationContent()
 		content.title = title
 		content.body = body
 		content.sound = .default
-		
+		// 紧急提醒（低电量等）标为时效性通知，专注模式下才真正能穿透；
+		// 需要用户在系统设置里授予“时效性通知”权限，未授予时按普通通知处理
+		content.interruptionLevel = urgent ? .timeSensitive : .active
+
 		let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
 		UNUserNotificationCenter.current().add(request) { error in
 			if let error {

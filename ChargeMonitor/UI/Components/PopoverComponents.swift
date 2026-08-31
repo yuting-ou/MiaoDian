@@ -31,47 +31,6 @@ enum PopoverLayout {
 	static let rowCornerRadius: CGFloat = 8
 }
 
-struct PopoverMenuRow<Content: View>: View {
-	private let title: String
-	private let systemImageName: String?
-	private let content: Content
-	
-	@State private var isHovering = false
-
-	init(_ title: String, systemImageName: String? = nil, @ViewBuilder content: () -> Content) {
-		self.title = title
-		self.systemImageName = systemImageName
-		self.content = content()
-	}
-	
-	var body: some View {
-		Menu {
-			content
-		} label: {
-			HStack(spacing: 6) {
-				if let systemImageName {
-					Image(systemName: systemImageName)
-				}
-				Text(title)
-					.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
-					.foregroundStyle(.primary)
-			}
-			.frame(maxWidth: .infinity, minHeight: PopoverLayout.rowHeight, alignment: .leading)
-			.padding(.horizontal, PopoverLayout.rowHorizontalPadding)
-			.contentShape(Rectangle())
-		}
-		.menuIndicator(.hidden)
-		.menuStyle(.borderlessButton)
-		.frame(maxWidth: .infinity, minHeight: PopoverLayout.rowHeight, alignment: .leading)
-		.padding(.horizontal, PopoverLayout.rowHorizontalPadding - 3)
-		.background(
-			RoundedRectangle(cornerRadius: PopoverLayout.rowCornerRadius, style: .continuous)
-				.fill(isHovering ? Color.primary.opacity(0.08) : .clear)
-		)
-		.onHover { isHovering = $0 }
-	}
-}
-
 struct PopoverInfoLine: View {
 	private let text: String
 	
@@ -186,6 +145,7 @@ struct PopoverInfoRow: View {
 				.animation(.easeInOut(duration: 0.3), value: item.value)
 		}
 		.padding(.vertical, 3)
+		.help(item.helpText ?? item.value)
 	}
 }
 
@@ -193,12 +153,14 @@ struct PopoverActionRow: View {
 	private let title: String
 	private let icon: NSImage?
 	private let systemImageName: String?
+	private let showsChevron: Bool
 	private let action: () -> Void
-	
-	init(_ title: String, icon: NSImage? = nil, systemImageName: String? = nil, action: @escaping () -> Void) {
+
+	init(_ title: String, icon: NSImage? = nil, systemImageName: String? = nil, showsChevron: Bool = false, action: @escaping () -> Void) {
 		self.title = title
 		self.icon = icon
 		self.systemImageName = systemImageName
+		self.showsChevron = showsChevron
 		self.action = action
 	}
 	
@@ -221,6 +183,14 @@ struct PopoverActionRow: View {
 					Text(title)
 						.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
 						.foregroundStyle(.primary)
+
+					Spacer(minLength: 8)
+
+					if showsChevron {
+						Image(systemName: "chevron.right")
+							.font(.system(size: 8, weight: .semibold))
+							.foregroundStyle(.tertiary)
+					}
 				}
 				.frame(maxWidth: .infinity, minHeight: PopoverLayout.rowHeight, alignment: .leading)
 				.padding(.horizontal, PopoverLayout.rowHorizontalPadding)

@@ -19,6 +19,14 @@ final class BatteryHistoryRecorder: ObservableObject {
 	@Published private(set) var socSamples: [SOCSample] = []
 	// 电源事件时间线（插拔电/充满/睡眠唤醒），新的在末尾
 	@Published private(set) var powerEvents: [PowerEvent] = []
+	// 充电器质量诊断：按充电器累计的协商功率样本
+	@Published private(set) var chargerPowerStats: [String: ChargerPowerStats] = [:]
+	// 时段用电：按小时分桶累计的掉电（热力图数据源）
+	@Published private(set) var hourlyDrainStats = HourlyDrainStats()
+	// 应用耗电累计：按天记录各应用"高耗电"状态的秒数
+	@Published private(set) var appEnergy: [AppEnergyUsage] = []
+	// 电量跳变事件：电池模式下相邻采样电量突变（电量计失准的表现）
+	@Published private(set) var socJumpEvents: [SocJumpEvent] = []
 	
 	// 今天的用电累计；历史末尾不是今天说明今天还没产生数据
 	var todayUsage: DailyUsage? {
@@ -34,6 +42,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 	private var lastPercentForDaily: Int?
 	private var lastUsageSampleDate: Date?
 	private var lastDailyUsageSave = Date.distantPast
+	private var lastChargerStatsSave = Date.distantPast
 	// 事件边沿检测用：上一帧的电源状态
 	private var lastPowerSource: PowerSourceType?
 	private var lastIsFull = false
@@ -43,6 +52,13 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 充电器档案：本次接入已建档的身份键与接入时刻
 	private var activeChargerKey: String?
 	private var adapterConnectedAt: Date?
+	// 应用耗电累计：上一次计时的时刻（帧间隔超上限视为断档不计）
+	private var lastEnergyTick: Date?
+	private var lastAppEnergySave = Date.distantPast
+	// 跳变检测用：电池模式下上一次采样的电量与时刻（充电/插电即重置）
+	private var lastSocSample: (date: Date, percent: Int)?
+	// monitor 引用：应用耗电累计要读它的"面板是否打开"与当前高耗电列表
+	private let monitor: BatteryMonitor
 	private var cancellables: Set<AnyCancellable> = []
 	
 	private let defaults: UserDefaults
@@ -63,6 +79,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated private static let chargerProfilesKey = "chargerProfiles"
 	nonisolated private static let socSamplesKey = "socSamples"
 	nonisolated private static let powerEventsKey = "powerEvents"
+	nonisolated private static let chargerPowerStatsKey = "chargerPowerStats"
+	nonisolated private static let hourlyDrainKey = "hourlyDrainStats"
+	nonisolated private static let appEnergyKey = "appEnergy"
+	nonisolated private static let socJumpEventsKey = "socJumpEvents"
 	nonisolated private static let maxSessions = 20
 	nonisolated private static let maxHealthSamples = 400
 	// 用电历史保留 90 天：七天柱图只看末尾 7 天，日历热力图需要更长跨度
@@ -90,6 +110,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 滚动备份的文件名与落盘间隔；测试直接引用文件名，保持单一数据源
 	nonisolated static let backupFileName = "history-backup.plist"
 	nonisolated private static let backupIntervalSeconds: TimeInterval = 30 * 60
+	// 跳变事件保留上限（窗口统计只看 30 天，60 条足够）
+	nonisolated private static let maxSocJumpEvents = 60
+	// 相邻采样间隔超过这个值视为睡过：合盖慢放电不算跳变
+	nonisolated private static let socJumpMaxGapSeconds: TimeInterval = 3 * 60
 	
 	convenience init(monitor: BatteryMonitor, defaults: UserDefaults = .standard) {
 		self.init(monitor: monitor, defaults: defaults, backupDirectory: Self.defaultBackupDirectory())
@@ -99,6 +123,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 	init(monitor: BatteryMonitor, defaults: UserDefaults, backupDirectory: URL?) {
 		self.defaults = defaults
 		self.backupDirectory = backupDirectory
+		self.monitor = monitor
 		// 备份先于主档加载：主档损坏时靠它抢救
 		backupRaw = loadBackupRaw()
 		recentSessions = load([ChargeSession].self, key: Self.sessionsKey) ?? []
@@ -119,6 +144,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 		chargerProfiles = load([ChargerProfile].self, key: Self.chargerProfilesKey) ?? []
 		socSamples = load([SOCSample].self, key: Self.socSamplesKey) ?? []
 		powerEvents = load([PowerEvent].self, key: Self.powerEventsKey) ?? []
+		chargerPowerStats = load([String: ChargerPowerStats].self, key: Self.chargerPowerStatsKey) ?? [:]
+		hourlyDrainStats = load(HourlyDrainStats.self, key: Self.hourlyDrainKey) ?? HourlyDrainStats()
+		appEnergy = load([AppEnergyUsage].self, key: Self.appEnergyKey) ?? []
+		socJumpEvents = load([SocJumpEvent].self, key: Self.socJumpEventsKey) ?? []
 		// 监听系统睡眠/唤醒，统计合盖期间掉了多少电
 		let workspaceCenter = NSWorkspace.shared.notificationCenter
 		workspaceCenter.addObserver(self, selector: #selector(handleWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
@@ -146,10 +175,56 @@ final class BatteryHistoryRecorder: ObservableObject {
 		finalizeSleepDrainIfNeeded(snapshot)
 		updateChargeSession(snapshot)
 		updateChargerProfile(snapshot)
+		accumulateChargerPower(snapshot)
 		recordDailyHealth(snapshot)
 		updateDailyUsage(snapshot)
 		recordSOCSample(snapshot)
 		recordPowerEvents(snapshot)
+		accumulateAppEnergy()
+		trackSocJumps(snapshot)
+	}
+
+	// MARK: - 电量计跳变
+
+	// 电池模式下相邻采样（10 秒级）电量本不该突变 ≥2%，出现即记一笔跳变；
+	// 插电/充电即重置追踪（充电时的电量快涨是正常 CC/CV 行为）
+	private func trackSocJumps(_ snapshot: BatterySnapshot) {
+		guard snapshot.powerSource == .battery, !snapshot.isCharging,
+			let percent = snapshot.stateOfChargePercent else {
+			lastSocSample = nil
+			return
+		}
+		let now = Date()
+		defer { lastSocSample = (now, percent) }
+		guard let last = lastSocSample,
+			now.timeIntervalSince(last.date) <= Self.socJumpMaxGapSeconds,
+			UsagePatternAnalyzer.isSocJump(from: last.percent, to: percent) else { return }
+		let events = Self.appendingSocJump(
+			socJumpEvents,
+			from: last.percent,
+			to: percent,
+			at: now,
+			maxEvents: Self.maxSocJumpEvents
+		)
+		guard events != socJumpEvents else { return }
+		socJumpEvents = events
+		save(events, key: Self.socJumpEventsKey)
+	}
+
+	// 追加一条跳变事件并封顶（纯函数，单测直测）
+	nonisolated static func appendingSocJump(
+		_ events: [SocJumpEvent],
+		from: Int,
+		to: Int,
+		at date: Date,
+		maxEvents: Int
+	) -> [SocJumpEvent] {
+		var events = events
+		events.append(SocJumpEvent(date: date, fromPercent: from, toPercent: to))
+		if events.count > maxEvents {
+			events.removeFirst(events.count - maxEvents)
+		}
+		return events
 	}
 	
 	// MARK: - 纯判定（now 可注入，状态机直测）
@@ -219,6 +294,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 		return profiles
 	}
 	
+	// 帧间隔超过归因窗口视为睡过：跨睡眠的电量差是夜里慢慢掉/慢慢充的，
+	// 全记到醒来那一帧会把整夜耗电/充电错记成瞬时变化（时段热力图也会错桶），一律不计
+	nonisolated private static let usageAttributionGapSeconds: TimeInterval = 3 * 60
+
 	// 一帧快照累计进当日用电：电池模式掉的计入用电，充电时涨的计入充入；
 	// 反向变化不计（电池模式下回升多是校准波动，插电时掉电不算用户用电）；
 	// 帧间隔超上限视为睡过，那段时间不计入插电/电池时长
@@ -231,7 +310,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 		secondsSinceLastSample: TimeInterval?
 	) -> DailyUsage {
 		var usage = usage
-		if let last = lastPercent {
+		// 电量差只在连续采样间归因；间隔需为正且未跨睡眠
+		let isContiguous = secondsSinceLastSample.map { $0 > 0 && $0 <= usageAttributionGapSeconds } ?? false
+		if isContiguous, let last = lastPercent {
 			if percent < last, powerSource == .battery {
 				usage.drainedPercent += last - percent
 			} else if percent > last, isCharging {
@@ -403,6 +484,16 @@ final class BatteryHistoryRecorder: ObservableObject {
 		save(record, key: Self.sleepDrainKey)
 	}
 	
+	// 功率统计只保留仍建档的充电器（纯函数，单测直测）
+	nonisolated static func pruningChargerPowerStats(
+		_ stats: [String: ChargerPowerStats],
+		keeping profiles: [ChargerProfile]
+	) -> [String: ChargerPowerStats] {
+		let keys = Set(profiles.map(\.key))
+		guard stats.count > keys.count else { return stats }
+		return stats.filter { keys.contains($0.key) }
+	}
+
 	// MARK: - 充电器档案
 	
 	// 当前接着的充电器对应的档案（拔电后为 nil）
@@ -434,8 +525,108 @@ final class BatteryHistoryRecorder: ObservableObject {
 		activeChargerKey = Self.chargerKey(name: name, manufacturer: manufacturer, ratedWatts: rated)
 		chargerProfiles = Self.upsertingChargerProfile(chargerProfiles, name: name, manufacturer: manufacturer, ratedWatts: rated, now: Date())
 		save(chargerProfiles, key: Self.chargerProfilesKey)
+		// 功率统计跟着档案走：档案挤掉最旧后，对应统计一并清理，不留孤儿数据
+		let prunedStats = Self.pruningChargerPowerStats(chargerPowerStats, keeping: chargerProfiles)
+		if prunedStats.count != chargerPowerStats.count {
+			chargerPowerStats = prunedStats
+			save(chargerPowerStats, key: Self.chargerPowerStatsKey)
+		}
+	}
+
+	// 当前充电器累计的协商功率样本（供诊断；拔电后为 nil）
+	var currentChargerPowerStats: ChargerPowerStats? {
+		guard let key = activeChargerKey else { return nil }
+		return chargerPowerStats[key]
+	}
+
+	// 充电期间累计协商功率：每帧把当前协商瓦数滚进对应充电器的统计，
+	// 事后算平均，识别"额定 65W 却一直只协商 20W"这类劣质线/口
+	// 落盘限频：纯累计变化最多一分钟存一次，避免每 2 秒写一次
+	private func accumulateChargerPower(_ snapshot: BatterySnapshot) {
+		guard let key = activeChargerKey else { return }
+		guard snapshot.powerSource == .powerAdapter, snapshot.isCharging else { return }
+		guard
+			let voltageMV = snapshot.negotiatedVoltageMV,
+			let currentMA = snapshot.negotiatedCurrentMA,
+			voltageMV > 0, currentMA > 0
+		else { return }
+		let watts = Double(voltageMV) * Double(currentMA) / 1_000_000.0
+		guard watts >= IOKitBatteryReader.minimumVisibleWatts else { return }
+
+		var stats = chargerPowerStats[key] ?? ChargerPowerStats(key: key, ratedWatts: snapshot.adapterRatedWatts)
+		stats.sampleCount += 1
+		stats.sumWatts += watts
+		stats.maxWatts = max(stats.maxWatts, watts)
+		chargerPowerStats[key] = stats
+
+		if Date().timeIntervalSince(lastChargerStatsSave) >= 60 {
+			lastChargerStatsSave = Date()
+			save(chargerPowerStats, key: Self.chargerPowerStatsKey)
+		}
 	}
 	
+	// MARK: - 应用耗电累计
+
+	// 纯函数：把一段秒数累计进在场应用的当日记录；按截止键清掉过期天、按最近活跃封顶数量
+	nonisolated static func appendingEnergySeconds(
+		_ records: [AppEnergyUsage],
+		ids: [String],
+		names: [String: String],
+		seconds: Double,
+		dayKey: String,
+		cutoffDayKey: String,
+		now: Date,
+		maxApps: Int
+	) -> [AppEnergyUsage] {
+		guard seconds > 0 else { return records }
+		// 输入来自磁盘存档——理论上不会重键，但手改/异常数据不能把应用炸掉
+		var byID = Dictionary(records.map { ($0.bundleId, $0) }, uniquingKeysWith: { first, _ in first })
+		for id in ids {
+			var record = byID[id] ?? AppEnergyUsage(bundleId: id, name: names[id] ?? id, secondsByDay: [:], lastSeen: now)
+			if let latestName = names[id], !latestName.isEmpty { record.name = latestName }
+			record.secondsByDay[dayKey, default: 0] += seconds
+			record.lastSeen = now
+			byID[id] = record
+		}
+		// 过期天对所有记录全量清理（不只在场的），否则离场应用的旧数据永远占着存储
+		let cutoff = cutoffDayKey
+		return Array(byID.values
+			.map { record -> AppEnergyUsage in
+				var record = record
+				record.secondsByDay = record.secondsByDay.filter { $0.key >= cutoff }
+				return record
+			}
+			.sorted { $0.lastSeen > $1.lastSeen }
+			.prefix(maxApps))
+	}
+
+	// 每帧把"面板打开期间处于高耗电列表"的应用累计上这帧的秒数；
+	// 高耗电列表只在面板打开时才刷新，列表非空 + 帧间隔正常才计
+	private func accumulateAppEnergy() {
+		let now = Date()
+		let elapsed = lastEnergyTick.map { now.timeIntervalSince($0) } ?? 0
+		lastEnergyTick = now
+		guard elapsed > 0, elapsed <= 30 else { return }
+		guard monitor.isPopoverOpen, !monitor.significantEnergyApps.isEmpty else { return }
+
+		let dayKey = Self.dayKey(now)
+		let cutoff = Self.dayKey(now.addingTimeInterval(-30 * 86400))
+		appEnergy = Self.appendingEnergySeconds(
+			appEnergy,
+			ids: monitor.significantEnergyApps.map(\.id),
+			names: Dictionary(monitor.significantEnergyApps.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
+			seconds: elapsed,
+			dayKey: dayKey,
+			cutoffDayKey: cutoff,
+			now: now,
+			maxApps: 50
+		)
+		if now.timeIntervalSince(lastAppEnergySave) >= 60 {
+			lastAppEnergySave = now
+			save(appEnergy, key: Self.appEnergyKey)
+		}
+	}
+
 	// MARK: - 今日用电小结
 	
 	// 相邻两次采样的电量差累计（纯函数 accumulatingDailyUsage），跨天追加新的一天
@@ -458,14 +649,34 @@ final class BatteryHistoryRecorder: ObservableObject {
 			structuralChange = true
 		}
 		let before = history[history.count - 1]
+		let sampleGap = lastUsageSampleDate.map { now.timeIntervalSince($0) }
 		let usage = Self.accumulatingDailyUsage(
 			before,
 			percent: percent,
 			lastPercent: lastPercentForDaily,
 			powerSource: snapshot.powerSource,
 			isCharging: snapshot.isCharging,
-			secondsSinceLastSample: lastUsageSampleDate.map { now.timeIntervalSince($0) }
+			secondsSinceLastSample: sampleGap
 		)
+		// 时段用电与今日用电同源：电池模式的掉电增量同时计入对应小时桶；
+		// 与今日用电同一归因窗口，跨睡眠的掉电不错记到醒来那一个小时
+		let isContiguous = sampleGap.map { $0 > 0 && $0 <= Self.usageAttributionGapSeconds } ?? false
+		if isContiguous, snapshot.powerSource == .battery, let last = lastPercentForDaily, percent < last {
+			hourlyDrainStats = UsagePatternAnalyzer.accumulatingHourlyDrain(
+				hourlyDrainStats,
+				hour: Calendar.current.component(.hour, from: now),
+				droppedPercent: Double(last - percent),
+				dayKey: key
+			)
+		} else {
+			// 没掉电也要推进天数键（跨天 accumulatedDays +1 靠它）
+			hourlyDrainStats = UsagePatternAnalyzer.accumulatingHourlyDrain(
+				hourlyDrainStats,
+				hour: Calendar.current.component(.hour, from: now),
+				droppedPercent: 0,
+				dayKey: key
+			)
+		}
 		// 落盘限频区分电量变化与纯时长：电量变了立存，纯时长最多一分钟存一次
 		if usage.drainedPercent != before.drainedPercent || usage.chargedPercent != before.chargedPercent {
 			structuralChange = true
@@ -477,6 +688,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		if structuralChange || now.timeIntervalSince(lastDailyUsageSave) >= 60 {
 			lastDailyUsageSave = now
 			save(history, key: Self.dailyHistoryKey)
+			save(hourlyDrainStats, key: Self.hourlyDrainKey)
 		}
 	}
 	

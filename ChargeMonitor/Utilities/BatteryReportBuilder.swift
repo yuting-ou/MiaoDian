@@ -1,6 +1,6 @@
 import Foundation
 
-// 生成纯文本电池报告：当前状态 + 体检评分 + 健康趋势 + 七天用电 + 充电记录 +
+// 生成纯文本电池报告：当前状态 + 体检评分 + 电池档案 + 健康趋势 + 七天用电 + 充电记录 +
 // 充电器档案 + 睡眠掉电 + 电源事件 + 外设电量，与面板信息保持一致
 struct BatteryReportBuilder {
 	let snapshot: BatterySnapshot
@@ -14,21 +14,30 @@ struct BatteryReportBuilder {
 	var chargerProfiles: [ChargerProfile] = []
 	var lastSleepDrain: SleepDrainRecord? = nil
 	var powerEvents: [PowerEvent] = []
-	
+	var identity: BatteryIdentity? = nil
+	var socJumpCount30d: Int = 0
+
 	func build() -> String {
 		var sections: [String] = []
-		
+
 		sections.append("妙电 · 电池报告")
 		sections.append("生成时间：\(Self.dateTimeFormatter.string(from: Date()))")
 		sections.append("")
-		
+
 		sections.append("【当前状态】")
 		sections.append(contentsOf: currentStatusLines())
-		
+
 		if let checkupLine {
 			sections.append("")
 			sections.append("【电池体检】")
 			sections.append(checkupLine)
+		}
+
+		// 电池档案：出厂静态信息 + 电量计跳变状态
+		if let identity, let lines = identityLines(identity), !lines.isEmpty {
+			sections.append("")
+			sections.append("【电池档案】")
+			sections.append(contentsOf: lines)
 		}
 		
 		if let charger = chargerProfiles.first(where: { $0.key == currentChargerKey }) {
@@ -116,6 +125,30 @@ struct BatteryReportBuilder {
 	private var sleepLine: String? {
 		guard let record = lastSleepDrain, record.droppedPercent >= 1 else { return nil }
 		return String(format: "\(Self.dateTimeFormatter.string(from: record.sleepDate)) 起合盖 \(record.durationMinutes) 分钟，掉了 \(record.droppedPercent)%%（%.1f%%/小时）", record.dropPerHour)
+	}
+
+	// 电池档案行：序列号/电芯厂商/生产日期/容量/电芯配置/跳变状态
+	private func identityLines(_ identity: BatteryIdentity) -> [String]? {
+		var lines: [String] = []
+		if let serial = identity.serialNumber { lines.append("序列号：\(serial)") }
+		if let vendor = identity.cellVendorName { lines.append("电芯厂商：\(vendor)") }
+		if let dateText = identity.manufactureDateText { lines.append("生产日期：\(dateText)") }
+		if let design = identity.designCapacityMAh {
+			var line = "设计容量：\(design) mAh"
+			if let max = snapshot.maxCapacityMAh, max > 0 { line += "（当前满充 \(max) mAh）" }
+			lines.append(line)
+		}
+		if !identity.cellVoltagesMV.isEmpty {
+			var line = "电芯配置：\(identity.cellVoltagesMV.count) 芯串联"
+			if let balance = BatteryIdentityDecoder.cellBalance(identity.cellVoltagesMV) {
+				line += "，压差 \(balance.deltaMV) mV"
+			}
+			lines.append(line)
+		}
+		if socJumpCount30d > 0 {
+			lines.append("电量跳变：最近 30 天 \(socJumpCount30d) 次")
+		}
+		return lines
 	}
 	
 	// 当前接着的充电器身份键：与 recorder 的建档规则同源，不再各拼一份

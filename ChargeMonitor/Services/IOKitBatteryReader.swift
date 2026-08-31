@@ -25,8 +25,8 @@ struct BatteryMetrics {
 }
 
 struct IOKitBatteryReader {
-	private static let fastChargePowerThresholdW = 50.0
-	static let minimumVisibleWatts = 0.1
+	nonisolated private static let fastChargePowerThresholdW = 50.0
+	nonisolated static let minimumVisibleWatts = 0.1
 	
 	// SMC 实时传感器：注册表数据十几秒才刷新，功率类指标优先走 SMC
 	private let smcReader = SMCPowerReader()
@@ -58,7 +58,8 @@ struct IOKitBatteryReader {
 		let metrics = readBatteryMetrics(props: smartBatteryProps, internalBattery: internalBattery, powerSource: powerSource, isCharging: isCharging)
 		let timeToFull = readTimeToFullChargeMinutes(internalBattery: internalBattery)
 		let timeToEmpty = readTimeToEmptyMinutes(internalBattery: internalBattery)
-		let isExternalPowerConnected = metrics.isExternalPowerConnected ?? (adapter != nil) || (powerSource == .powerAdapter)
+		// 注意 ?? 与 || 的优先级：这里要的是“注册表读不到才回退推断”，必须显式加括号
+		let isExternalPowerConnected = metrics.isExternalPowerConnected ?? ((adapter != nil) || (powerSource == .powerAdapter))
 		
 		let chargingByWire = isExternalPowerConnected
 		let chargingPower = metrics.chargingPowerW ?? 0
@@ -147,6 +148,13 @@ struct IOKitBatteryReader {
 		return PowerSourcesContext(providingPowerSourceType: providing, internalBattery: internalBattery)
 	}
 	
+	// 廉价读取当前供电来源（只走 IOPS，不碰 AppleSmartBattery 注册表），
+	// 供电源通知回调判断"是否真的插拔电"——遥测抖动不值得一次全量刷新
+	func readPowerSourceType() -> PowerSourceType? {
+		guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return nil }
+		return mapPowerSource(IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String?)
+	}
+
 	private func mapPowerSource(_ raw: String?) -> PowerSourceType? {
 		switch raw {
 		case Self.acPower: return .powerAdapter
@@ -186,7 +194,7 @@ struct IOKitBatteryReader {
 		} ?? []
 		
 		return ChargerProtocolInfo(
-			protocolName: protocolName(
+			protocolName: Self.protocolName(
 				familyCode: familyCode,
 				description: details.string("Description"),
 				isWireless: isWireless
@@ -199,7 +207,8 @@ struct IOKitBatteryReader {
 		)
 	}
 	
-	private func protocolName(familyCode: UInt32?, description: String?, isWireless: Bool) -> String? {
+	// FamilyCode 魔数 → 协议名；魔数认不出再按描述关键词兜底（纯函数，供单测）
+	nonisolated static func protocolName(familyCode: UInt32?, description: String?, isWireless: Bool) -> String? {
 		if isWireless { return "无线充电" }
 		
 		switch familyCode {
@@ -223,15 +232,20 @@ struct IOKitBatteryReader {
 	private func readAdapterInputPowerW(props: [String: Any]?) -> Double? {
 		guard let telemetry = props?.dictionary("PowerTelemetryData") else { return nil }
 		guard
-			let value = readPowerValueAbs(props: telemetry, key: "SystemPowerIn"),
+			let value = Self.readPowerValueAbs(props: telemetry, key: "SystemPowerIn"),
 			value >= Self.minimumVisibleWatts
 		else { return nil }
 		return round2(value)
 	}
 	
-	// Temperature 单位为 0.01°C
 	private func readTemperatureC(props: [String: Any]) -> Double? {
-		guard let raw = props.int("Temperature"), raw > 0 else { return nil }
+		guard let raw = props.int("Temperature") else { return nil }
+		return Self.temperatureC(fromRawCentiC: raw)
+	}
+
+	// Temperature 单位为 0.01°C；超过 0~100°C 视为脏数据丢弃（纯函数，供单测）
+	nonisolated static func temperatureC(fromRawCentiC raw: Int) -> Double? {
+		guard raw > 0 else { return nil }
 		let celsius = Double(raw) / 100.0
 		guard (0...100).contains(celsius) else { return nil }
 		return (celsius * 10).rounded() / 10
@@ -310,7 +324,7 @@ struct IOKitBatteryReader {
 		}()
 		
 		let currentPowerW: Double? = {
-			if let systemPowerW = readSystemPowerW(
+			if let systemPowerW = Self.systemPowerW(
 				props: props,
 				isExternalPowerConnected: context.isExternalPowerConnected,
 				chargingPowerW: chargingPowerW
@@ -327,7 +341,9 @@ struct IOKitBatteryReader {
 		return (chargingPowerW, currentPowerW)
 	}
 	
-	private func readSystemPowerW(
+	// 整机功率的降级链：SystemPower → AvgSystemPower → AverageSystemPower →
+	// 遥测 SystemPower → SystemPowerIn 扣除充电功率（仅插电时，纯函数，供单测）
+	nonisolated static func systemPowerW(
 		props: [String: Any],
 		isExternalPowerConnected: Bool,
 		chargingPowerW: Double?
@@ -358,7 +374,7 @@ struct IOKitBatteryReader {
 		return powerSource == .powerAdapter
 	}
 	
-	private func readPowerValueAbs(props: [String: Any], key: String) -> Double? {
+	nonisolated private static func readPowerValueAbs(props: [String: Any], key: String) -> Double? {
 		guard let mW = props.int64(key) else { return nil }
 		return Double(abs(mW)) / 1000.0
 	}
@@ -383,6 +399,38 @@ struct IOKitBatteryReader {
 		return soc >= 100
 	}
 	
+	// 电池身份证：出厂静态信息（序列号/电芯厂商/生产日期/电芯配置），启动读一次
+	func readIdentity() -> BatteryIdentity? {
+		guard let props = readSmartBatteryProperties() else { return nil }
+		let batteryData = props.dictionary("BatteryData")
+		let mfgData = props.data("ManufacturerData") ?? batteryData?.data("MfgData")
+		let parsed = mfgData.flatMap { BatteryIdentityDecoder.parseManufacturerData($0) }
+
+		// 生产日期优先用 BatteryData 里的 ManufactureDate：
+		// 大整数（macOS 10.15+）是 2001 纪元 100µs 计数，小值（旧 Intel）是 SMBus 位域日期；
+		// 都解不出来时退回厂商数据的 YYWW 周码
+		var manufactureDateText: String?
+		if let raw = batteryData?.int64("ManufactureDate") {
+			if (0...0xFFFF).contains(raw) {
+				manufactureDateText = BatteryIdentityDecoder.smbusDateText(Int(raw))
+			} else {
+				manufactureDateText = BatteryIdentityDecoder.manufactureDateText(largeValue: raw)
+			}
+		}
+		if manufactureDateText == nil, let code = parsed?.dateCode {
+			manufactureDateText = BatteryIdentityDecoder.dateCodeText(code)
+		}
+
+		let identity = BatteryIdentity(
+			serialNumber: props.string("Serial"),
+			cellVendorName: BatteryIdentityDecoder.vendorDisplayName(parsed?.vendorCode),
+			manufactureDateText: manufactureDateText,
+			designCapacityMAh: props.int("DesignCapacity"),
+			cellVoltagesMV: BatteryIdentityDecoder.cellVoltages(from: batteryData)
+		)
+		return identity.isMeaningful ? identity : nil
+	}
+
 	private func readSmartBatteryProperties() -> [String: Any]? {
 		let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
 		guard service != 0 else {
