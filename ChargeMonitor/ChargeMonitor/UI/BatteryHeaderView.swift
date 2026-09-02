@@ -87,7 +87,7 @@ struct BatteryHeaderView: View {
 			}
 			.frame(width: 92, alignment: .leading)
 		}
-		.help("综合健康度、循环次数、温度与充电习惯的加权评分")
+		.help("综合健康度、循环次数、温度与高电量驻留的加权评分")
 	}
 	
 	private func checkupColor(_ score: Int) -> Color {

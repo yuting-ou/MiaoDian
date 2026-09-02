@@ -27,7 +27,7 @@ macOS 菜单栏电池监控工具,基于开源项目 [ChargeMonitor](https://git
 只需 Command Line Tools,无需完整 Xcode:
 
 ```bash
-bash build.sh    # 先跑单元测试(352 项断言),全过才编译打包
+bash build.sh    # 先跑单元测试(389 项断言),全过才编译打包
 ```
 
 产物输出到 `输出/妙电.app`。`bash 打包.sh` 额外生成可分发的 DMG。
@@ -43,6 +43,10 @@ bash build.sh    # 先跑单元测试(352 项断言),全过才编译打包
 - 推送自动跑 CI:`.github/workflows/tests.yml`
 
 详见 [AGENTS.md](AGENTS.md) 与 [ChargeMonitor/README.md](ChargeMonitor/README.md)(上游原文)。
+
+## English
+
+MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It shows live power/temperature/SoC charts, battery health & identity, charger diagnostics, and 14 kinds of local notifications (low battery, high drain, sleep drain with culprit naming, weekly/monthly digests). Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); tests run first as a build gate.
 
 ## 致谢与许可
 

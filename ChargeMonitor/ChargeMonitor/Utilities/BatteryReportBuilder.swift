@@ -116,7 +116,7 @@ struct BatteryReportBuilder {
 			healthPercent: snapshot.healthPercent,
 			cycleCount: snapshot.cycleCount,
 			temperatureC: snapshot.temperatureC,
-			acShare: dailyHistory.last?.acShare
+			highSocDwellShare: dailyHistory.last?.highSocDwellShare
 		) else { return nil }
 		return "\(checkup.score) 分  \(checkup.verdict)"
 	}

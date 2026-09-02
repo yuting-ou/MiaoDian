@@ -96,46 +96,13 @@ nonisolated final class BluetoothBatteryReader: @unchecked Sendable {
 	// 公开 API 拿不到配件电源列表，借助系统自带的 pmset 读取
 	private func readAccessoryDevices() -> [BluetoothDeviceBattery] {
 		guard
-			let data = runForOutput("/usr/bin/pmset", arguments: ["-g", "accps"]),
+			let data = SubprocessRunner.run("/usr/bin/pmset", arguments: ["-g", "accps"]),
 			let output = String(data: data, encoding: .utf8)
 		else { return [] }
 		return Self.parseAccessoryOutput(output)
 	}
 	
-	// 运行系统命令并返回标准输出；带超时保护，子进程卡死时强制终止，
-	// 避免轮询状态永久卡住导致外设电量不再更新
-	private func runForOutput(_ path: String, arguments: [String], timeout: TimeInterval = 10) -> Data? {
-		let process = Process()
-		process.executableURL = URL(fileURLWithPath: path)
-		process.arguments = arguments
-		
-		let pipe = Pipe()
-		process.standardOutput = pipe
-		// 不读 stderr 就不能给它 Pipe，否则缓冲区写满会死锁
-		process.standardError = FileHandle.nullDevice
-		
-		do {
-			try process.run()
-		} catch {
-			DiagnosticLog.failureOnce("launch-failed-\(path)", category: "BluetoothBatteryReader", "启动 \(path) 失败：\(error.localizedDescription)")
-			return nil
-		}
-		
-		let killer = DispatchWorkItem {
-			if process.isRunning {
-				process.terminate()
-				DiagnosticLog.failureOnce("timeout-\(path)", category: "BluetoothBatteryReader", "\(path) 超过 \(Int(timeout)) 秒未返回，已强制终止")
-			}
-		}
-		DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: killer)
-		
-		let data = pipe.fileHandleForReading.readDataToEndOfFile()
-		process.waitUntilExit()
-		killer.cancel()
-		return data
-	}
-	
-	// 解析形如： -A950Air (id=24384395) 80%; 
+	// 解析形如： -A950Air (id=24384395) 80%;
 	static func parseAccessoryOutput(_ output: String) -> [BluetoothDeviceBattery] {
 		var devices: [BluetoothDeviceBattery] = []
 		
@@ -164,7 +131,7 @@ nonisolated final class BluetoothBatteryReader: @unchecked Sendable {
 	
 	// 从系统蓝牙报告（system_profiler）读取各设备的 minorType
 	private func readDeviceKinds() -> [String: BluetoothDeviceKind] {
-		guard let data = runForOutput("/usr/sbin/system_profiler", arguments: ["SPBluetoothDataType", "-json", "-detailLevel", "basic"]) else {
+		guard let data = SubprocessRunner.run("/usr/sbin/system_profiler", arguments: ["SPBluetoothDataType", "-json", "-detailLevel", "basic"]) else {
 			return [:]
 		}
 		

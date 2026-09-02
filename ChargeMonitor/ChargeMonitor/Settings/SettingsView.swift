@@ -1,11 +1,18 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // 独立偏好设置窗口：把面板里 30+ 个开关从子菜单迁到系统标准设置窗口，
 // 按组分区、带图标分区头，每项带一句行内说明，支持搜索；阈值用 Picker 直观调节。
 // 通过 ConfigurationManager.shared 单例读写，与面板配置完全同源
 struct SettingsView: View {
 	@ObservedObject private var configurationManager = ConfigurationManager.shared
+	@ObservedObject private var historyRecorder: BatteryHistoryRecorder
 	@State private var searchText = ""
+
+	init(historyRecorder: BatteryHistoryRecorder) {
+		self.historyRecorder = historyRecorder
+	}
 
 	var body: some View {
 		Form {
@@ -45,6 +52,17 @@ struct SettingsView: View {
 					Text(content.title).tag(content)
 				}
 			}
+		}
+
+		Section {
+			Button("导出历史存档…") { exportArchive() }
+			Button("导入历史存档…") { importArchive() }
+			Text("包含充电记录、健康趋势、用电历史等全部本地数据，换机或重装 macOS 前先导出一份。")
+				.font(.system(size: 11))
+				.foregroundStyle(.secondary)
+				.fixedSize(horizontal: false, vertical: true)
+		} header: {
+			Label("数据存档", systemImage: "externaldrive")
 		}
 
 		Section {
@@ -164,5 +182,52 @@ struct SettingsView: View {
 			get: { configurationManager.configuration.menuBarContent },
 			set: { configurationManager.setMenuBarContent($0) }
 		)
+	}
+
+	// MARK: - 数据存档（换机/重装的数据逃生舱）
+
+	private static let archiveDateFormatter: DateFormatter = {
+		let formatter = DateFormatter()
+		formatter.dateFormat = "yyyyMMdd-HHmmss"
+		return formatter
+	}()
+
+	// 全量导出：JSON 人可读，写入用户选的位置后在访达中亮出
+	private func exportArchive() {
+		guard let data = BatteryHistoryArchive.encode(historyRecorder.makeArchive()) else {
+			DiagnosticLog.failureOnce("archive-encode-failed", category: "SettingsView", "历史存档编码失败")
+			return
+		}
+		let panel = NSSavePanel()
+		panel.allowedContentTypes = [.json]
+		panel.nameFieldStringValue = "妙电历史存档-\(Self.archiveDateFormatter.string(from: Date())).json"
+		guard panel.runModal() == .OK, let url = panel.url else { return }
+		do {
+			try data.write(to: url, options: .atomic)
+			NSWorkspace.shared.activateFileViewerSelecting([url])
+		} catch {
+			DiagnosticLog.failureOnce("archive-export-failed", category: "SettingsView", "历史存档写入失败：\(error.localizedDescription)")
+		}
+	}
+
+	// 全量导入：解析成功后必须二次确认——覆盖历史无法撤销
+	private func importArchive() {
+		let panel = NSOpenPanel()
+		panel.allowedContentTypes = [.json]
+		panel.canChooseDirectories = false
+		guard
+			panel.runModal() == .OK,
+			let url = panel.url,
+			let data = try? Data(contentsOf: url),
+			let archive = BatteryHistoryArchive.decode(data)
+		else { return }
+
+		let alert = NSAlert()
+		alert.messageText = "导入历史存档？"
+		alert.informativeText = "将用存档覆盖当前的充电记录、健康趋势、用电历史等数据，操作无法撤销。"
+		alert.addButton(withTitle: "导入")
+		alert.addButton(withTitle: "取消")
+		guard alert.runModal() == .alertFirstButtonReturn else { return }
+		historyRecorder.restore(from: archive)
 	}
 }

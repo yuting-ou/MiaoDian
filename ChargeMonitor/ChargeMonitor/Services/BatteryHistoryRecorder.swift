@@ -325,6 +325,12 @@ final class BatteryHistoryRecorder: ObservableObject {
 			} else {
 				usage.batterySeconds += delta
 			}
+			// 高电量驻留：电化学应力看的是"停在多高的电量"，与插不插电无关
+			if percent >= 90 {
+				usage.soc90to100Seconds += delta
+			} else if percent >= 80 {
+				usage.soc80to90Seconds += delta
+			}
 		}
 		return usage
 	}
@@ -707,18 +713,36 @@ final class BatteryHistoryRecorder: ObservableObject {
 	
 	// MARK: - 健康度趋势
 	
+	// 把最旧一个月的原始样本折叠成单点（当月最后一个读数），直到总数不超上限；
+	// 若最旧月已是单点（历史深处全是月度聚合），本轮无进展也无害
+	nonisolated static func foldingHealthSamples(_ samples: [HealthSample], maxRawCount: Int) -> [HealthSample] {
+		guard samples.count > maxRawCount, let oldest = samples.first else { return samples }
+		let monthKey = UsagePatternAnalyzer.monthKeyString(oldest.date)
+		var folded: HealthSample?
+		var index = 0
+		while index < samples.count,
+			UsagePatternAnalyzer.monthKeyString(samples[index].date) == monthKey {
+			folded = samples[index]
+			index += 1
+		}
+		guard let kept = folded, index > 1 else { return samples }
+		return [kept] + samples[index...]
+	}
+
 	private func recordDailyHealth(_ snapshot: BatterySnapshot) {
 		guard let health = snapshot.healthPercent else { return }
-		
+
 		let today = Date()
 		if let last = healthSamples.last, Calendar.current.isDate(last.date, inSameDayAs: today) {
 			return
 		}
-		
-		healthSamples.append(HealthSample(date: today, healthPercent: health, cycleCount: snapshot.cycleCount))
-		if healthSamples.count > Self.maxHealthSamples {
-			healthSamples.removeFirst(healthSamples.count - Self.maxHealthSamples)
-		}
+
+		// 原始日样本封顶后，最旧一个月折叠成单点（取当月最后读数）永久保留：
+		// 老化以年计，近期要日粒度、远期月粒度就够，趋势线不会因封顶断头
+		healthSamples = Self.foldingHealthSamples(
+			healthSamples + [HealthSample(date: today, healthPercent: health, cycleCount: snapshot.cycleCount)],
+			maxRawCount: Self.maxHealthSamples
+		)
 		save(healthSamples, key: Self.healthKey)
 	}
 	
@@ -776,5 +800,59 @@ final class BatteryHistoryRecorder: ObservableObject {
 		// 备份内存随写入保持最新，定期滚到磁盘
 		backupRaw[key] = data
 		saveBackupIfDue()
+	}
+
+	// MARK: - 全量存档（换机/重装的数据逃生舱）
+
+	func makeArchive() -> BatteryHistoryArchive {
+		BatteryHistoryArchive(
+			exportedAt: Date(),
+			sessions: recentSessions,
+			healthSamples: healthSamples,
+			dailyHistory: dailyHistory,
+			lastSleepDrain: lastSleepDrain,
+			chargerProfiles: chargerProfiles,
+			socSamples: socSamples,
+			powerEvents: powerEvents,
+			chargerPowerStats: chargerPowerStats,
+			hourlyDrainStats: hourlyDrainStats,
+			appEnergy: appEnergy,
+			socJumpEvents: socJumpEvents
+		)
+	}
+
+	// 从存档恢复全部历史并逐键落盘（滚动备份随之刷新）；
+	// 活动充电会话是运行态，不覆盖——若恢复时正在充电，本次会话继续记账
+	func restore(from archive: BatteryHistoryArchive) {
+		recentSessions = archive.sessions
+		healthSamples = archive.healthSamples
+		dailyHistory = archive.dailyHistory
+		lastSleepDrain = archive.lastSleepDrain
+		chargerProfiles = archive.chargerProfiles
+		socSamples = archive.socSamples
+		powerEvents = archive.powerEvents
+		chargerPowerStats = archive.chargerPowerStats
+		hourlyDrainStats = archive.hourlyDrainStats
+		appEnergy = archive.appEnergy
+		socJumpEvents = archive.socJumpEvents
+		// 跳变追踪的基线随旧数据作废，恢复后从当前读数重新积累
+		lastSocSample = nil
+
+		save(recentSessions, key: Self.sessionsKey)
+		save(healthSamples, key: Self.healthKey)
+		save(dailyHistory, key: Self.dailyHistoryKey)
+		save(chargerProfiles, key: Self.chargerProfilesKey)
+		save(socSamples, key: Self.socSamplesKey)
+		save(powerEvents, key: Self.powerEventsKey)
+		save(chargerPowerStats, key: Self.chargerPowerStatsKey)
+		save(hourlyDrainStats, key: Self.hourlyDrainKey)
+		save(appEnergy, key: Self.appEnergyKey)
+		save(socJumpEvents, key: Self.socJumpEventsKey)
+		if let record = lastSleepDrain {
+			save(record, key: Self.sleepDrainKey)
+		} else {
+			defaults.removeObject(forKey: Self.sleepDrainKey)
+			backupRaw.removeValue(forKey: Self.sleepDrainKey)
+		}
 	}
 }

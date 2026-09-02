@@ -1,6 +1,6 @@
-# 电池管理（ChargeMonitor 汉化版）工作区说明
+# 电池管理（MiaoDian / 妙电）工作区说明
 
-本工作区是 [CrashSystemZ/ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) 的汉化 fork，不走上游 Homebrew/Releases 交付路径。
+本工作区是 [CrashSystemZ/ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) 的汉化增强 fork，已开源为 [yuting-ou/MiaoDian](https://github.com/yuting-ou/MiaoDian)，通过本地 build.sh / 打包.sh 构建并以 GitHub Releases 分发（不走上游 Homebrew 渠道）。
 
 ## 目录结构
 
@@ -23,5 +23,5 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
 ## 注意事项
 
 - README 中的 Homebrew/GitHub Releases 安装方式属于上游英文原版，本地汉化版以 build.sh 构建为准
-- 应用内"检查更新"指向上游仓库；覆盖安装上游版本将丢失汉化
+- 面板控制行没有"检查更新"入口（上游时代已移除）；对外分发统一走本仓库的 GitHub Releases
 - 失败诊断日志：`log stream --predicate 'subsystem == "fun.crashsystem.ChargeMonitor"'`

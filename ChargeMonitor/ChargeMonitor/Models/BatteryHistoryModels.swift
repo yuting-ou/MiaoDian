@@ -57,37 +57,59 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	var dayKey: String
 	var drainedPercent: Int = 0
 	var chargedPercent: Int = 0
-	// 插电/电池供电的累计秒数，算“今天多少时间插着电”
+	// 插电/电池供电的累计秒数，算”今天多少时间插着电”
 	var acSeconds: Double = 0
 	var batterySeconds: Double = 0
-	
+	// 高电量驻留秒数（80–90% 与 90%+ 两档）：电化学应力的直接度量
+	var soc80to90Seconds: Double = 0
+	var soc90to100Seconds: Double = 0
+
 	// 插电时长占比；样本不足半小时不给结论，免得刚开机就下定论
 	var acShare: Double? {
 		let total = acSeconds + batterySeconds
 		guard total >= 30 * 60 else { return nil }
 		return acSeconds / total
 	}
-	
+
+	// 高电量（80%+）驻留分钟数；与 acShare 同一采样量门槛
+	var dwell80PlusMinutes: Int? {
+		guard acShare != nil else { return nil }
+		return Int((soc80to90Seconds + soc90to100Seconds) / 60)
+	}
+
+	// 高电量驻留占通电总时长的比例（0~1）；样本不足半小时不给结论
+	var highSocDwellShare: Double? {
+		let total = acSeconds + batterySeconds
+		guard total >= 30 * 60 else { return nil }
+		return (soc80to90Seconds + soc90to100Seconds) / total
+	}
+
 	enum CodingKeys: String, CodingKey {
 		case dayKey, drainedPercent, chargedPercent, acSeconds, batterySeconds
+		case soc80to90Seconds, soc90to100Seconds
 	}
-	
-	init(dayKey: String, drainedPercent: Int = 0, chargedPercent: Int = 0, acSeconds: Double = 0, batterySeconds: Double = 0) {
+
+	init(dayKey: String, drainedPercent: Int = 0, chargedPercent: Int = 0, acSeconds: Double = 0, batterySeconds: Double = 0,
+		 soc80to90Seconds: Double = 0, soc90to100Seconds: Double = 0) {
 		self.dayKey = dayKey
 		self.drainedPercent = drainedPercent
 		self.chargedPercent = chargedPercent
 		self.acSeconds = acSeconds
 		self.batterySeconds = batterySeconds
+		self.soc80to90Seconds = soc80to90Seconds
+		self.soc90to100Seconds = soc90to100Seconds
 	}
-	
-	// 旧存档没有时长字段，缺省 0 兼容解码
+
+	// 旧存档没有时长/驻留字段，缺省 0 兼容解码
 	init(from decoder: Decoder) throws {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
-		self.dayKey = try container.decode(String.self, forKey: .dayKey)
+		self.dayKey = try container.decodeIfPresent(String.self, forKey: .dayKey) ?? ""
 		self.drainedPercent = try container.decodeIfPresent(Int.self, forKey: .drainedPercent) ?? 0
 		self.chargedPercent = try container.decodeIfPresent(Int.self, forKey: .chargedPercent) ?? 0
 		self.acSeconds = try container.decodeIfPresent(Double.self, forKey: .acSeconds) ?? 0
 		self.batterySeconds = try container.decodeIfPresent(Double.self, forKey: .batterySeconds) ?? 0
+		self.soc80to90Seconds = try container.decodeIfPresent(Double.self, forKey: .soc80to90Seconds) ?? 0
+		self.soc90to100Seconds = try container.decodeIfPresent(Double.self, forKey: .soc90to100Seconds) ?? 0
 	}
 }
 

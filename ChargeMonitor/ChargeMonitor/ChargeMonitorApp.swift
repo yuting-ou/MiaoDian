@@ -58,7 +58,7 @@ struct ChargeMonitorApp: App {
 		// 独立偏好设置窗口：面板里 30+ 个开关从子菜单迁到这里，
 		// 面板"设置"行通过 openSettings() 打开本窗口
 		Settings {
-			SettingsView()
+			SettingsView(historyRecorder: historyRecorder)
 		}
 
 		// 充电曲线独立窗口：面板点击会话行时打开（单窗口复用，选择走共享对象）。

@@ -35,6 +35,14 @@ struct DailySummarySection: View {
 						.foregroundStyle(.tertiary)
 						.padding(.top, 1)
 				}
+
+				// 高电量驻留：80%+ 停留时长是电化学应力的直接度量
+				if let dwellMinutes = usage.dwell80PlusMinutes {
+					Text("高电量（80%+）驻留 \(DurationFormatter.chinese(minutes: dwellMinutes))")
+						.font(.system(size: 9))
+						.foregroundStyle(.tertiary)
+						.padding(.top, 1)
+				}
 				
 				// 至少两天数据才画对比图，单天没得比
 				if history.count >= 2 {

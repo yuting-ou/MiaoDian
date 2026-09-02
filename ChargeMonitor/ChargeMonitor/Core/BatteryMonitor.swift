@@ -68,6 +68,10 @@ final class BatteryMonitor: ObservableObject {
 	
 	func stopPolling() {
 		isPopoverOpen = false
+		// 清空高耗电列表：它只代表"面板打开期间"的采样，
+		// 留着旧值会让耗电异常提醒在面板关闭几小时后点名过时的应用
+		// （重新打开面板后 2 秒轮询会很快重新积累出结果）
+		significantEnergyApps = []
 		startPollingLoopIfNeeded()
 	}
 	

@@ -452,20 +452,24 @@ do {
 // MARK: - 电池体检评分
 
 do {
-	let good = BatteryCheckup.evaluate(healthPercent: 100, cycleCount: 0, temperatureC: 30, acShare: 0.5)
+	let good = BatteryCheckup.evaluate(healthPercent: 100, cycleCount: 0, temperatureC: 30, highSocDwellShare: 0.0)
 	expectEqual(good?.score, 100, "体检：全新电池满分")
 	expectEqual(good?.verdict, "状态优秀，继续保持", "体检：满分评语")
-	
-	let worn = BatteryCheckup.evaluate(healthPercent: 80, cycleCount: 1000, temperatureC: 45, acShare: 0.95)
-	expectEqual(worn?.score, 5, "体检：老化电池只剩插电习惯分")
+
+	let worn = BatteryCheckup.evaluate(healthPercent: 80, cycleCount: 1000, temperatureC: 45, highSocDwellShare: 0.95)
+	expectEqual(worn?.score, 5, "体检：老化电池只剩驻留习惯分")
 	expectEqual(worn?.verdict, "老化明显，建议检测电池", "体检：低分评语")
-	
-	expect(BatteryCheckup.evaluate(healthPercent: nil, cycleCount: 100, temperatureC: 30, acShare: nil) == nil, "体检：没健康度不硬给分")
-	
-	// 健康 90（27.5）+ 循环 200（20）+ 32°C（10）+ 习惯良好（10）≈ 68
-	let mid = BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, acShare: 0.4)
+
+	expect(BatteryCheckup.evaluate(healthPercent: nil, cycleCount: 100, temperatureC: 30, highSocDwellShare: nil) == nil, "体检：没健康度不硬给分")
+
+	// 健康 90（27.5）+ 循环 200（20）+ 32°C（10）+ 驻留良好（10）≈ 68
+	let mid = BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.1)
 	expectEqual(mid?.score, 68, "体检：中段加权计算")
 	expectEqual(mid?.verdict, "开始老化，注意保养", "体检：中段评语")
+
+	// 驻留分档：20%~50% 扣到 8 分，>50% 扣到 5 分
+	expectEqual(BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.3)?.score, 66, "体检：驻留 30% 落 8 分档")
+	expectEqual(BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.6)?.score, 63, "体检：驻留 60% 落 5 分档")
 }
 
 // MARK: - 插电占比与 DailyUsage 兼容解码
@@ -1475,6 +1479,224 @@ do {
 	expectEqual(merged.count, 1, "应用耗电：重复 bundleId 合并不崩")
 	expect(merged.first.map { abs(($0.secondsByDay["2026-08-29"] ?? 0) - 8) < 0.001 } == true,
 		   "应用耗电：重复键保留首条并累计新秒数")
+}
+
+// MARK: - 睡眠断言解析
+
+do {
+	let output = """
+	Assertion status system-wide:
+	   BackgroundTask                 0
+	   PreventUserIdleSystemSleep     1
+	   PreventUserIdleDisplaySleep    0
+	Listed by owning process:
+	   pid 345(coreaudiod): [0x0000abc123] 00:00:42 PreventUserIdleSystemSleep named: "com.apple.audio.context333"
+	   pid 567(caffeinate): [0x0000def456] 03:12:11 PreventUserIdleSystemSleep named: "caffeinate command-line tool"
+	   pid 89(logd): [0x0000aaa] 00:10:00 PreventUserIdleDisplaySleep named: "display holder"
+	"""
+	let owners = SleepAssertionReader.parseAssertionOwners(output)
+	expectEqual(owners, ["coreaudiod", "caffeinate"], "睡眠断言：只点名阻止系统睡眠的进程")
+	expect(SleepAssertionReader.parseAssertionOwners("no assertions here").isEmpty, "睡眠断言：无关输出为空")
+}
+
+// MARK: - 库仑计数估算
+
+do {
+	// 恒流 500mA、容量 5000mAh、放电到 85%：剩余 4250mAh → 510 分钟
+	var estimator = DrainRateEstimator()
+	for i in 0...15 {
+		var s = batterySnap(percent: 90 - i / 3)
+		s.batteryAmperageMA = -500
+		s.maxCapacityMAh = 5000
+		estimator.record(snapshot: s, at: t0.addingTimeInterval(Double(i) * 120))
+	}
+	let estimate = estimator.estimate()
+	expect(estimate != nil, "库仑计数：正常放电给出估算")
+	expectEqual(estimate?.estimatedMinutesRemaining, 510, "库仑计数：剩余电荷÷平均电流")
+	expect(abs((estimate?.percentPerHour ?? 0) - 10.0) < 0.01, "库仑计数：%/小时仍按电量差分")
+
+	// 电流样本不足（5 条 < 10）退回百分比法：78% @ 60%/小时 = 78 分钟
+	var fewLong = DrainRateEstimator()
+	for i in 0...4 {
+		var s = batterySnap(percent: 90 - i * 3)
+		s.batteryAmperageMA = -500
+		s.maxCapacityMAh = 5000
+		fewLong.record(snapshot: s, at: t0.addingTimeInterval(Double(i) * 180))
+	}
+	let fewEstimate = fewLong.estimate()
+	expect(fewEstimate != nil, "库仑计数：电流样本不足仍可给估算")
+	expectEqual(fewEstimate?.estimatedMinutesRemaining, 78, "库仑计数：样本不足退回百分比法")
+}
+
+// 纯函数核心：时间加权平均电流（前 6 分钟 500mA、后 6 分钟 1000mA）
+do {
+	let samples: [(date: Date, dischargeMA: Double?, maxCapacityMAh: Int?)] = (0..<12).map { i in
+		(t0.addingTimeInterval(Double(i) * 60), i < 6 ? 500.0 : 1000.0, 5000)
+	}
+	expectEqual(DrainRateEstimator.coulombMinutesRemaining(samples: samples, socPercent: 80), 329, "库仑计数：变电流按采样间隔加权")
+	expect(DrainRateEstimator.coulombMinutesRemaining(samples: [], socPercent: 80) == nil, "库仑计数：无原料返回空")
+}
+
+// MARK: - 高电量驻留
+
+do {
+	var usage = DailyUsage(dayKey: "2026-08-30")
+	usage.soc90to100Seconds = 600
+	usage.soc80to90Seconds = 300
+	usage.acSeconds = 1200
+	usage.batterySeconds = 600
+	expectEqual(usage.dwell80PlusMinutes, 15, "高电量驻留：80%+ 合计分钟")
+	expect(abs((usage.highSocDwellShare ?? 0) - 0.5) < 0.001, "高电量驻留：占比 50%")
+
+	var short = DailyUsage(dayKey: "2026-08-30")
+	short.soc90to100Seconds = 600
+	short.acSeconds = 600
+	expect(short.dwell80PlusMinutes == nil, "高电量驻留：样本不足不给结论")
+	expect(short.highSocDwellShare == nil, "高电量驻留：样本不足占比为空")
+
+	let legacyJSON = #"[{"dayKey":"2026-08-29","drainedPercent":10}]"#.data(using: .utf8)!
+	let decoded = try JSONDecoder().decode([DailyUsage].self, from: legacyJSON)
+	expectEqual(decoded.first?.soc90to100Seconds, 0, "高电量驻留：旧档缺省 0")
+} catch {
+	expect(false, "高电量驻留：解码不应失败（\(error)）")
+}
+
+// MARK: - 健康样本月度折叠
+
+do {
+	let calendar = Calendar(identifier: .gregorian)
+	let start = calendar.date(from: DateComponents(year: 2025, month: 1, day: 1, hour: 12))!
+	var samples: [HealthSample] = []
+	for day in 0..<420 {
+		samples.append(HealthSample(date: start.addingTimeInterval(Double(day) * 86400), healthPercent: 100 - day / 30, cycleCount: 100 + day))
+	}
+
+	// 封顶 400：最旧一个月（1 月 31 个日样本）折成 1 点
+	let folded = BatteryHistoryRecorder.foldingHealthSamples(samples, maxRawCount: 400)
+	expectEqual(folded.count, 390, "健康折叠：最旧一个月折成 1 点")
+	expectEqual(folded.first?.healthPercent, samples[30].healthPercent, "健康折叠：保留当月最后读数")
+	expectEqual(folded.first?.cycleCount, samples[30].cycleCount, "健康折叠：循环数同点保留")
+	expectEqual(folded.last?.healthPercent, samples.last?.healthPercent, "健康折叠：近期数据原样保留")
+
+	// 最旧月已是单点时本轮无进展（等新数据积累后再折叠），不崩不变
+	let twice = BatteryHistoryRecorder.foldingHealthSamples(folded, maxRawCount: 380)
+	expectEqual(twice.count, 390, "健康折叠：单点月无可折叠，原样返回")
+}
+
+// MARK: - 历史存档编解码
+
+do {
+	let archive = BatteryHistoryArchive(
+		exportedAt: t0,
+		sessions: [ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(600), startPercent: 40, endPercent: 50, peakInputW: 30)],
+		healthSamples: [HealthSample(date: t0, healthPercent: 95, cycleCount: 100)],
+		dailyHistory: [DailyUsage(dayKey: "2026-08-30", drainedPercent: 10, chargedPercent: 20, acSeconds: 3600, batterySeconds: 600, soc80to90Seconds: 300, soc90to100Seconds: 100)],
+		lastSleepDrain: SleepDrainRecord(sleepDate: t0, wakeDate: t0.addingTimeInterval(3600), startPercent: 80, endPercent: 79),
+		chargerProfiles: [ChargerProfile(key: "a|b|65", name: "65W", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 3)],
+		socSamples: [SOCSample(date: t0, percent: 80, isCharging: false)],
+		powerEvents: [PowerEvent(date: t0, kind: .pluggedIn)],
+		chargerPowerStats: ["a|b|65": ChargerPowerStats(key: "a|b|65", ratedWatts: 65)],
+		hourlyDrainStats: HourlyDrainStats(),
+		appEnergy: [AppEnergyUsage(bundleId: "com.a", name: "A", secondsByDay: ["2026-08-30": 60], lastSeen: t0)],
+		socJumpEvents: [SocJumpEvent(date: t0, fromPercent: 90, toPercent: 88)]
+	)
+	if let data = BatteryHistoryArchive.encode(archive), let decoded = BatteryHistoryArchive.decode(data) {
+		expectEqual(decoded.sessions.count, 1, "存档：充电记录往返")
+		expectEqual(decoded.sessions.first?.startDate, archive.sessions.first?.startDate, "存档：日期往返一致")
+		expectEqual(decoded.dailyHistory.first?.soc90to100Seconds, 100, "存档：驻留字段往返")
+		expectEqual(decoded.chargerProfiles.first?.connectCount, 3, "存档：充电器档案往返")
+		expectEqual(decoded.version, BatteryHistoryArchive.currentVersion, "存档：版本号")
+	} else {
+		expect(false, "历史存档：编解码不应失败")
+	}
+
+	expect(BatteryHistoryArchive.decode(#"{"version":99}"#.data(using: .utf8)!) == nil, "存档：版本不符拒绝")
+	expect(BatteryHistoryArchive.decode(Data([0xFF, 0xFE])) == nil, "存档：垃圾数据拒绝")
+}
+
+// MARK: - 合成一周不变量（属性测试）
+
+do {
+	// 确定性伪随机（LCG），种子固定整条时间线可复现
+	var seed: UInt64 = 88
+	func rand(_ n: Int) -> Int {
+		seed = seed &* 6364136223846793005 &+ 1442695040888963407
+		return Int((seed >> 33) % UInt64(max(n, 1)))
+	}
+
+	let calendar = Calendar(identifier: .gregorian)
+	let monday8am = calendar.date(from: DateComponents(year: 2026, month: 8, day: 24, hour: 8))!
+	var days: [DailyUsage] = []
+	var hourly = HourlyDrainStats()
+	var percentDouble = 100.0
+	var previousSampled: Int?
+	var lastDate: Date?
+	var expectedDrained = 0
+	var expectedCharged = 0
+
+	for day in 0..<7 {
+		percentDouble = 100.0  // 每晚插满，早上满电出门
+		for minute in stride(from: 0, to: 16 * 60, by: 5) {
+			let date = monday8am.addingTimeInterval(Double(day) * 86400 + Double(minute) * 60)
+			let chargingPeriod = day == 2 && minute >= 240 && minute < 480  // 周三 12-16 点插电充电
+			if chargingPeriod {
+				percentDouble = min(100, percentDouble + 0.8)
+			} else if percentDouble > 3 {
+				percentDouble -= Double(4 + rand(8)) * 5 / 60  // 4~11%/小时
+			}
+			let sampled = Int(percentDouble)
+			let key = UsagePatternAnalyzer.dayKeyString(date)
+			if days.last?.dayKey != key { days.append(DailyUsage(dayKey: key)) }
+
+			let gap = lastDate.map { date.timeIntervalSince($0) }
+			let contiguous = (gap ?? 0) > 0 && (gap ?? 0) <= 180
+			if contiguous {
+				if !chargingPeriod, let previous = previousSampled, sampled < previous {
+					expectedDrained += previous - sampled
+				}
+				if chargingPeriod, let previous = previousSampled, sampled > previous {
+					expectedCharged += sampled - previous
+				}
+			}
+
+			let before = days[days.count - 1]
+			days[days.count - 1] = BatteryHistoryRecorder.accumulatingDailyUsage(
+				before,
+				percent: sampled,
+				lastPercent: previousSampled,
+				powerSource: chargingPeriod ? .powerAdapter : .battery,
+				isCharging: chargingPeriod,
+				secondsSinceLastSample: gap
+			)
+			let frameDrop = (!chargingPeriod && contiguous) ? previousSampled.map { sampled < $0 ? Double($0 - sampled) : 0 } ?? 0 : 0
+			hourly = UsagePatternAnalyzer.accumulatingHourlyDrain(
+				hourly,
+				hour: calendar.component(.hour, from: date),
+				droppedPercent: frameDrop,
+				dayKey: key
+			)
+
+			previousSampled = sampled
+			lastDate = date
+		}
+	}
+
+	// 不变量：睡眠断档不掉电、清醒掉电全归因
+	expectEqual(days.reduce(0) { $0 + $1.drainedPercent }, expectedDrained, "合成一周：掉电归因与规则完全一致")
+	// 不变量：充电归因完整
+	expectEqual(days.reduce(0) { $0 + $1.chargedPercent }, expectedCharged, "合成一周：充电归因与规则完全一致")
+	// 不变量：日期键严格递增（跨天滚动正确）
+	expect(days.map(\.dayKey) == days.map(\.dayKey).sorted(), "合成一周：日期键严格递增")
+	// 不变量：时段桶与日用电同源
+	let bucketSum = hourly.drainedByHour.reduce(0, +)
+	expect(abs(bucketSum - Double(expectedDrained)) < 0.001, "合成一周：时段桶合计 = 日用电")
+	// 不变量：7 个有效天
+	expectEqual(hourly.accumulatedDays, 7, "合成一周：有效天数")
+	// 不变量：驻留不超过总时长、累计非负
+	let dwell = days.reduce(0.0) { $0 + $1.soc80to90Seconds + $1.soc90to100Seconds }
+	let totalTime = days.reduce(0.0) { $0 + $1.acSeconds + $1.batterySeconds }
+	expect(dwell <= totalTime + 0.001, "合成一周：驻留 ≤ 总时长")
+	expect(days.allSatisfy { $0.drainedPercent >= 0 && $0.chargedPercent >= 0 }, "合成一周：累计非负")
 }
 
 // MARK: - 汇总

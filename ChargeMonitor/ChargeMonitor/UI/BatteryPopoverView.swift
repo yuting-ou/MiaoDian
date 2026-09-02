@@ -48,7 +48,7 @@ struct BatteryPopoverView: View {
 			healthPercent: monitor.snapshot.healthPercent,
 			cycleCount: monitor.snapshot.cycleCount,
 			temperatureC: monitor.snapshot.temperatureC,
-			acShare: historyRecorder.todayUsage?.acShare
+			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
 		) : nil
 		let displayCards = twoColumns ? cards.filter { $0.id != .checkup } : cards
 		let cardIDs = displayCards.map(\.id)
@@ -315,7 +315,7 @@ struct BatteryPopoverView: View {
 			healthPercent: monitor.snapshot.healthPercent,
 			cycleCount: monitor.snapshot.cycleCount,
 			temperatureC: monitor.snapshot.temperatureC,
-			acShare: historyRecorder.todayUsage?.acShare
+			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
 		   ) {
 			BatteryCheckupSection(checkup: checkup)
 		}
@@ -723,7 +723,7 @@ struct BatteryPopoverView: View {
 			healthPercent: monitor.snapshot.healthPercent,
 			cycleCount: monitor.snapshot.cycleCount,
 			temperatureC: monitor.snapshot.temperatureC,
-			acShare: historyRecorder.todayUsage?.acShare
+			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
 		)
 	}
 	
