@@ -538,10 +538,11 @@ struct BatteryPopoverView: View {
 		}
 	}
 	
-	// 今天的充电次数：已归档的今日会话 + 正在进行的这次
+	// 今天的充电次数：已归档的今日会话 + 进行中的这次
+	// （含已充满但未拔电的存活会话——它还没归档，但确实充过）
 	private var todayChargeCount: Int {
 		let finished = historyRecorder.recentSessions.filter { Calendar.current.isDateInToday($0.startDate) }.count
-		let ongoing = monitor.snapshot.isCharging ? 1 : 0
+		let ongoing = (monitor.snapshot.isCharging || historyRecorder.isChargingSessionAlive) ? 1 : 0
 		return finished + ongoing
 	}
 	

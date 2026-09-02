@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import UserNotifications
@@ -7,7 +8,8 @@ import UserNotifications
 // 采用边沿触发——进入状态时只提醒一次，离开状态后重置；
 // 每类提醒有独立开关，夜间免打扰时段非紧急通知不发
 @MainActor
-final class BatteryAlertController: ObservableObject {
+// 继承 NSObject 是为满足 UNUserNotificationCenterDelegate 的对象协议要求
+final class BatteryAlertController: NSObject, ObservableObject {
 	// 开了提醒但系统通知权限被拒：提醒实际发不出去，面板上要给出警告
 	@Published private(set) var isNotificationPermissionDenied = false
 	
@@ -63,10 +65,19 @@ final class BatteryAlertController: ObservableObject {
 	// 电量计校准提醒的冷却键：30 天内不重复提醒（跳变条件可能长期成立）
 	private static let gaugeCalibrationAlertKey = "gaugeCalibrationAlertedAt"
 	private static let gaugeCalibrationCooldownSeconds: TimeInterval = 30 * 86400
-	
+	// 保养提醒"延后一会儿"的标记：到点前不再提醒，到点后重新武装
+	private static let chargeCareSnoozeKey = "chargeCareSnoozeUntil"
+	// 可交互通知类别：保养提醒可延后，慢充可复制诊断信息
+	nonisolated static let chargeCareCategoryID = "charge-care"
+	nonisolated static let slowChargeCategoryID = "slow-charge"
+
 	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil) {
+		super.init()
 		self.monitor = monitor
 		self.historyRecorder = historyRecorder
+		// 注册可交互通知类别并接管通知中心回调（面板打开时前台横幅也靠它）
+		Self.registerNotificationCategories()
+		UNUserNotificationCenter.current().delegate = self
 		configurationManager.$configuration
 			.sink { [weak self] configuration in
 				guard let self else { return }
@@ -216,11 +227,17 @@ final class BatteryAlertController: ObservableObject {
 		
 		if snapshot.isCharging, !snapshot.isFull, soc >= threshold {
 			guard !didNotifyChargeCare else { return }
+			// 用户点过"延后"：到点前闭嘴，到点后重新提醒（didNotify 已在延后时重置）
+			guard !Self.isChargeCareSnoozed(
+				snoozeUntil: defaults.object(forKey: Self.chargeCareSnoozeKey) as? Date,
+				now: Date()
+			) else { return }
 			didNotifyChargeCare = true
 			send(
 				id: "charge-care",
 				title: "已充到 \(soc)%",
-				body: "想保养电池的话，现在就可以拔电源了"
+				body: "想保养电池的话，现在就可以拔电源了",
+				category: Self.chargeCareCategoryID
 			)
 		} else if snapshot.powerSource != .powerAdapter || soc < threshold - 5 {
 			// 重置条件看“拔没拔电源”而非“在不在充电”：
@@ -402,7 +419,8 @@ final class BatteryAlertController: ObservableObject {
 		send(
 			id: "slow-charge",
 			title: "检测到慢充",
-			body: String(format: "协商档位仅 %.0fW（充电器额定 %dW），请检查数据线或接口", negotiatedWatts, rated)
+			body: String(format: "协商档位仅 %.0fW（充电器额定 %dW），请检查数据线或接口", negotiatedWatts, rated),
+			category: Self.slowChargeCategoryID
 		)
 	}
 	
@@ -583,13 +601,14 @@ final class BatteryAlertController: ObservableObject {
 		return Self.isQuietHour(hour, start: configuration.quietHoursStartHour, end: configuration.quietHoursEndHour)
 	}
 
-	private func send(id: String, title: String, body: String, urgent: Bool = false) {
+	private func send(id: String, title: String, body: String, urgent: Bool = false, category: String = "") {
 		if isInQuietHours, !urgent { return }
 
 		let content = UNMutableNotificationContent()
 		content.title = title
 		content.body = body
 		content.sound = .default
+		content.categoryIdentifier = category
 		// 紧急提醒（低电量等）标为时效性通知，专注模式下才真正能穿透；
 		// 需要用户在系统设置里授予“时效性通知”权限，未授予时按普通通知处理
 		content.interruptionLevel = urgent ? .timeSensitive : .active
@@ -599,6 +618,74 @@ final class BatteryAlertController: ObservableObject {
 			if let error {
 				DiagnosticLog.failureOnce("notification-send-failed", category: "BatteryAlertController", "发送通知失败：\(error.localizedDescription)")
 			}
+		}
+	}
+
+	// MARK: - 可交互通知
+
+	nonisolated static func registerNotificationCategories() {
+		let snooze = UNNotificationAction(identifier: "snooze-charge-care", title: "延后 30 分钟", options: [])
+		let copyDiagnostics = UNNotificationAction(identifier: "copy-charge-diagnostics", title: "复制诊断信息", options: [])
+		let chargeCare = UNNotificationCategory(identifier: chargeCareCategoryID, actions: [snooze], intentIdentifiers: [])
+		let slowCharge = UNNotificationCategory(identifier: slowChargeCategoryID, actions: [copyDiagnostics], intentIdentifiers: [])
+		UNUserNotificationCenter.current().setNotificationCategories([chargeCare, slowCharge])
+	}
+
+	// 保养提醒延后判定（纯函数，供单测直测）：到点前静音
+	nonisolated static func isChargeCareSnoozed(snoozeUntil: Date?, now: Date) -> Bool {
+		guard let snoozeUntil else { return false }
+		return now < snoozeUntil
+	}
+
+	// 用户点了"延后 30 分钟"：静音窗口 + 重新武装提醒（到点后若仍在线上会再喊一次）
+	private func snoozeChargeCare(minutes: Int) {
+		defaults.set(Date().addingTimeInterval(TimeInterval(minutes) * 60), forKey: Self.chargeCareSnoozeKey)
+		didNotifyChargeCare = false
+	}
+
+	// 慢充通知的"复制诊断信息"：把协议/档位/额定打包进剪贴板，方便反馈或对照
+	private func copyChargeDiagnostics() {
+		guard let snapshot = monitor?.snapshot else { return }
+		var lines: [String] = []
+		if let protocolName = snapshot.chargingProtocol { lines.append("充电协议：\(protocolName)") }
+		if let voltageMV = snapshot.negotiatedVoltageMV, let currentMA = snapshot.negotiatedCurrentMA {
+			let watts = Double(voltageMV) * Double(currentMA) / 1_000_000
+			lines.append(String(format: "协商档位：%.0fV × %.0fA ≈ %.0fW", Double(voltageMV) / 1000, Double(currentMA) / 1000, watts))
+		}
+		if let rated = snapshot.adapterRatedWatts { lines.append("适配器额定：\(rated)W") }
+		lines.append("适配器：\(snapshot.adapterName ?? "未知") \(snapshot.adapterManufacturer ?? "")".trimmingCharacters(in: .whitespaces))
+		NSPasteboard.general.clearContents()
+		NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+	}
+}
+
+// 通知中心回调：协议回调来自非隔离上下文，统一跳回 MainActor 处理
+extension BatteryAlertController: UNUserNotificationCenterDelegate {
+	// 应用在前台（面板打开）时通知默认被系统吞掉——改成照样弹横幅，
+	// 否则用户盯着面板的时候充满/低电提醒会凭空消失
+	nonisolated func userNotificationCenter(
+		_ center: UNUserNotificationCenter,
+		willPresent notification: UNNotification
+	) async -> UNNotificationPresentationOptions {
+		[.banner, .sound]
+	}
+
+	nonisolated func userNotificationCenter(
+		_ center: UNUserNotificationCenter,
+		didReceive response: UNNotificationResponse
+	) async {
+		await handleNotificationResponse(response)
+	}
+
+	@MainActor
+	private func handleNotificationResponse(_ response: UNNotificationResponse) {
+		switch response.actionIdentifier {
+		case "snooze-charge-care":
+			snoozeChargeCare(minutes: 30)
+		case "copy-charge-diagnostics":
+			copyChargeDiagnostics()
+		default:
+			break
 		}
 	}
 }

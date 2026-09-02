@@ -37,6 +37,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 	private var activeSession: ChargeSession?
 	// 从磁盘恢复的会话需要先检查时间断档，再决定续接还是归档
 	private var restoredSessionNeedsGapCheck = false
+	// 活动会话是否存活（供"今日充电次数"统计：已充满但未拔电也算充过）
+	var isChargingSessionAlive: Bool { activeSession != nil }
 	private var lastActiveSessionSave = Date.distantPast
 	// 今日用电累计用：上一次看到的电量与采样时刻（时长占比靠它算增量）
 	private var lastPercentForDaily: Int?
@@ -239,6 +241,11 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated static func isSessionWorthArchiving(_ session: ChargeSession) -> Bool {
 		session.durationMinutes >= 2 || session.endPercent > session.startPercent
 	}
+
+	// 会话归档判定：只在真正拔电时结束会话——优化充电的暂停（仍插着电）不算结束
+	nonisolated static func shouldArchiveActiveSession(powerSource: PowerSourceType) -> Bool {
+		powerSource != .powerAdapter
+	}
 	
 	// 追加一条电源事件：同类短时间内连发（插头接触不良反复断连、反复重启应用）
 	// 合并只留最新一条，不刷屏；总长度封顶，新的挤掉最旧的
@@ -401,6 +408,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 				persistActiveSession(session)
 			}
 		} else if let session = activeSession {
+			// 优化充电会在 80% 附近反复暂停——暂停但仍插着电不算"这次充电结束"，
+			// 会话保持存活（时长/曲线只在充电帧推进，不受暂停影响）；真正拔电才归档
+			guard Self.shouldArchiveActiveSession(powerSource: snapshot.powerSource) else { return }
 			activeSession = nil
 			restoredSessionNeedsGapCheck = false
 			defaults.removeObject(forKey: Self.activeSessionKey)

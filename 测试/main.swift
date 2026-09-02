@@ -1699,6 +1699,20 @@ do {
 	expect(days.allSatisfy { $0.drainedPercent >= 0 && $0.chargedPercent >= 0 }, "合成一周：累计非负")
 }
 
+// MARK: - 通知交互与会话归档判定
+
+do {
+	// 保养提醒延后:到点前静音,过了立即解除
+	let now = Date()
+	expect(!BatteryAlertController.isChargeCareSnoozed(snoozeUntil: nil, now: now), "通知交互:无延后标记不静音")
+	expect(BatteryAlertController.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(60), now: now), "通知交互:延后窗口内静音")
+	expect(!BatteryAlertController.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(-60), now: now), "通知交互:延后过期解除")
+
+	// 会话归档:优化充电的暂停(仍插着电)不算结束,拔电才算
+	expect(!BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .powerAdapter), "会话归档:暂停充电不归档")
+	expect(BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .battery), "会话归档:拔电归档")
+}
+
 // MARK: - 汇总
 
 print("")
