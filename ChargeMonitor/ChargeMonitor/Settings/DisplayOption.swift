@@ -124,7 +124,7 @@ nonisolated enum DisplayOption: String, CaseIterable, Identifiable, Codable, Sen
 		case .cycleCount: return "电池充放循环次数（标称寿命 1000 次）"
 		case .batteryHealth: return "当前满充容量相对出厂设计的百分比"
 		case .batteryIdentity: return "序列号、电芯厂商、生产日期等出厂信息"
-		case .batteryCheckup: return "健康度、循环、温度、习惯四项加权评分"
+		case .batteryCheckup: return "健康度、循环、温度与高电量驻留的加权评分"
 		case .batteryTemperature: return "电池电芯温度"
 		case .batteryCurrentVoltage: return "电池端实时电压与电流（正充负放）"
 		case .uptime: return "本次开机时长"

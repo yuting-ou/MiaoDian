@@ -345,12 +345,13 @@ struct BatteryInfoFormatter {
 		
 		let volts = Double(voltageMV) / 1000
 		let amps = Double(amperageMA) / 1000
-		let sign = amps > 0 ? "+" : ""
+		// 电流四舍五入到 0.00 时不带符号：插电未充电的微小噪声读数不该显示成刺眼的 "-0.00A"
+		let ampsText = abs(amps) < 0.005 ? "0.00" : String(format: "%+.2f", amps)
 		return BatteryInfoItem(
 			group: .battery,
 			symbol: "bolt.ring.closed",
 			label: "电流电压",
-			value: String(format: "%.2fV · \(sign)%.2fA", volts, amps),
+			value: String(format: "%.2fV · %@A", volts, ampsText),
 			iconTint: .cyan
 		)
 	}

@@ -510,6 +510,13 @@ do {
 	
 	let missing = BatteryInfoFormatter(snapshot: batterySnap(percent: 60), configuration: fullConfig).makeItems()
 	expect(!missing.contains { $0.label == "电流电压" }, "电流电压：缺数据不展示")
+
+	// 插电未充电的微小噪声读数：四舍五入到 0.00 时不带符号，不显示 "-0.00A"
+	var trickle = batterySnap(percent: 80, onBattery: false)
+	trickle.batteryVoltageMV = 12190
+	trickle.batteryAmperageMA = -4
+	let trickleItems = BatteryInfoFormatter(snapshot: trickle, configuration: fullConfig).makeItems()
+	expectEqual(trickleItems.first { $0.label == "电流电压" }?.value, "12.19V · 0.00A", "电流电压：近零读数不带符号")
 }
 
 // MARK: - 新一批选项迁移与阈值夹紧
