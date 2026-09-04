@@ -46,8 +46,15 @@ final class BatteryMonitor: ObservableObject {
 	private let temperatureSampleWindow: TimeInterval = 30 * 60
 	private let temperatureSampleMinInterval: TimeInterval = 15
 	private let temperatureSampleGapSeconds: TimeInterval = 5 * 60
-	// 外设电量变化慢，30 秒轮询一次即可
-	private let bluetoothPollInterval: TimeInterval = 30
+	// 外设电量变化以小时计：面板打开 30 秒一询；关闭时放宽到 2 分钟——
+	// 子进程 spawn 是妙电自己最贵的一笔电，凌晨没人看外设卡时不该全速跑
+	private let bluetoothActivePollInterval: TimeInterval = 30
+	private let bluetoothIdlePollInterval: TimeInterval = 120
+
+	// 轮询间隔选择（纯函数，供单测）
+	nonisolated static func bluetoothPollInterval(popoverOpen: Bool, active: TimeInterval, idle: TimeInterval) -> TimeInterval {
+		popoverOpen ? active : idle
+	}
 	
 	init(
 		batteryReader: IOKitBatteryReader? = nil,
@@ -227,7 +234,12 @@ final class BatteryMonitor: ObservableObject {
 
 	private func refreshBluetoothDevicesIfNeeded(force: Bool = false) {
 		let now = Date()
-		let isDue = force || now.timeIntervalSince(lastBluetoothPoll) >= bluetoothPollInterval
+		let interval = Self.bluetoothPollInterval(
+			popoverOpen: isPopoverOpen,
+			active: bluetoothActivePollInterval,
+			idle: bluetoothIdlePollInterval
+		)
+		let isDue = force || now.timeIntervalSince(lastBluetoothPoll) >= interval
 		guard isDue, Self.canStartBluetoothRefresh(startedAt: bluetoothRefreshStartedAt, now: now) else { return }
 		lastBluetoothPoll = now
 		bluetoothRefreshStartedAt = now

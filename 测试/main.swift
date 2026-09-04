@@ -2033,6 +2033,14 @@ do {
 	expect(!SignificantEnergyReader.isWarmupComplete(framesObserved: 0, minFrames: 50), "冷启动：零帧必在暖机")
 }
 
+// MARK: - 自身成本：蓝牙轮询按面板状态降频
+
+do {
+	// 面板打开 30s 保持灵敏；关闭放宽到 120s——子进程 spawn 是最贵的一笔电
+	expectEqual(BatteryMonitor.bluetoothPollInterval(popoverOpen: true, active: 30, idle: 120), 30.0, "自身成本：面板打开用快间隔")
+	expectEqual(BatteryMonitor.bluetoothPollInterval(popoverOpen: false, active: 30, idle: 120), 120.0, "自身成本：面板关闭降频到 2 分钟")
+}
+
 // MARK: - 汇总
 
 print("")
