@@ -1619,9 +1619,16 @@ do {
 	expectEqual(folded.first?.cycleCount, samples[30].cycleCount, "健康折叠：循环数同点保留")
 	expectEqual(folded.last?.healthPercent, samples.last?.healthPercent, "健康折叠：近期数据原样保留")
 
-	// 最旧月已是单点时本轮无进展（等新数据积累后再折叠），不崩不变
-	let twice = BatteryHistoryRecorder.foldingHealthSamples(folded, maxRawCount: 380)
-	expectEqual(twice.count, 390, "健康折叠：单点月无可折叠，原样返回")
+	// 最旧月已是单点时跳过它，折下一个多月——封顶不停滞（状态机边界）
+	let stagnationGuard = BatteryHistoryRecorder.foldingHealthSamples(folded, maxRawCount: 380)
+	expect(stagnationGuard.count < folded.count, "健康折叠：跳过单点月继续折，封顶不停滞")
+	expectEqual(stagnationGuard.first, folded.first, "健康折叠：前面的单点月原样保留")
+
+	// 全是单点：无可折，原样返回（有界无害）
+	let allSingles = stride(from: 0, to: 400, by: 31).map {
+		HealthSample(date: start.addingTimeInterval(Double($0) * 86400), healthPercent: 90, cycleCount: 1)
+	}
+	expectEqual(BatteryHistoryRecorder.foldingHealthSamples(allSingles, maxRawCount: 380).count, allSingles.count, "健康折叠：全单点原样返回")
 }
 
 // MARK: - 历史存档编解码

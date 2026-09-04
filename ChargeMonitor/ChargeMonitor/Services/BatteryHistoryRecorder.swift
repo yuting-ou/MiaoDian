@@ -867,20 +867,26 @@ final class BatteryHistoryRecorder: ObservableObject {
 	
 	// MARK: - 健康度趋势
 	
-	// 把最旧一个月的原始样本折叠成单点（当月最后一个读数），直到总数不超上限；
-	// 若最旧月已是单点（历史深处全是月度聚合），本轮无进展也无害
+	// 把最旧一个"还有多个样本可折"的月折叠成单点（当月最后一个读数），
+	// 直到总数不超上限。最旧月已是单点时跳过它继续往后找——
+	// 否则导入的异常存档（单点月+总数超限）会让封顶永久停滞
 	nonisolated static func foldingHealthSamples(_ samples: [HealthSample], maxRawCount: Int) -> [HealthSample] {
-		guard samples.count > maxRawCount, let oldest = samples.first else { return samples }
-		let monthKey = UsagePatternAnalyzer.monthKeyString(oldest.date)
-		var folded: HealthSample?
-		var index = 0
-		while index < samples.count,
-			UsagePatternAnalyzer.monthKeyString(samples[index].date) == monthKey {
-			folded = samples[index]
-			index += 1
+		guard samples.count > maxRawCount, !samples.isEmpty else { return samples }
+		var monthStart = 0
+		while monthStart < samples.count {
+			let monthKey = UsagePatternAnalyzer.monthKeyString(samples[monthStart].date)
+			var monthEnd = monthStart
+			while monthEnd < samples.count,
+				UsagePatternAnalyzer.monthKeyString(samples[monthEnd].date) == monthKey {
+				monthEnd += 1
+			}
+			if monthEnd - monthStart >= 2 {
+				return Array(samples[0..<monthStart]) + [samples[monthEnd - 1]] + samples[monthEnd...]
+			}
+			monthStart = monthEnd
 		}
-		guard let kept = folded, index > 1 else { return samples }
-		return [kept] + samples[index...]
+		// 全是单点：无可折，原样返回（有界，无害）
+		return samples
 	}
 
 	private func recordDailyHealth(_ snapshot: BatterySnapshot) {
