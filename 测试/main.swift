@@ -2002,6 +2002,28 @@ do {
 	expect(!BatteryMonitor.canStartBluetoothRefresh(startedAt: t0.addingTimeInterval(-15), now: t0, staleSeconds: 20), "蓝牙自愈：未超窗仍等待")
 }
 
+// MARK: - 周报 × 月报同日双发审计（机制冲突透镜）
+
+do {
+	var cal = Calendar(identifier: .gregorian)
+	cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+	// 2026-02-01 恰是周日：当晚 20 点后，周报与月报同帧到期
+	let bothDue = cal.date(from: DateComponents(year: 2026, month: 2, day: 1, hour: 20, minute: 30))!
+	let weeklyDue = BatteryAlertController.mostRecentDigestDue(before: bothDue, calendar: cal)
+	let monthlyDue = BatteryAlertController.mostRecentMonthlyDigestDue(before: bothDue, calendar: cal)
+	expect(weeklyDue != nil && monthlyDue != nil, "双发审计：同日两报均到点")
+	// 两者各自独立判"已发"：标记互不覆盖，不会一个发了另一个被永久静默
+	expect(weeklyDue! < bothDue && monthlyDue! < bothDue, "双发审计：到点时间都早于当前")
+	// 月报正文与周报正文互不依赖：一方无数据返回空串不发，不影响另一方
+	let emptyWeek = BatteryAlertController.weeklyDigestBody(history: [], sessionCount: 0, healthPercent: nil)
+	expect(emptyWeek.isEmpty, "双发审计：周报无数据独立不发")
+	let monthHistory = [DailyUsage(dayKey: "2026-01-15", drainedPercent: 30, chargedPercent: 40)]
+	let monthBody = BatteryAlertController.monthlyDigestBody(history: monthHistory, sessions: [], healthSamples: [], due: monthlyDue!, calendar: cal)
+	expect(monthBody.contains("上月用电 30%"), "双发审计：月报独立成文不受周报影响")
+	// 结论：同日双发 = 两条不同内容的小结各来一条（一年约 1-2 次），
+	// 均为非紧急、受免打扰约束、标记独立不互相静默——审计判定为可接受，不做合并
+}
+
 // MARK: - 汇总
 
 print("")

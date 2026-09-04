@@ -543,10 +543,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		send(id: "weekly-digest", title: "本周电池小结", body: body)
 	}
 	
-	// 最近一个已到点的“周日 20:00”；周日 20 点前返回上周的
-	// 纯函数，标 nonisolated 方便单元测试直接调
-	nonisolated static func mostRecentDigestDue(before now: Date) -> Date? {
-		let calendar = Calendar.current
+	// 最近一个已到点的”周日 20:00”；周日 20 点前返回上周的
+	// 纯函数，标 nonisolated 方便单元测试直接调（calendar 可注入，与月报对称）
+	nonisolated static func mostRecentDigestDue(before now: Date, calendar: Calendar = .current) -> Date? {
 		let todayStart = calendar.startOfDay(for: now)
 		let weekday = calendar.component(.weekday, from: now) // 1 = 周日
 		guard
