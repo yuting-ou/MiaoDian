@@ -251,7 +251,9 @@ struct BatteryIdentitySection: View {
 						row(label: "容量", value: capacityText, monospaced: true)
 					}
 					if let balance = BatteryIdentityDecoder.cellBalanceText(identity.cellVoltagesMV) {
-						row(label: "均衡", value: balance, monospaced: true, tint: balanceTint)
+						// 电芯电压是开机时读的一次性快照——不标注会被当成实时值
+						row(label: "均衡", value: balance, monospaced: true, tint: balanceTint,
+							help: "开机时快照（电芯均衡以周为单位缓慢变化），非实时读数")
 					}
 					if jumpCount30d > 0 {
 						jumpStatus

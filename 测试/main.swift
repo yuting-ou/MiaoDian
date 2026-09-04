@@ -1044,10 +1044,12 @@ do {
 	var stats = ChargerPowerStats(key: "a|b|65", ratedWatts: 65)
 	stats.sampleCount = 10
 	stats.sumWatts = 10 * 20
+	stats.maxWatts = 22
 
 	let items = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, chargerProfile: profile, chargerStats: stats).makeItems()
 	let row = items.first { $0.label == "充电器" }
 	expect(row?.value.contains("平均20W") == true, "充电器信息行：附平均协商功率")
+	expect(row?.value.contains("峰值") == true, "充电器信息行：峰值协商功率露出（诊断线材用得上）")
 	expect(row?.value.contains("疑似慢充") == true, "充电器信息行：慢充标出")
 	expect(row?.valueTint == .orange, "充电器信息行：慢充电量染橙")
 

@@ -272,6 +272,11 @@ struct BatteryInfoFormatter {
 
 		if let stats = chargerStats, let avg = stats.avgWatts, stats.sampleCount >= 5 {
 			value += " · 平均\(formatTierWatts(avg))"
+			// 峰值协商功率一直在采集却从未露出——诊断线材/接口时"最高能冲到多少"
+			// 比平均值更能说明问题（均值会被整机负载波动摊平）
+			if stats.maxWatts >= 1 {
+				value += "·峰值\(formatTierWatts(stats.maxWatts))"
+			}
 			if stats.isSuspiciouslySlow {
 				value += "「疑似慢充」"  // 平均协商远低于额定，多半线材/接口不行
 				valueTint = .orange

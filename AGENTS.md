@@ -25,3 +25,4 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
 - README 中的 Homebrew/GitHub Releases 安装方式属于上游英文原版，本地汉化版以 build.sh 构建为准
 - 面板控制行没有"检查更新"入口（上游时代已移除）；对外分发统一走本仓库的 GitHub Releases
 - 失败诊断日志：`log stream --predicate 'subsystem == "fun.crashsystem.ChargeMonitor"'`
+- 目标模式（自主迭代循环）：按根目录 `目标模式作业书.md`（v3）执行；`迭代报告.md`（每轮流水）与 `经验账本.md`（教训/无恙清单/直觉校准）是其配套本地文件，均 gitignored
