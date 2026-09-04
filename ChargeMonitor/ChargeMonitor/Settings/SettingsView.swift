@@ -256,7 +256,7 @@ struct SettingsView: View {
 	// 全量导出：JSON 人可读，写入用户选的位置后在访达中亮出
 	private func exportArchive() {
 		guard let data = BatteryHistoryArchive.encode(historyRecorder.makeArchive()) else {
-			DiagnosticLog.failureOnce("archive-encode-failed", category: "SettingsView", "历史存档编码失败")
+			showArchiveAlert(title: "导出失败", body: "历史存档编码失败，请查看诊断日志。")
 			return
 		}
 		let panel = NSSavePanel()
@@ -268,6 +268,7 @@ struct SettingsView: View {
 			NSWorkspace.shared.activateFileViewerSelecting([url])
 		} catch {
 			DiagnosticLog.failureOnce("archive-export-failed", category: "SettingsView", "历史存档写入失败：\(error.localizedDescription)")
+			showArchiveAlert(title: "导出失败", body: "无法写入所选位置：\(error.localizedDescription)")
 		}
 	}
 
@@ -276,12 +277,15 @@ struct SettingsView: View {
 		let panel = NSOpenPanel()
 		panel.allowedContentTypes = [.json]
 		panel.canChooseDirectories = false
+		guard panel.runModal() == .OK, let url = panel.url else { return }
 		guard
-			panel.runModal() == .OK,
-			let url = panel.url,
 			let data = try? Data(contentsOf: url),
 			let archive = BatteryHistoryArchive.decode(data)
-		else { return }
+		else {
+			// 选了文件却解析失败必须说清楚——静默返回会让人以为按钮坏了
+			showArchiveAlert(title: "无法解析该存档", body: "文件可能已损坏，或来自更高版本的妙电。")
+			return
+		}
 
 		let alert = NSAlert()
 		alert.messageText = "导入历史存档？"
@@ -290,5 +294,14 @@ struct SettingsView: View {
 		alert.addButton(withTitle: "取消")
 		guard alert.runModal() == .alertFirstButtonReturn else { return }
 		historyRecorder.restore(from: archive)
+	}
+
+	private func showArchiveAlert(title: String, body: String) {
+		let alert = NSAlert()
+		alert.messageText = title
+		alert.informativeText = body
+		alert.alertStyle = .warning
+		alert.addButton(withTitle: "好")
+		alert.runModal()
 	}
 }
