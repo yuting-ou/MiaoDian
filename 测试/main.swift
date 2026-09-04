@@ -1660,6 +1660,25 @@ do {
 
 	expect(BatteryHistoryArchive.decode(#"{"version":99}"#.data(using: .utf8)!) == nil, "存档：版本不符拒绝")
 	expect(BatteryHistoryArchive.decode(Data([0xFF, 0xFE])) == nil, "存档：垃圾数据拒绝")
+
+	// 电池更换边界随档往返（数据完整性：丢了它换过电池的传记会连成假曲线）
+	var boundaryArchive = BatteryHistoryArchive(
+		exportedAt: t0, sessions: [], healthSamples: [], dailyHistory: [],
+		lastSleepDrain: nil, chargerProfiles: [], socSamples: [], powerEvents: [],
+		chargerPowerStats: [:], hourlyDrainStats: HourlyDrainStats(),
+		appEnergy: [], socJumpEvents: [],
+		batterySerialLastSeen: "S9", batteryReplacedAt: t0
+	)
+	if let data = BatteryHistoryArchive.encode(boundaryArchive), let decoded = BatteryHistoryArchive.decode(data) {
+		expectEqual(decoded.batterySerialLastSeen, "S9", "存档：电池序列号边界往返")
+		expectEqual(decoded.batteryReplacedAt, t0, "存档：更换时刻往返")
+	} else {
+		expect(false, "存档：带边界字段编解码不应失败")
+	}
+	// 旧存档（v1.6.11 及以前）无边界字段，解码为 nil 不炸
+	let legacyNoBoundary = #"{"version":1,"exportedAt":"2026-09-01T00:00:00Z","sessions":[],"healthSamples":[],"dailyHistory":[],"chargerProfiles":[],"socSamples":[],"powerEvents":[],"chargerPowerStats":{},"hourlyDrainStats":{"drainedByHour":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"accumulatedDays":0,"lastDayKey":""},"appEnergy":[],"socJumpEvents":[]}"#.data(using: .utf8)!
+	expect(BatteryHistoryArchive.decode(legacyNoBoundary)?.batteryReplacedAt == nil, "存档：旧档无边界字段解码为 nil")
+	boundaryArchive.batteryReplacedAt = nil
 }
 
 // MARK: - 合成一周不变量（属性测试）
@@ -1917,20 +1936,20 @@ do {
 	paused.isCharging = false
 	expect(BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: paused, threshold: 80), "打架检测：贴线暂停算边沿")
 
-	var stillCharging = batterySnap(percent: 80, charging: true, onBattery: false)
+	let stillCharging = batterySnap(percent: 80, charging: true, onBattery: false)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: stillCharging, threshold: 80), "打架检测：仍在充电不算")
 
-	var farFromLine = batterySnap(percent: 65, onBattery: false)
+	let farFromLine = batterySnap(percent: 65, onBattery: false)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: farFromLine, threshold: 80), "打架检测：远离保养线不算")
 
-	var onBattery = batterySnap(percent: 80)
+	let onBattery = batterySnap(percent: 80)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: onBattery, threshold: 80), "打架检测：电池供电不算")
 
 	var full = batterySnap(percent: 100, onBattery: false)
 	full.isFull = true
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: full, threshold: 80), "打架检测：已充满不算")
 
-	var resumed = batterySnap(percent: 80, charging: true, onBattery: false)
+	let resumed = batterySnap(percent: 80, charging: true, onBattery: false)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
 }
 
@@ -1938,7 +1957,7 @@ do {
 
 do {
 	// 小时分布随累计写入
-	var records = BatteryHistoryRecorder.appendingEnergySeconds(
+	let records = BatteryHistoryRecorder.appendingEnergySeconds(
 		[], ids: ["com.a"], names: ["com.a": "A"], seconds: 60,
 		hour: 15, dayKey: "2026-08-29", cutoffDayKey: "2026-08-01", now: t0, maxApps: 50
 	)

@@ -20,6 +20,10 @@ nonisolated struct BatteryHistoryArchive: Codable {
 	var hourlyTempStats: HourlyTempStats?
 	var appEnergy: [AppEnergyUsage]
 	var socJumpEvents: [SocJumpEvent]
+	// 电池更换边界（1.6.12 起入档）：丢了它，换过电池的传记恢复后会把两块电池
+	// 的健康度连成一条假曲线。旧存档缺字段解码为 nil，导入时保持现状
+	var batterySerialLastSeen: String?
+	var batteryReplacedAt: Date?
 
 	static func encode(_ archive: BatteryHistoryArchive) -> Data? {
 		let encoder = JSONEncoder()

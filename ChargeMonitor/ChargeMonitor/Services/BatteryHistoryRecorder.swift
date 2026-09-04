@@ -978,7 +978,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 			hourlyDrainStats: hourlyDrainStats,
 			hourlyTempStats: hourlyTempStats,
 			appEnergy: appEnergy,
-			socJumpEvents: socJumpEvents
+			socJumpEvents: socJumpEvents,
+			batterySerialLastSeen: defaults.string(forKey: Self.batterySerialKey),
+			batteryReplacedAt: batteryReplacedAt
 		)
 	}
 
@@ -1002,6 +1004,17 @@ final class BatteryHistoryRecorder: ObservableObject {
 		socJumpEvents = archive.socJumpEvents
 		// 跳变追踪的基线随旧数据作废，恢复后从当前读数重新积累
 		lastSocSample = nil
+		// 电池更换边界随档恢复：丢了它，换过电池的传记会把两块电池连成假曲线。
+		// 旧存档缺字段（nil）时序列号保持现状、边界按"无更换"重置以与恢复的样本一致
+		if let serial = archive.batterySerialLastSeen {
+			defaults.set(serial, forKey: Self.batterySerialKey)
+		}
+		batteryReplacedAt = archive.batteryReplacedAt
+		if let replacedAt = archive.batteryReplacedAt {
+			defaults.set(replacedAt, forKey: Self.batteryReplacedAtKey)
+		} else {
+			defaults.removeObject(forKey: Self.batteryReplacedAtKey)
+		}
 
 		save(recentSessions, key: Self.sessionsKey)
 		save(healthSamples, key: Self.healthKey)
