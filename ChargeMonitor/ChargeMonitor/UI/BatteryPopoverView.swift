@@ -485,7 +485,11 @@ struct BatteryPopoverView: View {
 				sessions: historyRecorder.recentSessions,
 				isCollapsed: isCardCollapsed(.chargeHistory),
 				onToggle: { toggleCard(.chargeHistory) },
-				onSelect: openChargeCurve
+				onSelect: openChargeCurve,
+				chargerNames: Dictionary(
+					historyRecorder.chargerProfiles.map { ($0.key, $0.displayName) },
+					uniquingKeysWith: { first, _ in first }
+				)
 			)
 		}
 	}

@@ -2088,6 +2088,16 @@ do {
 	expect(caveat.contains("可能更快或更慢"), "可溯源：披露不确定性，预言降格为估计")
 }
 
+// MARK: - 充电记录行显充电器（用户认知透镜）
+
+do {
+	let session = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 67, chargerKey: "anker")
+	let withName = ChargeHistorySection.detail(session, chargerName: "Anker·桌面")
+	expect(withName.contains("Anker·桌面") && withName.contains("峰值67W"), "记录显头：认得出时带名字")
+	let noName = ChargeHistorySection.detail(session, chargerName: nil)
+	expect(noName.contains("峰值67W") && !noName.contains("Anker"), "记录显头：认不出时安静省略，不留空段")
+}
+
 // MARK: - 汇总
 
 print("")
