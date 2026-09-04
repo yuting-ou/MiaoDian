@@ -830,33 +830,42 @@ do {
 // MARK: - 充电器档案
 
 do {
+	// 测试侧辅助：与真实调用方一样先算键再建档
+	func upsert(_ profiles: [ChargerProfile], name: String, manufacturer: String, ratedWatts: Int, now: Date) -> [ChargerProfile] {
+		BatteryHistoryRecorder.upsertingChargerProfile(
+			profiles,
+			key: BatteryHistoryRecorder.chargerKey(name: name, manufacturer: manufacturer, ratedWatts: ratedWatts),
+			name: name, manufacturer: manufacturer, ratedWatts: ratedWatts, now: now
+		)
+	}
+
 	var profiles: [ChargerProfile] = []
-	profiles = BatteryHistoryRecorder.upsertingChargerProfile(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0)
+	profiles = upsert(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0)
 	expectEqual(profiles.count, 1, "充电器建档：第一次见建档")
 	expectEqual(profiles.first?.connectCount, 1, "充电器建档：初始计次 1")
-	
+
 	// 半小时内再见（如应用重启）不重复计次
-	profiles = BatteryHistoryRecorder.upsertingChargerProfile(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0.addingTimeInterval(10 * 60))
+	profiles = upsert(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0.addingTimeInterval(10 * 60))
 	expectEqual(profiles.first?.connectCount, 1, "充电器建档：半小时内再见不计次")
 	expectEqual(profiles.first?.lastSeen, t0.addingTimeInterval(10 * 60), "充电器建档：lastSeen 刷新")
-	
+
 	// 超窗再来算一次新连接
-	profiles = BatteryHistoryRecorder.upsertingChargerProfile(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0.addingTimeInterval(60 * 60))
+	profiles = upsert(profiles, name: "65W 氮化镓", manufacturer: "Anker", ratedWatts: 65, now: t0.addingTimeInterval(60 * 60))
 	expectEqual(profiles.first?.connectCount, 2, "充电器建档：超窗重连计次")
-	
+
 	// 名字厂商都空 → 按瓦数兜底命名
-	let anon = BatteryHistoryRecorder.upsertingChargerProfile([], name: "", manufacturer: "", ratedWatts: 30, now: t0)
+	let anon = upsert([], name: "", manufacturer: "", ratedWatts: 30, now: t0)
 	expectEqual(anon.first?.name, "30W 充电器", "充电器建档：无名按瓦数兜底")
-	
+
 	expectEqual(BatteryHistoryRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65), "a|b|65", "充电器身份键：格式单一数据源")
-	
+
 	// 档案满了挤掉最久没见过的
 	var crowded: [ChargerProfile] = []
 	for i in 0..<20 {
-		crowded = BatteryHistoryRecorder.upsertingChargerProfile(crowded, name: "充电器\(i)", manufacturer: "X", ratedWatts: 20 + i, now: t0.addingTimeInterval(Double(i) * 60))
+		crowded = upsert(crowded, name: "充电器\(i)", manufacturer: "X", ratedWatts: 20 + i, now: t0.addingTimeInterval(Double(i) * 60))
 	}
 	expectEqual(crowded.count, 20, "充电器建档：档案上限 20")
-	let after = BatteryHistoryRecorder.upsertingChargerProfile(crowded, name: "新面孔", manufacturer: "X", ratedWatts: 99, now: t0.addingTimeInterval(3600))
+	let after = upsert(crowded, name: "新面孔", manufacturer: "X", ratedWatts: 99, now: t0.addingTimeInterval(3600))
 	expectEqual(after.count, 20, "充电器建档：满了仍 20 条")
 	expect(!after.contains { $0.name == "充电器0" }, "充电器建档：挤掉最久没见的")
 	expect(after.contains { $0.name == "新面孔" }, "充电器建档：新面孔入档")
@@ -1747,7 +1756,11 @@ do {
 
 	// 重连更新档案时用户命名必须存活（只动 lastSeen/connectCount）
 	let profiles = [claimed]
-	let after = BatteryHistoryRecorder.upsertingChargerProfile(profiles, name: "", manufacturer: "", ratedWatts: 65, now: t0.addingTimeInterval(3600))
+	let after = BatteryHistoryRecorder.upsertingChargerProfile(
+		profiles,
+		key: BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65),
+		name: "", manufacturer: "", ratedWatts: 65, now: t0.addingTimeInterval(3600)
+	)
 	expectEqual(after.first?.customName, "Anker · 桌面", "命名：重连保留用户命名")
 	expectEqual(after.first?.connectCount, 2, "命名：重连超窗正常计次")
 
@@ -1758,6 +1771,25 @@ do {
 	let decoded = try decoder.decode([ChargerProfile].self, from: legacyJSON)
 	expect(decoded.first?.customName == nil, "命名：旧档缺字段解码为 nil")
 	expectEqual(decoded.first?.displayName, "65W", "命名：旧档展示名正常")
+
+	// 同瓦数不同充电器：PD 档位表不同 → 身份键分开，不再合并成一只
+	let tiersA = [PowerTier(maxVoltageMV: 20000, maxCurrentMA: 5000), PowerTier(maxVoltageMV: 15000, maxCurrentMA: 3000)]
+	let tiersB = [PowerTier(maxVoltageMV: 20000, maxCurrentMA: 5000), PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000)]
+	let keyA = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA)
+	let keyB = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersB)
+	expect(keyA != keyB, "身份键：不同档位表分开建档")
+	// 档位顺序无关（排序稳定）
+	expectEqual(BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA.reversed()), keyA, "身份键：档位顺序无关")
+	// 非 PD 头无档位表 → 键退回旧格式，存量档案不重置
+	expectEqual(BatteryHistoryRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65, tiers: []), "a|b|65", "身份键：无档位保持旧格式")
+	// 无线头带标记，与同瓦数有线头区分
+	expect(BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 0, isWireless: true).hasSuffix("|无线"), "身份键：无线标记")
+	// 新建档时档位签名入档（设置区展示用）
+	let signed = BatteryHistoryRecorder.upsertingChargerProfile(
+		[], key: keyA, name: "", manufacturer: "", ratedWatts: 100,
+		tierSignature: BatteryHistoryRecorder.tierSignature(tiersA), now: t0
+	)
+	expect(signed.first?.tierSignature?.contains("20000V5000A") == true, "身份键：新档保存签名")
 }
 
 // MARK: - 汇总

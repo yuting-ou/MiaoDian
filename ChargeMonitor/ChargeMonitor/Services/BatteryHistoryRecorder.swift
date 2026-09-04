@@ -262,21 +262,39 @@ final class BatteryHistoryRecorder: ObservableObject {
 		return events
 	}
 	
-	// 充电器身份键：名称|厂商|额定功率，建档与相认都靠它，各处必须同源
-	nonisolated static func chargerKey(name: String, manufacturer: String, ratedWatts: Int) -> String {
-		"\(name)|\(manufacturer)|\(ratedWatts)"
+	// 充电器身份键：名称|厂商|额定功率[|PD档位签名][|无线]，建档与相认都靠它，各处必须同源。
+	// 档位签名让"两只都是 100W"的不同充电器分开——不同品牌/型号广播的 PDO 组合
+	// 几乎必然不同；非 PD 头没有档位表，键退回旧格式，存量档案不重置。
+	nonisolated static func chargerKey(
+		name: String,
+		manufacturer: String,
+		ratedWatts: Int,
+		tiers: [PowerTier] = [],
+		isWireless: Bool = false
+	) -> String {
+		var key = "\(name)|\(manufacturer)|\(ratedWatts)"
+		let signature = tierSignature(tiers)
+		if !signature.isEmpty { key += "|\(signature)" }
+		if isWireless { key += "|无线" }
+		return key
 	}
-	
+
+	// 档位集合排序拼接的稳定签名（顺序无关）；读不到档位时为空
+	nonisolated static func tierSignature(_ tiers: [PowerTier]) -> String {
+		tiers.map { "\($0.maxVoltageMV)V\($0.maxCurrentMA)A" }.sorted().joined(separator: "/")
+	}
+
 	// 已知身份的充电器更新或建档：
 	// 重连窗口内再见不重复计次（如应用重启），超窗算一次新连接；档案满了挤掉最久没见的
 	nonisolated static func upsertingChargerProfile(
 		_ profiles: [ChargerProfile],
+		key: String,
 		name: String,
 		manufacturer: String,
 		ratedWatts: Int,
+		tierSignature: String? = nil,
 		now: Date
 	) -> [ChargerProfile] {
-		let key = chargerKey(name: name, manufacturer: manufacturer, ratedWatts: ratedWatts)
 		var profiles = profiles
 		if let index = profiles.firstIndex(where: { $0.key == key }) {
 			if now.timeIntervalSince(profiles[index].lastSeen) > chargerRecountSeconds {
@@ -291,7 +309,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 				ratedWatts: ratedWatts > 0 ? ratedWatts : nil,
 				firstSeen: now,
 				lastSeen: now,
-				connectCount: 1
+				connectCount: 1,
+				tierSignature: tierSignature
 			))
 			if profiles.count > maxChargerProfiles {
 				profiles.sort { $0.lastSeen < $1.lastSeen }
@@ -547,8 +566,25 @@ final class BatteryHistoryRecorder: ObservableObject {
 				Date().timeIntervalSince(connectedAt) >= Self.chargerIdentityWaitSeconds
 			else { return }
 		}
-		activeChargerKey = Self.chargerKey(name: name, manufacturer: manufacturer, ratedWatts: rated)
-		chargerProfiles = Self.upsertingChargerProfile(chargerProfiles, name: name, manufacturer: manufacturer, ratedWatts: rated, now: Date())
+		// 档位签名进键：两只同瓦数的不同充电器分开建档；无线头带标记
+		let signature = Self.tierSignature(snapshot.powerTiers)
+		let key = Self.chargerKey(
+			name: name,
+			manufacturer: manufacturer,
+			ratedWatts: rated,
+			tiers: snapshot.powerTiers,
+			isWireless: snapshot.chargingProtocol == "无线充电"
+		)
+		activeChargerKey = key
+		chargerProfiles = Self.upsertingChargerProfile(
+			chargerProfiles,
+			key: key,
+			name: name,
+			manufacturer: manufacturer,
+			ratedWatts: rated,
+			tierSignature: signature.isEmpty ? nil : signature,
+			now: Date()
+		)
 		save(chargerProfiles, key: Self.chargerProfilesKey)
 		// 功率统计跟着档案走：档案挤掉最旧后，对应统计一并清理，不留孤儿数据
 		let prunedStats = Self.pruningChargerPowerStats(chargerPowerStats, keeping: chargerProfiles)

@@ -174,6 +174,8 @@ nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	var connectCount: Int
 	// 用户起的名字；系统识别不了时由用户认领，优先于 name 展示
 	var customName: String?
+	// PD 源功率档位签名（展示用）：两只同瓦数的不同充电器靠它辨认
+	var tierSignature: String?
 
 	// 展示名：用户命名 > 系统识别名 > 额定瓦数兜底
 	var displayName: String {

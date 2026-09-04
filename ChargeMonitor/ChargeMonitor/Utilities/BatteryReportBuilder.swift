@@ -157,7 +157,9 @@ struct BatteryReportBuilder {
 		return BatteryHistoryRecorder.chargerKey(
 			name: snapshot.adapterName ?? "",
 			manufacturer: snapshot.adapterManufacturer ?? "",
-			ratedWatts: snapshot.adapterRatedWatts ?? 0
+			ratedWatts: snapshot.adapterRatedWatts ?? 0,
+			tiers: snapshot.powerTiers,
+			isWireless: snapshot.chargingProtocol == "无线充电"
 		)
 	}
 	

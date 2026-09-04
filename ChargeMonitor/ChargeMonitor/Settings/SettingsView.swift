@@ -165,6 +165,12 @@ struct SettingsView: View {
 			}
 			TextField("起个名字，如「Anker 65W · 桌面」", text: customNameBinding(profile.key))
 			.font(.system(size: 12))
+			// 两只同瓦数的头靠档位表辨认（不同品牌/型号广播的 PDO 组合不同）
+			if let signature = profile.tierSignature, !signature.isEmpty {
+				Text("PD 档位：\(signature)")
+					.font(.system(size: 10))
+					.foregroundStyle(.tertiary)
+			}
 			if profile.name.isEmpty {
 				Text("系统未识别出名称（额定 \(profile.ratedWatts.map(String.init) ?? "未知")W），命名后面板与报告都会用这个名字")
 					.font(.system(size: 10))
