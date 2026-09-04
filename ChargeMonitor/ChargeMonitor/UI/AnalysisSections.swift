@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SignificantEnergySection: View {
 	let apps: [SignificantEnergyApp]
+	// 样本未攒够一轮（约 2 分钟）：空列表是"还没测出来"，不能谎报"没有耗电大户"
+	let isWarmingUp: Bool
 	// 本周累计 Top 应用（名称 + 秒数 + 活跃峰值时段）；空则不显示该区块
 	let weeklyTop: [(name: String, seconds: Double, window: String?)]
 	let onRevealInFinder: (URL?) -> Void
@@ -12,19 +14,33 @@ struct SignificantEnergySection: View {
 				.padding(.bottom, 2)
 
 			if apps.isEmpty {
-				// 没有耗电大户是好消息，直接用绿色对勾说清楚；
-				// 之前的加载转圈会让人误以为一直在查
-				HStack(spacing: 6) {
-					Image(systemName: "checkmark.circle.fill")
-						.font(.system(size: 12))
-						.foregroundStyle(Color.green)
-					Text("没有明显的耗电大户")
-						.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
-						.foregroundStyle(.secondary)
-						.lineLimit(1)
+				if isWarmingUp {
+					// 诚实的等待：说清还要多久，而不是给一个过早的"没有"
+					HStack(spacing: 6) {
+						Image(systemName: "hourglass")
+							.font(.system(size: 12))
+							.foregroundStyle(.secondary)
+						Text("正在积累样本（约 2 分钟）…")
+							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.foregroundStyle(.secondary)
+							.lineLimit(1)
+					}
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.padding(.vertical, PopoverLayout.rowVerticalPadding)
+				} else {
+					// 没有耗电大户是好消息，直接用绿色对勾说清楚
+					HStack(spacing: 6) {
+						Image(systemName: "checkmark.circle.fill")
+							.font(.system(size: 12))
+							.foregroundStyle(Color.green)
+						Text("没有明显的耗电大户")
+							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.foregroundStyle(.secondary)
+							.lineLimit(1)
+					}
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.padding(.vertical, PopoverLayout.rowVerticalPadding)
 				}
-				.frame(maxWidth: .infinity, alignment: .leading)
-				.padding(.vertical, PopoverLayout.rowVerticalPadding)
 			} else {
 				ForEach(apps) { app in
 					PopoverActionRow(app.name, icon: app.icon, showsChevron: true) {

@@ -34,6 +34,19 @@ actor SignificantEnergyReader {
 		let impact: Double
 	}
 
+	// 一轮扫描的完整回执：结果 + 暖机是否完成。
+	// 样本攒够 minSamplesToShow 之前列表必空——那是"还没测出来"，
+	// 不是"没有耗电大户"，界面必须能区分这两件事（新用户第一次打开就撞上）
+	struct EnergyScan: Sendable {
+		let entries: [ImpactEntry]
+		let warmupComplete: Bool
+	}
+
+	// 暖机判定（纯函数，供单测）：帧数攒够才算测完一轮
+	nonisolated static func isWarmupComplete(framesObserved: Int, minFrames: Int) -> Bool {
+		framesObserved >= minFrames
+	}
+
 	private struct ProcessMetrics: Sendable {
 		let cpuTimeSeconds: Double
 		let wakeups: UInt64
@@ -50,6 +63,8 @@ actor SignificantEnergyReader {
 	private var previousByPid: [pid_t: ProcessMetrics] = [:]
 	private var previousTimestamp: TimeInterval?
 	private var stateByBundleId: [String: EnergyState] = [:]
+	// 已观察帧数（跨面板开关累计）：暖机进度
+	private var framesObserved = 0
 
 	private let alpha: Double = 0.05
 	private let appearThreshold: Double = 1.5
@@ -95,7 +110,8 @@ actor SignificantEnergyReader {
 
 	// 一轮差分采样：与上一轮的 pid 指标相减折算影响值，聚合到 bundle 后更新 EMA；
 	// 首轮没有时间差，只记基准不出结果
-	func computeImpacts(apps: [RunningAppStub]) -> [ImpactEntry] {
+	func computeImpacts(apps: [RunningAppStub]) -> EnergyScan {
+		framesObserved += 1
 		let now = ProcessInfo.processInfo.systemUptime
 		let appsByBundlePath = Dictionary(
 			apps.compactMap { stub in stub.bundlePath.map { ($0, stub.bundleIdentifier) } },
@@ -114,7 +130,7 @@ actor SignificantEnergyReader {
 		updateState(bundleIds: apps.map(\.bundleIdentifier), energyByBundleId: energyByBundleId)
 		let results = significantEntries()
 		cleanupState(keeping: Set(apps.map(\.bundleIdentifier)))
-		return results
+		return EnergyScan(entries: results, warmupComplete: Self.isWarmupComplete(framesObserved: framesObserved, minFrames: minSamplesToShow))
 	}
 
 	private func sampleAllProcesses() -> [pid_t: ProcessMetrics] {

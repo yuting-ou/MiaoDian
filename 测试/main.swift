@@ -2024,6 +2024,15 @@ do {
 	// 均为非紧急、受免打扰约束、标记独立不互相静默——审计判定为可接受，不做合并
 }
 
+// MARK: - 冷启动暖机判定（第一次透镜）
+
+do {
+	// 样本攒够 minSamplesToShow 帧才算"测过了"；之前空列表是"还没测出来"
+	expect(SignificantEnergyReader.isWarmupComplete(framesObserved: 50, minFrames: 50), "冷启动：满 50 帧判暖机完成")
+	expect(!SignificantEnergyReader.isWarmupComplete(framesObserved: 49, minFrames: 50), "冷启动：49 帧仍在暖机（不谎报没有大户）")
+	expect(!SignificantEnergyReader.isWarmupComplete(framesObserved: 0, minFrames: 50), "冷启动：零帧必在暖机")
+}
+
 // MARK: - 汇总
 
 print("")

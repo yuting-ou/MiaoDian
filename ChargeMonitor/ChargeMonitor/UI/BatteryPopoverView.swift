@@ -554,6 +554,7 @@ struct BatteryPopoverView: View {
 		if configuration.enabledOptions.contains(.significantEnergyApps) {
 			SignificantEnergySection(
 				apps: monitor.significantEnergyApps,
+				isWarmingUp: !monitor.isEnergyScanWarmedUp,
 				weeklyTop: weeklyAppEnergy,
 				onRevealInFinder: revealInFinder(url:)
 			)

@@ -7,6 +7,8 @@ import IOKit.ps
 final class BatteryMonitor: ObservableObject {
 	@Published private(set) var snapshot = BatterySnapshot()
 	@Published private(set) var significantEnergyApps: [SignificantEnergyApp] = []
+	// 高耗电样本是否已攒够一轮暖机：没攒够时列表为空是"还没测出来"，界面不能谎报"没有耗电大户"
+	@Published private(set) var isEnergyScanWarmedUp = false
 	@Published private(set) var powerSamples: [PowerSample] = []
 	@Published private(set) var temperatureSamples: [TemperatureSample] = []
 	@Published private(set) var drainEstimate: DrainRateEstimate?
@@ -102,8 +104,9 @@ final class BatteryMonitor: ObservableObject {
 			let stubsByBundleId = Dictionary(stubs.map { ($0.bundleIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
 			Task { [weak self] in
 				guard let self else { return }
-				let impacts = await self.energyReader.computeImpacts(apps: stubs)
-				self.publishEnergyApps(impacts, stubsByBundleId: stubsByBundleId)
+				let scan = await self.energyReader.computeImpacts(apps: stubs)
+				self.isEnergyScanWarmedUp = scan.warmupComplete
+				self.publishEnergyApps(scan.entries, stubsByBundleId: stubsByBundleId)
 				self.energyComputationInFlight = false
 			}
 		}
