@@ -215,12 +215,17 @@ final class BatteryMonitor: ObservableObject {
 		}
 	}
 	
+	// 蓝牙轮询能否发起下一轮（纯函数，供单测）：空闲可发；上一轮超过 staleSeconds
+	// 未完成视为卡死放行——子进程看门狗兜底后仍可能因异常路径不回调，不能永久锁死
+	nonisolated static func canStartBluetoothRefresh(startedAt: Date?, now: Date, staleSeconds: TimeInterval = 20) -> Bool {
+		guard let startedAt else { return true }
+		return now.timeIntervalSince(startedAt) > staleSeconds
+	}
+
 	private func refreshBluetoothDevicesIfNeeded(force: Bool = false) {
 		let now = Date()
 		let isDue = force || now.timeIntervalSince(lastBluetoothPoll) >= bluetoothPollInterval
-		// 空闲可直接发起；上一轮若超过 20 秒未完成，视为卡死也允许重发
-		let canStart = bluetoothRefreshStartedAt.map { now.timeIntervalSince($0) > 20 } ?? true
-		guard isDue, canStart else { return }
+		guard isDue, Self.canStartBluetoothRefresh(startedAt: bluetoothRefreshStartedAt, now: now) else { return }
 		lastBluetoothPoll = now
 		bluetoothRefreshStartedAt = now
 		

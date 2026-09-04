@@ -1985,6 +1985,16 @@ do {
 	expect(!BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(-40 * 86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却期满放行")
 }
 
+// MARK: - 蓝牙轮询卡死自愈（静默失败透镜）
+
+do {
+	// 空闲可发；在途不发；卡死超 20s 放行（看门狗异常路径不能永久锁死轮询）
+	expect(BatteryMonitor.canStartBluetoothRefresh(startedAt: nil, now: t0), "蓝牙自愈：空闲可发")
+	expect(!BatteryMonitor.canStartBluetoothRefresh(startedAt: t0.addingTimeInterval(-5), now: t0), "蓝牙自愈：在途不发")
+	expect(BatteryMonitor.canStartBluetoothRefresh(startedAt: t0.addingTimeInterval(-25), now: t0), "蓝牙自愈：卡死超窗放行")
+	expect(!BatteryMonitor.canStartBluetoothRefresh(startedAt: t0.addingTimeInterval(-15), now: t0, staleSeconds: 20), "蓝牙自愈：未超窗仍等待")
+}
+
 // MARK: - 汇总
 
 print("")
