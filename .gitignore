@@ -12,3 +12,7 @@ ChargeMonitor/ChargeMonitor.xcodeproj/xcuserdata/
 *.xcuserstate
 xcuserdata/
 DerivedData/
+
+# 本地工作流文件（不进开源仓库）
+目标模式作业书.md
+迭代报告.md
