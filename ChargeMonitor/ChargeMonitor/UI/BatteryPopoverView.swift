@@ -381,6 +381,14 @@ struct BatteryPopoverView: View {
 		) {
 			return base
 		}
+		// 系统优化充电正在保养线附近反复暂停：和你的保养提醒是同一件事，二选一即可
+		if configurationManager.configuration.enabledOptions.contains(.chargeCareReminder),
+			alertController.isOptimizedChargingHolding {
+			return ChargingHabitInsight(
+				message: "系统优化充电正在 \(configurationManager.configuration.chargeCareThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事，二选一即可（信系统就关掉提醒）",
+				symbol: "gearshape.2.fill"
+			)
+		}
 		// 两个早已在手边的信号拼成一句话：用电高峰叠着电池最热时段
 		if let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(
 			drain: historyRecorder.hourlyDrainStats,

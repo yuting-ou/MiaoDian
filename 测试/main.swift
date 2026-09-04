@@ -1890,6 +1890,31 @@ do {
 	expectEqual(t.accumulatedDays, 2, "温度画像：跨天推进有效天数")
 }
 
+// MARK: - 保养提醒 vs 系统优化充电打架检测
+
+do {
+	// 暂停边沿指纹：上一帧在充、这帧停了、仍插电未充满、贴着保养线 ±3%
+	var paused = batterySnap(percent: 80, onBattery: false)
+	paused.isCharging = false
+	expect(BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: paused, threshold: 80), "打架检测：贴线暂停算边沿")
+
+	var stillCharging = batterySnap(percent: 80, charging: true, onBattery: false)
+	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: stillCharging, threshold: 80), "打架检测：仍在充电不算")
+
+	var farFromLine = batterySnap(percent: 65, onBattery: false)
+	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: farFromLine, threshold: 80), "打架检测：远离保养线不算")
+
+	var onBattery = batterySnap(percent: 80)
+	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: onBattery, threshold: 80), "打架检测：电池供电不算")
+
+	var full = batterySnap(percent: 100, onBattery: false)
+	full.isFull = true
+	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: full, threshold: 80), "打架检测：已充满不算")
+
+	var resumed = batterySnap(percent: 80, charging: true, onBattery: false)
+	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
+}
+
 // MARK: - 汇总
 
 print("")

@@ -12,6 +12,8 @@ import UserNotifications
 final class BatteryAlertController: NSObject, ObservableObject {
 	// 开了提醒但系统通知权限被拒：提醒实际发不出去，面板上要给出警告
 	@Published private(set) var isNotificationPermissionDenied = false
+	// 系统优化充电正在保养线附近反复暂停（与用户的保养提醒"打架"）
+	@Published private(set) var isOptimizedChargingHolding = false
 	
 	private var cancellables: Set<AnyCancellable> = []
 	private var configuration = AppConfiguration.default
@@ -36,6 +38,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private var notifiedLowDevices: Set<String> = []
 	// 温度骤升检测：最近几分钟的温度环形缓存
 	private var recentTemps: [(date: Date, celsius: Double)] = []
+	// 保养线附近的充电暂停边沿时间戳：系统优化充电的指纹
+	private var carePauseEdges: [Date] = []
+	private var wasChargingNearCareLine = false
 	
 	// 阈值大多由用户在设置里调，重置线随阈值派生，避免临界抖动
 	private static let slowChargeRatio = 0.55
@@ -155,6 +160,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	
 	private func evaluate(_ snapshot: BatterySnapshot) {
 		lastSnapshot = snapshot
+		trackOptimizedChargingPause(snapshot)
 		guard isEnabled else { return }
 		evaluateFull(snapshot)
 		evaluateLowBattery(snapshot)
@@ -247,6 +253,32 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		}
 	}
 	
+	// 保养线附近的暂停边沿判定（纯函数，供单测）：上一帧在充、这一帧停了、
+	// 仍插着电且电量贴着保养线（±3%）——系统优化充电的典型指纹
+	nonisolated static func isCarePauseEdge(previousCharging: Bool, snapshot: BatterySnapshot, threshold: Int) -> Bool {
+		guard previousCharging, !snapshot.isCharging,
+			snapshot.powerSource == .powerAdapter, !snapshot.isFull,
+			let soc = snapshot.stateOfChargePercent
+		else { return false }
+		return abs(soc - threshold) <= 3
+	}
+
+	// 检测"系统优化充电在保养线附近反复暂停"：6 小时内 ≥3 次边沿即认定系统在替你
+	// 保养电池——此时用户的保养提醒和系统是同一件事的两种表达，提示二选一
+	private func trackOptimizedChargingPause(_ snapshot: BatterySnapshot) {
+		let threshold = configuration.chargeCareThresholdPercent
+		if Self.isCarePauseEdge(previousCharging: wasChargingNearCareLine, snapshot: snapshot, threshold: threshold) {
+			carePauseEdges.append(Date())
+		}
+		wasChargingNearCareLine = snapshot.isCharging
+		let cutoff = Date().addingTimeInterval(-6 * 3600)
+		carePauseEdges.removeAll { $0 < cutoff }
+		let holding = carePauseEdges.count >= 3
+		if holding != isOptimizedChargingHolding {
+			isOptimizedChargingHolding = holding
+		}
+	}
+
 	// 外设低电：每个设备独立边沿触发，充回阈值+5 以上才允许再次提醒
 	private func evaluateBluetoothDevices(_ devices: [BluetoothDeviceBattery]) {
 		guard alertEnabled(.alertDeviceLow) else { return }
