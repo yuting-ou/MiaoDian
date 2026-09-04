@@ -1662,7 +1662,7 @@ do {
 	expect(BatteryHistoryArchive.decode(Data([0xFF, 0xFE])) == nil, "存档：垃圾数据拒绝")
 
 	// 电池更换边界随档往返（数据完整性：丢了它换过电池的传记会连成假曲线）
-	var boundaryArchive = BatteryHistoryArchive(
+	let boundaryArchive = BatteryHistoryArchive(
 		exportedAt: t0, sessions: [], healthSamples: [], dailyHistory: [],
 		lastSleepDrain: nil, chargerProfiles: [], socSamples: [], powerEvents: [],
 		chargerPowerStats: [:], hourlyDrainStats: HourlyDrainStats(),
@@ -1678,7 +1678,26 @@ do {
 	// 旧存档（v1.6.11 及以前）无边界字段，解码为 nil 不炸
 	let legacyNoBoundary = #"{"version":1,"exportedAt":"2026-09-01T00:00:00Z","sessions":[],"healthSamples":[],"dailyHistory":[],"chargerProfiles":[],"socSamples":[],"powerEvents":[],"chargerPowerStats":{},"hourlyDrainStats":{"drainedByHour":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"accumulatedDays":0,"lastDayKey":""},"appEnergy":[],"socJumpEvents":[]}"#.data(using: .utf8)!
 	expect(BatteryHistoryArchive.decode(legacyNoBoundary)?.batteryReplacedAt == nil, "存档：旧档无边界字段解码为 nil")
-	boundaryArchive.batteryReplacedAt = nil
+	// 导入回执：成功也要开口，面板数字突变时用户要知道是导入生效
+	let summaryArchive = BatteryHistoryArchive(
+		exportedAt: t0,
+		sessions: [ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(600), startPercent: 40, endPercent: 50, peakInputW: 30)],
+		healthSamples: [HealthSample(date: t0, healthPercent: 95, cycleCount: 100), HealthSample(date: t0.addingTimeInterval(86400), healthPercent: 95, cycleCount: 101)],
+		dailyHistory: [DailyUsage(dayKey: "2026-08-30")],
+		lastSleepDrain: nil,
+		chargerProfiles: [ChargerProfile(key: "a|b|65", name: "65W", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 3)],
+		socSamples: [], powerEvents: [], chargerPowerStats: [:],
+		hourlyDrainStats: HourlyDrainStats(), appEnergy: [], socJumpEvents: []
+	)
+	let summary = summaryArchive.importSummary
+	expect(summary.contains("充电记录 1 条") && summary.contains("健康样本 2 条"), "导入回执：列出各类计数")
+	expect(summary.contains("充电器 1 只"), "导入回执：充电器计数")
+	let emptyArchive = BatteryHistoryArchive(
+		exportedAt: t0, sessions: [], healthSamples: [], dailyHistory: [],
+		lastSleepDrain: nil, chargerProfiles: [], socSamples: [], powerEvents: [],
+		chargerPowerStats: [:], hourlyDrainStats: HourlyDrainStats(), appEnergy: [], socJumpEvents: []
+	)
+	expect(emptyArchive.importSummary.contains("存档为空"), "导入回执：空档如实说空")
 }
 
 // MARK: - 合成一周不变量（属性测试）

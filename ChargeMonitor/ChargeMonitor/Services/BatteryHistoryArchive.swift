@@ -25,6 +25,18 @@ nonisolated struct BatteryHistoryArchive: Codable {
 	var batterySerialLastSeen: String?
 	var batteryReplacedAt: Date?
 
+	// 导入成功的回执（纯函数，供单测）：恢复后面板数字会突变，
+	// 必须说清"是导入生效"而不是"应用出 bug"——成功也值得一次开口
+	var importSummary: String {
+		var parts: [String] = []
+		if !sessions.isEmpty { parts.append("充电记录 \(sessions.count) 条") }
+		if !healthSamples.isEmpty { parts.append("健康样本 \(healthSamples.count) 条") }
+		if !dailyHistory.isEmpty { parts.append("用电天数 \(dailyHistory.count) 天") }
+		if !chargerProfiles.isEmpty { parts.append("充电器 \(chargerProfiles.count) 只") }
+		guard !parts.isEmpty else { return "存档为空，未导入任何数据" }
+		return "已导入：" + parts.joined(separator: "、")
+	}
+
 	static func encode(_ archive: BatteryHistoryArchive) -> Data? {
 		let encoder = JSONEncoder()
 		encoder.dateEncodingStrategy = .iso8601

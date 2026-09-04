@@ -294,13 +294,15 @@ struct SettingsView: View {
 		alert.addButton(withTitle: "取消")
 		guard alert.runModal() == .alertFirstButtonReturn else { return }
 		historyRecorder.restore(from: archive)
+		// 恢复后面板数字会突变——主动回执说清是导入生效，不是应用出 bug
+		showArchiveAlert(title: "导入完成", body: archive.importSummary, style: .informational)
 	}
 
-	private func showArchiveAlert(title: String, body: String) {
+	private func showArchiveAlert(title: String, body: String, style: NSAlert.Style = .warning) {
 		let alert = NSAlert()
 		alert.messageText = title
 		alert.informativeText = body
-		alert.alertStyle = .warning
+		alert.alertStyle = style
 		alert.addButton(withTitle: "好")
 		alert.runModal()
 	}
