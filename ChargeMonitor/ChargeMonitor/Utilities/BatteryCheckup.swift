@@ -5,6 +5,9 @@ import Foundation
 nonisolated struct BatteryCheckup: Equatable, Sendable {
 	let score: Int
 	let verdict: String
+	// 用了中性估计的分项名：数据读不到时不硬给分，但总分"看起来更确定"——
+	// 冷启动时如实标注，用户知道这个分数有几分成色是估的
+	var estimatedInputs: [String] = []
 	
 	// 评分等级：分档阈值的单一数据源——评语与各处配色（头部/卡片/分享卡）都基于它，
 	// 避免四处各写一份 85/70/55 分档、改一处忘别处导致“同分不同色/评语对不上”
@@ -35,10 +38,23 @@ nonisolated struct BatteryCheckup: Equatable, Sendable {
 
 		// 100% 满分，80%（官方换电参考线）归零
 		let healthScore = clamp(Double(health - 80) / 20 * 55, upper: 55)
+		var estimated: [String] = []
 		// 0 次满分，1000 次（官方标称寿命）归零；读不到给中上估计
-		let cycleScore = cycleCount.map { clamp((1 - Double($0) / 1000) * 25, upper: 25) } ?? 18
+		let cycleScore: Double
+		if let cycles = cycleCount {
+			cycleScore = clamp((1 - Double(cycles) / 1000) * 25, upper: 25)
+		} else {
+			cycleScore = 18
+			estimated.append("循环")
+		}
 		// ≤35°C 满分，45°C 以上归零；读不到给中上估计
-		let tempScore = temperatureC.map { clamp((45 - $0) / 10 * 10, upper: 10) } ?? 7
+		let tempScore: Double
+		if let temp = temperatureC {
+			tempScore = clamp((45 - temp) / 10 * 10, upper: 10)
+		} else {
+			tempScore = 7
+			estimated.append("温度")
+		}
 		// 高电量驻留是电化学应力的直接度量：80%+ 驻留越多越伤电池
 		// （≤20% 给满分，>50% 重扣）；读不到给中性估计
 		let habitScore: Double
@@ -46,10 +62,11 @@ nonisolated struct BatteryCheckup: Equatable, Sendable {
 			habitScore = share > 0.5 ? 5 : (share > 0.2 ? 8 : 10)
 		} else {
 			habitScore = 8
+			estimated.append("驻留")
 		}
 
 		let total = Int((healthScore + cycleScore + tempScore + habitScore).rounded())
-		return BatteryCheckup(score: total, verdict: verdict(for: total))
+		return BatteryCheckup(score: total, verdict: verdict(for: total), estimatedInputs: estimated)
 	}
 	
 	nonisolated static func verdict(for score: Int) -> String {

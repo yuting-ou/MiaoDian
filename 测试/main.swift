@@ -483,6 +483,12 @@ do {
 	// 驻留分档：20%~50% 扣到 8 分，>50% 扣到 5 分
 	expectEqual(BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.3)?.score, 66, "体检：驻留 30% 落 8 分档")
 	expectEqual(BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.6)?.score, 63, "体检：驻留 60% 落 5 分档")
+
+	// 冷启动估计标注：读不到的分项如实记名，不让分数"看起来更确定"
+	let cold = BatteryCheckup.evaluate(healthPercent: 90, cycleCount: nil, temperatureC: nil, highSocDwellShare: nil)
+	expectEqual(cold?.estimatedInputs, ["循环", "温度", "驻留"], "体检估计：三个读不到的分项被标记")
+	let warm = BatteryCheckup.evaluate(healthPercent: 90, cycleCount: 200, temperatureC: 32, highSocDwellShare: 0.1)
+	expect(warm?.estimatedInputs.isEmpty == true, "体检估计：数据齐全不标注")
 }
 
 // MARK: - 插电占比与 DailyUsage 兼容解码

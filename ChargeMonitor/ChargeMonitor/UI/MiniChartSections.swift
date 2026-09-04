@@ -149,12 +149,20 @@ struct BatteryCheckupSection: View {
 						.foregroundStyle(.secondary)
 					Text(checkup.verdict)
 						.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
+					// 冷启动如实标注：这个分数里有几成是数据读不到时的中性估计
+					if !checkup.estimatedInputs.isEmpty {
+						Text("含估计项：\(checkup.estimatedInputs.joined(separator: "、"))")
+							.font(.system(size: 9))
+							.foregroundStyle(.tertiary)
+					}
 				}
-				
+
 				Spacer(minLength: 0)
 			}
 			.padding(.vertical, 1)
-			.help("综合健康度、循环次数、温度与高电量驻留的加权评分")
+			.help(checkup.estimatedInputs.isEmpty
+				? "综合健康度、循环次数、温度与高电量驻留的加权评分"
+				: "综合健康度、循环次数、温度与高电量驻留的加权评分；循环、温度、驻留读不到时按中性值估计（当前含估计项：\(checkup.estimatedInputs.joined(separator: "、"))）")
 		}
 	}
 	
