@@ -683,6 +683,7 @@ struct BatteryPopoverView: View {
 			NSWorkspace.shared.activateFileViewerSelecting([url])
 		} catch {
 			DiagnosticLog.failureOnce("export-report-failed", category: "BatteryPopoverView", "导出报告写入失败：\(error.localizedDescription)")
+			showExportAlert(body: "无法写入报告文件：\(error.localizedDescription)")
 		}
 	}
 	
@@ -736,6 +737,7 @@ struct BatteryPopoverView: View {
 			NSWorkspace.shared.activateFileViewerSelecting([url])
 		} catch {
 			DiagnosticLog.failureOnce("export-csv-failed", category: "BatteryPopoverView", "导出 CSV 写入失败：\(error.localizedDescription)")
+			showExportAlert(body: "无法写入 CSV 文件：\(error.localizedDescription)")
 		}
 	}
 	
@@ -763,6 +765,18 @@ struct BatteryPopoverView: View {
 		))
 		if let url = BatteryShareCardRenderer.writePNG(card) {
 			NSWorkspace.shared.activateFileViewerSelecting([url])
+		} else {
+			showExportAlert(body: "体检卡片写入失败，请查看诊断日志。")
 		}
+	}
+
+	// 导出类操作的失败反馈：静默失败会让用户以为按钮坏了（与存档导入同一审计）
+	private func showExportAlert(body: String) {
+		let alert = NSAlert()
+		alert.messageText = "导出失败"
+		alert.informativeText = body
+		alert.alertStyle = .warning
+		alert.addButton(withTitle: "好")
+		alert.runModal()
 	}
 }
