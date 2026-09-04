@@ -275,12 +275,14 @@ struct HealthTrendSection: View {
 				.foregroundStyle(.tertiary)
 				.padding(.top, 2)
 				
-				// 数据跨度够长且确实在掉时，外推一句寿命预测
-				if let lifespanText {
+				// 数据跨度够长且确实在掉时，外推一句寿命预测；
+				// 悬停披露方法与不确定性——这是全应用最大胆的断言，必须答得上"凭什么"
+				if let lifespanText, let projection {
 					Text(lifespanText)
 						.font(.system(size: 9))
 						.foregroundStyle(.secondary)
 						.padding(.top, 3)
+						.help(UsagePatternAnalyzer.projectionCaveat(spanDays: projection.spanDays))
 				}
 			}
 		}

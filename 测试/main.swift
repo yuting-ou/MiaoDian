@@ -2041,6 +2041,15 @@ do {
 	expectEqual(BatteryMonitor.bluetoothPollInterval(popoverOpen: false, active: 30, idle: 120), 120.0, "自身成本：面板关闭降频到 2 分钟")
 }
 
+// MARK: - 可溯源：寿命预测的方法披露
+
+do {
+	let caveat = UsagePatternAnalyzer.projectionCaveat(spanDays: 92.4)
+	expect(caveat.contains("92 天"), "可溯源：披露外推所用数据跨度")
+	expect(caveat.contains("线性"), "可溯源：披露外推方法")
+	expect(caveat.contains("可能更快或更慢"), "可溯源：披露不确定性，预言降格为估计")
+}
+
 // MARK: - 汇总
 
 print("")

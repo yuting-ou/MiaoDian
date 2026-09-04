@@ -223,6 +223,12 @@ nonisolated enum UsagePatternAnalyzer {
 		return (bestStart, bestStart + windowHours)
 	}
 
+	// 寿命预测的方法披露（纯函数，供单测）：把"预言"降格为"有依据的估计"——
+	// 用户问"你凭什么说 3 个月"时，答案就在悬停里；到期偏差也不算应用失约
+	static func projectionCaveat(spanDays: Double) -> String {
+		"基于最近 \(Int(spanDays.rounded())) 天健康度首尾两点的线性外推；实际老化受温度与充电习惯影响，可能更快或更慢"
+	}
+
 	// MARK: - 日期键
 
 	// 与历史记录同源的 POSIX 公历日期键（dayKey 是落盘主键，必须公历）
