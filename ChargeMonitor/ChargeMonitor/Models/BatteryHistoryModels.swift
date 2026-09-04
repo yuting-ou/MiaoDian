@@ -232,6 +232,28 @@ nonisolated struct HourlyDrainStats: Codable, Equatable, Sendable {
 	}
 }
 
+// 时段温度画像：每小时的历史最高电池温度（°C）。
+// 热暴露看峰值（均值会把午后高温摊平），与时段用电热力图对照，
+// 回答"用电高峰是不是也叠着一天里电池最热的时段"
+nonisolated struct HourlyTempStats: Codable, Equatable, Sendable {
+	// 每小时历史最高温（下标 0~23）；0 = 该小时尚无数据
+	var maxTempByHour: [Double]
+	// 有效累计天数（跨天 +1，样本不足不下结论）
+	var accumulatedDays: Int
+	// 最近一次累计所在的日期键
+	var lastDayKey: String
+
+	init() {
+		self.maxTempByHour = Array(repeating: 0, count: 24)
+		self.accumulatedDays = 0
+		self.lastDayKey = ""
+	}
+
+	func bucket(_ hour: Int) -> Int {
+		min(max(hour, 0), 23)
+	}
+}
+
 // 应用耗电累计：按天记录每个应用处于"高耗电"状态的秒数，回答"到底谁最费电"
 nonisolated struct AppEnergyUsage: Codable, Equatable, Sendable, Identifiable {
 	let bundleId: String

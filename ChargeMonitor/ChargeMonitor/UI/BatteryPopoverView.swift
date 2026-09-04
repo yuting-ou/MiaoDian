@@ -372,7 +372,7 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	// 充电习惯建议（有可用洞察才显示）；先看习惯规律，再看当前充电器是否偏慢
+	// 充电习惯建议（有可用洞察才显示）；先看习惯规律，再看热叠加，最后看当前充电器是否偏慢
 	private var habitInsight: ChargingHabitInsight? {
 		if let base = ChargingHabitAnalyzer.analyze(
 			events: historyRecorder.powerEvents,
@@ -380,6 +380,13 @@ struct BatteryPopoverView: View {
 			snapshot: monitor.snapshot
 		) {
 			return base
+		}
+		// 两个早已在手边的信号拼成一句话：用电高峰叠着电池最热时段
+		if let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(
+			drain: historyRecorder.hourlyDrainStats,
+			temp: historyRecorder.hourlyTempStats
+		) {
+			return ChargingHabitInsight(message: heat, symbol: "thermometer.sun.fill")
 		}
 		return ChargingHabitAnalyzer.analyzeCharger(
 			snapshot: monitor.snapshot,

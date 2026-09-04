@@ -16,6 +16,8 @@ nonisolated struct BatteryHistoryArchive: Codable {
 	var powerEvents: [PowerEvent]
 	var chargerPowerStats: [String: ChargerPowerStats]
 	var hourlyDrainStats: HourlyDrainStats
+	// 温度画像：1.4.0 起新增，旧存档缺此字段解码为 nil（导入时保留当前值）
+	var hourlyTempStats: HourlyTempStats?
 	var appEnergy: [AppEnergyUsage]
 	var socJumpEvents: [SocJumpEvent]
 

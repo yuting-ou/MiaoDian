@@ -89,6 +89,41 @@ nonisolated enum UsagePatternAnalyzer {
 		return averages.firstIndex(of: maxAvg)
 	}
 
+	// MARK: - 时段温度画像
+
+	// 每小时保留历史最高温（热暴露看峰值，均值会把午后高温摊平）；跨天推进有效天数
+	static func accumulatingHourlyTemp(_ stats: HourlyTempStats, hour: Int, celsius: Double, dayKey: String) -> HourlyTempStats {
+		var stats = stats
+		if stats.lastDayKey != dayKey {
+			stats.lastDayKey = dayKey
+			stats.accumulatedDays += 1
+		}
+		let bucket = stats.bucket(hour)
+		if celsius > stats.maxTempByHour[bucket] {
+			stats.maxTempByHour[bucket] = celsius
+		}
+		return stats
+	}
+
+	// 温度 × 时段用电交叉洞察：用电高峰恰好叠着一天里电池最热的时段时，
+	// 高温 + 高负载是最伤电池的组合——两个信号早就在手边，只差拼成一句话
+	static func heatUsageOverlapInsight(
+		drain: HourlyDrainStats,
+		temp: HourlyTempStats,
+		minDays: Int = 3,
+		hotThresholdC: Double = 35
+	) -> String? {
+		guard drain.accumulatedDays >= minDays, temp.accumulatedDays >= minDays else { return nil }
+		guard let peakHour = peakDrainHour(drain) else { return nil }
+		let hourly = temp.maxTempByHour
+		guard let hottest = hourly.enumerated().max(by: { $0.element < $1.element })?.offset,
+			hourly[hottest] >= hotThresholdC
+		else { return nil }
+		// 相邻 1 小时内算重叠（温度峰值常滞后于用电峰值一点）
+		guard abs(peakHour - hottest) <= 1 else { return nil }
+		return String(format: "用电高峰 %d 点恰好叠着电池最热的时段（该时段历史峰值 %.0f°C）——高温加高负载最伤电池，注意散热", peakHour, hourly[hottest])
+	}
+
 	// MARK: - 异常检测
 
 	// 近 7 天日均用电 vs 之前 21 天基线（今天不完整不计入）；

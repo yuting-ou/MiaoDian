@@ -23,6 +23,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 	@Published private(set) var chargerPowerStats: [String: ChargerPowerStats] = [:]
 	// 时段用电：按小时分桶累计的掉电（热力图数据源）
 	@Published private(set) var hourlyDrainStats = HourlyDrainStats()
+	// 时段温度画像：每小时历史最高温，与用电高峰对照出"热叠加"洞察
+	@Published private(set) var hourlyTempStats = HourlyTempStats()
 	// 应用耗电累计：按天记录各应用"高耗电"状态的秒数
 	@Published private(set) var appEnergy: [AppEnergyUsage] = []
 	// 电量跳变事件：电池模式下相邻采样电量突变（电量计失准的表现）
@@ -85,6 +87,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated private static let powerEventsKey = "powerEvents"
 	nonisolated private static let chargerPowerStatsKey = "chargerPowerStats"
 	nonisolated private static let hourlyDrainKey = "hourlyDrainStats"
+	nonisolated private static let hourlyTempKey = "hourlyTempStats"
 	nonisolated private static let appEnergyKey = "appEnergy"
 	nonisolated private static let socJumpEventsKey = "socJumpEvents"
 	// 电池序列号与更换边界：序列号变了 = 现实里换过电池
@@ -153,6 +156,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		powerEvents = load([PowerEvent].self, key: Self.powerEventsKey) ?? []
 		chargerPowerStats = load([String: ChargerPowerStats].self, key: Self.chargerPowerStatsKey) ?? [:]
 		hourlyDrainStats = load(HourlyDrainStats.self, key: Self.hourlyDrainKey) ?? HourlyDrainStats()
+		hourlyTempStats = load(HourlyTempStats.self, key: Self.hourlyTempKey) ?? HourlyTempStats()
 		appEnergy = load([AppEnergyUsage].self, key: Self.appEnergyKey) ?? []
 		socJumpEvents = load([SocJumpEvent].self, key: Self.socJumpEventsKey) ?? []
 		batteryReplacedAt = defaults.object(forKey: Self.batteryReplacedAtKey) as? Date
@@ -204,6 +208,23 @@ final class BatteryHistoryRecorder: ObservableObject {
 		recordPowerEvents(snapshot)
 		accumulateAppEnergy()
 		trackSocJumps(snapshot)
+		accumulateHourlyTemp(snapshot)
+	}
+
+	// 温度画像每帧记入当前小时的峰值；只有真刷新了峰值才落盘（每小时至多几次写）
+	private func accumulateHourlyTemp(_ snapshot: BatterySnapshot) {
+		guard let celsius = snapshot.temperatureC, celsius > 0 else { return }
+		let now = Date()
+		let before = hourlyTempStats
+		hourlyTempStats = UsagePatternAnalyzer.accumulatingHourlyTemp(
+			hourlyTempStats,
+			hour: Calendar.current.component(.hour, from: now),
+			celsius: celsius,
+			dayKey: UsagePatternAnalyzer.dayKeyString(now)
+		)
+		if hourlyTempStats != before {
+			save(hourlyTempStats, key: Self.hourlyTempKey)
+		}
 	}
 
 	// MARK: - 电量计跳变
@@ -933,6 +954,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 			powerEvents: powerEvents,
 			chargerPowerStats: chargerPowerStats,
 			hourlyDrainStats: hourlyDrainStats,
+			hourlyTempStats: hourlyTempStats,
 			appEnergy: appEnergy,
 			socJumpEvents: socJumpEvents
 		)
@@ -950,6 +972,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 		powerEvents = archive.powerEvents
 		chargerPowerStats = archive.chargerPowerStats
 		hourlyDrainStats = archive.hourlyDrainStats
+		// 旧存档没有温度画像时保留当前值，不清零
+		if let tempStats = archive.hourlyTempStats {
+			hourlyTempStats = tempStats
+		}
 		appEnergy = archive.appEnergy
 		socJumpEvents = archive.socJumpEvents
 		// 跳变追踪的基线随旧数据作废，恢复后从当前读数重新积累
@@ -963,6 +989,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		save(powerEvents, key: Self.powerEventsKey)
 		save(chargerPowerStats, key: Self.chargerPowerStatsKey)
 		save(hourlyDrainStats, key: Self.hourlyDrainKey)
+		save(hourlyTempStats, key: Self.hourlyTempKey)
 		save(appEnergy, key: Self.appEnergyKey)
 		save(socJumpEvents, key: Self.socJumpEventsKey)
 		if let record = lastSleepDrain {

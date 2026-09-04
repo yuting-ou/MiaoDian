@@ -1843,6 +1843,53 @@ do {
 	expect(globalText?.contains("平时") == true, "会话认头：同头样本不足退回全局")
 }
 
+// MARK: - 温度 × 时段用电交叉洞察
+
+do {
+	var drain = HourlyDrainStats()
+	var temp = HourlyTempStats()
+	// 3 天：18 点用电最多，18 点也是温度峰值时段
+	for day in 1...3 {
+		let key = "2026-09-0\(day)"
+		drain = UsagePatternAnalyzer.accumulatingHourlyDrain(drain, hour: 18, droppedPercent: 3, dayKey: key)
+		drain = UsagePatternAnalyzer.accumulatingHourlyDrain(drain, hour: 9, droppedPercent: 1, dayKey: key)
+		temp = UsagePatternAnalyzer.accumulatingHourlyTemp(temp, hour: 18, celsius: 38, dayKey: key)
+		temp = UsagePatternAnalyzer.accumulatingHourlyTemp(temp, hour: 9, celsius: 31, dayKey: key)
+	}
+	let insight = UsagePatternAnalyzer.heatUsageOverlapInsight(drain: drain, temp: temp)
+	expect(insight?.contains("18 点") == true, "热叠加洞察：高峰与最热时段重叠时给提示")
+	expect(insight?.contains("散热") == true, "热叠加洞察：文案含建议")
+
+	// 高峰在凉快时段（9 点）不打扰
+	var coolDrain = HourlyDrainStats()
+	for day in 1...3 {
+		coolDrain = UsagePatternAnalyzer.accumulatingHourlyDrain(coolDrain, hour: 9, droppedPercent: 3, dayKey: "2026-09-0\(day)")
+		coolDrain = UsagePatternAnalyzer.accumulatingHourlyDrain(coolDrain, hour: 18, droppedPercent: 1, dayKey: "2026-09-0\(day)")
+	}
+	expect(UsagePatternAnalyzer.heatUsageOverlapInsight(drain: coolDrain, temp: temp) == nil, "热叠加洞察：高峰不在热时段不打扰")
+
+	// 温度未达 35°C 阈值不提示
+	var mildTemp = HourlyTempStats()
+	for day in 1...3 {
+		mildTemp = UsagePatternAnalyzer.accumulatingHourlyTemp(mildTemp, hour: 18, celsius: 32, dayKey: "2026-09-0\(day)")
+	}
+	expect(UsagePatternAnalyzer.heatUsageOverlapInsight(drain: drain, temp: mildTemp) == nil, "热叠加洞察：不够热不提示")
+
+	// 样本不足（1 天）不下结论
+	var fewDrain = HourlyDrainStats()
+	var fewTemp = HourlyTempStats()
+	fewDrain = UsagePatternAnalyzer.accumulatingHourlyDrain(fewDrain, hour: 18, droppedPercent: 3, dayKey: "2026-09-01")
+	fewTemp = UsagePatternAnalyzer.accumulatingHourlyTemp(fewTemp, hour: 18, celsius: 38, dayKey: "2026-09-01")
+	expect(UsagePatternAnalyzer.heatUsageOverlapInsight(drain: fewDrain, temp: fewTemp) == nil, "热叠加洞察：样本不足不下结论")
+
+	// 温度画像按小时保留历史峰值（36 记入后 33 不覆盖）
+	var t = HourlyTempStats()
+	t = UsagePatternAnalyzer.accumulatingHourlyTemp(t, hour: 14, celsius: 36, dayKey: "2026-09-01")
+	t = UsagePatternAnalyzer.accumulatingHourlyTemp(t, hour: 14, celsius: 33, dayKey: "2026-09-02")
+	expect(abs(t.maxTempByHour[14] - 36) < 0.001, "温度画像：每小时保留历史峰值")
+	expectEqual(t.accumulatedDays, 2, "温度画像：跨天推进有效天数")
+}
+
 // MARK: - 汇总
 
 print("")
