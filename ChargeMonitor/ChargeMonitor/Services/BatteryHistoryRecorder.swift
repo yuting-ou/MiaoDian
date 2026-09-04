@@ -30,10 +30,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 电量跳变事件：电池模式下相邻采样电量突变（电量计失准的表现）
 	@Published private(set) var socJumpEvents: [SocJumpEvent] = []
 	
-	// 今天的用电累计；历史末尾不是今天说明今天还没产生数据
+	// 今天的用电累计；时区西行使"今天"的键可能不是数组末尾，按键查找
 	var todayUsage: DailyUsage? {
-		guard let last = dailyHistory.last, last.dayKey == Self.dayKey(Date()) else { return nil }
-		return last
+		dailyHistory.last { $0.dayKey == Self.dayKey(Date()) }
 	}
 	
 	private var activeSession: ChargeSession?
@@ -364,6 +363,18 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 帧间隔超过归因窗口视为睡过：跨睡眠的电量差是夜里慢慢掉/慢慢充的，
 	// 全记到醒来那一帧会把整夜耗电/充电错记成瞬时变化（时段热力图也会错桶），一律不计
 	nonisolated private static let usageAttributionGapSeconds: TimeInterval = 3 * 60
+
+	// 插入新的一天并保持 dayKey 升序：时区西行/时钟回拨会让"今天"的键比已存键更早，
+	// 不排序则封顶 removeFirst 会错删较新的天，报告与柱图的窗口起点也会错乱
+	nonisolated static func insertingDailyUsage(_ history: [DailyUsage], dayKey: String, maxDays: Int) -> [DailyUsage] {
+		var history = history
+		history.append(DailyUsage(dayKey: dayKey))
+		history.sort { $0.dayKey < $1.dayKey }
+		if history.count > maxDays {
+			history.removeFirst(history.count - maxDays)
+		}
+		return history
+	}
 
 	// 一帧快照累计进当日用电：电池模式掉的计入用电，充电时涨的计入充入；
 	// 反向变化不计（电池模式下回升多是校准波动，插电时掉电不算用户用电）；
@@ -792,14 +803,12 @@ final class BatteryHistoryRecorder: ObservableObject {
 		let key = Self.dayKey(now)
 		var history = dailyHistory
 		var structuralChange = false
-		if history.last?.dayKey != key {
-			history.append(DailyUsage(dayKey: key))
-			if history.count > Self.maxDailyHistory {
-				history.removeFirst(history.count - Self.maxDailyHistory)
-			}
+		if !history.contains(where: { $0.dayKey == key }) {
+			history = Self.insertingDailyUsage(history, dayKey: key, maxDays: Self.maxDailyHistory)
 			structuralChange = true
 		}
-		let before = history[history.count - 1]
+		guard let dayIndex = history.firstIndex(where: { $0.dayKey == key }) else { return }
+		let before = history[dayIndex]
 		let sampleGap = lastUsageSampleDate.map { now.timeIntervalSince($0) }
 		let usage = Self.accumulatingDailyUsage(
 			before,
@@ -832,7 +841,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		if usage.drainedPercent != before.drainedPercent || usage.chargedPercent != before.chargedPercent {
 			structuralChange = true
 		}
-		history[history.count - 1] = usage
+		history[dayIndex] = usage
 		
 		guard history != dailyHistory else { return }
 		dailyHistory = history

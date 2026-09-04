@@ -1951,6 +1951,32 @@ do {
 	expect(UsagePatternAnalyzer.peakActivityWindow(secondsByHour: []) == nil, "时段归因：空数据不崩")
 }
 
+// MARK: - 时钟异常下的游标键降级（时间透镜）
+
+do {
+	// dailyHistory 插入保持升序：时区西行使"今天"的键比已存键更早
+	var history = [DailyUsage(dayKey: "2026-09-03"), DailyUsage(dayKey: "2026-09-04")]
+	history = BatteryHistoryRecorder.insertingDailyUsage(history, dayKey: "2026-09-02", maxDays: 90)
+	expectEqual(history.map(\.dayKey), ["2026-09-02", "2026-09-03", "2026-09-04"], "时钟异常：日键插入保持升序")
+
+	// 封顶删的是最旧而非末尾（旧实现 removeFirst 前不排序会错删）
+	let trimmed = BatteryHistoryRecorder.insertingDailyUsage(history, dayKey: "2026-09-05", maxDays: 3)
+	expectEqual(trimmed.map(\.dayKey), ["2026-09-03", "2026-09-04", "2026-09-05"], "时钟异常：封顶删最旧")
+
+	// 周报标记在未来（发通知时时钟被调快）→ 视为失效，不永久静默
+	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(48 * 3600), due: t0.addingTimeInterval(-2 * 3600), now: t0), "时钟异常：未来标记不静默周报")
+	// 本期已发（lastSent 晚于 due）不重发
+	expect(!BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(-1800), due: t0.addingTimeInterval(-3600), now: t0), "时钟异常：本期已发不重发")
+	// 新一期到点正常发
+	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(-9 * 86400), due: t0.addingTimeInterval(-3600), now: t0), "时钟异常：新一期到点正常发")
+	expect(BatteryAlertController.digestSendAllowed(lastSent: nil, due: t0, now: t0), "时钟异常：无标记可发")
+
+	// 校准冷却：未来标记失效、窗口内生效、期满放行
+	expect(!BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(86400), now: t0, cooldown: 30 * 86400), "时钟异常：未来冷却标记失效")
+	expect(BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(-86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却窗口内仍生效")
+	expect(!BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(-40 * 86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却期满放行")
+}
+
 // MARK: - 汇总
 
 print("")

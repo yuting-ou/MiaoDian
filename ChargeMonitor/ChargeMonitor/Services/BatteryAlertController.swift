@@ -491,10 +491,11 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let count = UsagePatternAnalyzer.socJumpCount(events, withinDays: 30, now: now)
 		guard UsagePatternAnalyzer.gaugeNeedsCalibration(jumpCount: count) else { return }
 		// 先记账再发：投递失败也不靠重复轰炸补偿
-		if let lastAlerted = defaults.object(forKey: Self.gaugeCalibrationAlertKey) as? Date,
-			now.timeIntervalSince(lastAlerted) < Self.gaugeCalibrationCooldownSeconds {
-			return
-		}
+		guard !Self.gaugeCooldownActive(
+			lastAlerted: defaults.object(forKey: Self.gaugeCalibrationAlertKey) as? Date,
+			now: now,
+			cooldown: Self.gaugeCalibrationCooldownSeconds
+		) else { return }
 		defaults.set(now, forKey: Self.gaugeCalibrationAlertKey)
 		send(
 			id: "gauge-calibration",
@@ -503,16 +504,32 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		)
 	}
 
+	// 周报/月报发送许可（纯函数，供单测）：上次发送早于本次到点时间才发。
+	// 但标记若离谱地落在未来（>24h——发通知时系统时钟被调快过），视为失效：
+	// 否则时钟回拨后，这一期小结会被一个”来自未来的标记”永久静默
+	nonisolated static func digestSendAllowed(lastSent: Date?, due: Date, now: Date, futureTolerance: TimeInterval = 24 * 3600) -> Bool {
+		guard let lastSent else { return true }
+		if lastSent.timeIntervalSince(now) > futureTolerance { return true }
+		return lastSent < due
+	}
+
+	// 电量计校准冷却同理：未来的冷却标记（时钟调快留下的）视为失效
+	nonisolated static func gaugeCooldownActive(lastAlerted: Date?, now: Date, cooldown: TimeInterval) -> Bool {
+		guard let lastAlerted else { return false }
+		guard now >= lastAlerted else { return false }
+		return now.timeIntervalSince(lastAlerted) < cooldown
+	}
+
 	// 每周电池周报：周日 20 点后第一次有机会时发；错过就顺延到下次启动
 	private func checkWeeklyDigest() {
 		guard isEnabled, configuration.enabledOptions.contains(.weeklyDigest) else { return }
 		guard let due = Self.mostRecentDigestDue(before: Date()) else { return }
-		// 首次运行只记个时间标记不发：刚装上就报“本周”没意义
+		// 首次运行只记个时间标记不发：刚装上就报”本周”没意义
 		guard let lastSent = defaults.object(forKey: Self.weeklyDigestDateKey) as? Date else {
 			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
 			return
 		}
-		guard lastSent < due, let recorder = historyRecorder else { return }
+		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
 		defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
 		
 		let weekStart = due.addingTimeInterval(-7 * 86400)
@@ -564,7 +581,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
 			return
 		}
-		guard lastSent < due, let recorder = historyRecorder else { return }
+		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
 		defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
 
 		let body = Self.monthlyDigestBody(
