@@ -109,31 +109,37 @@ nonisolated enum UsagePatternAnalyzer {
 
 	// MARK: - 充电速度对比
 
-	// 本次充电 vs 历史平均充速（%/分钟）；时长太短、涨得太少或样本不足不给结论
+	// 本次充电 vs 历史平均充速（%/分钟）；时长太短、涨得太少或样本不足不给结论。
+	// 会话认得出充电器时优先和"同一只头"比——不同头的速度本就不一样，混着比没有意义
 	static func chargeSpeedComparison(current: ChargeSession, history: [ChargeSession]) -> String? {
 		let gained = current.endPercent - current.startPercent
 		guard current.durationMinutes >= 5, gained >= 10 else { return nil }
 		let speed = Double(gained) / Double(current.durationMinutes)
 
-		let others = history.filter {
+		let eligible = history.filter {
 			$0.startDate != current.startDate
 				&& $0.durationMinutes >= 5
 				&& ($0.endPercent - $0.startPercent) >= 10
 		}
-		guard others.count >= 2 else { return nil }
+		let sameCharger: [ChargeSession] = current.chargerKey.map { key in
+			eligible.filter { $0.chargerKey == key }
+		} ?? []
+		let pool = sameCharger.count >= 2 ? sameCharger : eligible
+		guard pool.count >= 2 else { return nil }
 
-		let avgSpeed = others.reduce(0.0) {
+		let avgSpeed = pool.reduce(0.0) {
 			$0 + Double($1.endPercent - $1.startPercent) / Double($1.durationMinutes)
-		} / Double(others.count)
+		} / Double(pool.count)
 
+		let scope = sameCharger.count >= 2 ? "用这只充电器" : "平时"
 		let ratio = avgSpeed > 0 ? speed / avgSpeed : 1
 		if ratio >= 1.2 {
-			return String(format: "本次充速 %.1f%%/分钟，比平时快约 %.0f%%", speed, (ratio - 1) * 100)
+			return String(format: "本次充速 %.1f%%/分钟，比\(scope)快约 %.0f%%", speed, (ratio - 1) * 100)
 		}
 		if ratio <= 0.8 {
-			return String(format: "本次充速 %.1f%%/分钟，比平时慢约 %.0f%%", speed, (1 - ratio) * 100)
+			return String(format: "本次充速 %.1f%%/分钟，比\(scope)慢约 %.0f%%", speed, (1 - ratio) * 100)
 		}
-		return String(format: "本次充速 %.1f%%/分钟，与平时相当", speed)
+		return String(format: "本次充速 %.1f%%/分钟，与\(scope)相当", speed)
 	}
 
 	// MARK: - 充电阶段

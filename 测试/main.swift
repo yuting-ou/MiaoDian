@@ -1792,6 +1792,57 @@ do {
 	expect(signed.first?.tierSignature?.contains("20000V5000A") == true, "身份键：新档保存签名")
 }
 
+// MARK: - 电池更换检测与趋势边界
+
+do {
+	// 纯判定：首次只记基准；读不到不误报；变了才算更换
+	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: nil, current: "S1"), "电池更换：首次运行只记基准")
+	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: "S1"), "电池更换：序列号未变不报")
+	expect(BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: "S2"), "电池更换：序列号变化报更换")
+	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "", current: "S2"), "电池更换：空序列号不误报")
+	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: nil), "电池更换：读不到当前序列号不误报")
+
+	// 趋势过滤：更换边界前的样本全部丢弃
+	let calendar = Calendar(identifier: .gregorian)
+	let day1 = calendar.date(from: DateComponents(year: 2026, month: 1, day: 1))!
+	let day200 = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20))!
+	let replacedAt = calendar.date(from: DateComponents(year: 2026, month: 7, day: 1))!
+	let samples = [
+		HealthSample(date: day1, healthPercent: 88, cycleCount: 500),
+		HealthSample(date: day200, healthPercent: 100, cycleCount: 10)
+	]
+	let filtered = BatteryHistoryRecorder.filteringHealthSamplesForTrend(samples, replacedAt: replacedAt)
+	expectEqual(filtered.count, 1, "电池更换：趋势只看更换后")
+	expectEqual(filtered.first?.healthPercent, 100, "电池更换：基线重置为新电池")
+	expectEqual(BatteryHistoryRecorder.filteringHealthSamplesForTrend(samples, replacedAt: nil).count, 2, "电池更换：无边界保留全部")
+}
+
+// MARK: - 会话关联充电器
+
+do {
+	// 旧档没有 chargerKey 字段，解码为 nil 不炸
+	let legacyJSON = #"[{"startDate":0,"endDate":300,"startPercent":40,"endPercent":55,"peakInputW":60}]"#.data(using: .utf8)!
+	let decoder = JSONDecoder()
+	decoder.dateDecodingStrategy = .secondsSince1970
+	let legacy = try decoder.decode([ChargeSession].self, from: legacyJSON)
+	expect(legacy.first?.chargerKey == nil, "会话认头：旧档缺字段解码为 nil")
+
+	// 同头对比：两只头速度不同，混着比会骗人——认得出头时只和同一只比
+	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: "anker")
+	let ankerPast = [
+		ChargeSession(startDate: t0.addingTimeInterval(-7200), endDate: t0.addingTimeInterval(-3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: "anker"),
+		ChargeSession(startDate: t0.addingTimeInterval(-14400), endDate: t0.addingTimeInterval(-10800), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: "anker")
+	]
+	let appleFast = ChargeSession(startDate: t0.addingTimeInterval(-18000), endDate: t0.addingTimeInterval(-16200), startPercent: 20, endPercent: 80, peakInputW: 96, chargerKey: "apple")
+	// 同头样本足够：措辞是"用这只充电器"，不被苹果头的快样本拉偏
+	let sameChargerText = UsagePatternAnalyzer.chargeSpeedComparison(current: current, history: ankerPast + [appleFast])
+	expect(sameChargerText?.contains("用这只充电器") == true, "会话认头：优先与同一只充电器对比")
+	expect(sameChargerText?.contains("相当") == true, "会话认头：同头同速判相当")
+	// 同头样本不足：退回全局对比，措辞"平时"
+	let globalText = UsagePatternAnalyzer.chargeSpeedComparison(current: current, history: [appleFast, ankerPast[0]])
+	expect(globalText?.contains("平时") == true, "会话认头：同头样本不足退回全局")
+}
+
 // MARK: - 汇总
 
 print("")

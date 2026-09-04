@@ -19,7 +19,13 @@ struct ChargeCurveWindowHost: View {
 	var body: some View {
 		if let date = selection.startDate,
 		   let session = historyRecorder.recentSessions.first(where: { $0.startDate == date }) {
-			ChargeCurveDetailView(session: session, history: historyRecorder.recentSessions)
+			ChargeCurveDetailView(
+				session: session,
+				history: historyRecorder.recentSessions,
+				chargerName: session.chargerKey.flatMap { key in
+					historyRecorder.chargerProfiles.first { $0.key == key }?.displayName
+				}
+			)
 		} else {
 			ChargeCurveEmptyView()
 		}
@@ -54,6 +60,8 @@ struct ChargeCurveDetailView: View {
 	let session: ChargeSession
 	// 全部会话（用于速度对比；缺省空数组则不显示对比）
 	var history: [ChargeSession] = []
+	// 这次充电用的充电器展示名（会话认得出时显示）
+	var chargerName: String? = nil
 
 	@Environment(\.dismiss) private var dismiss
 
@@ -118,9 +126,12 @@ struct ChargeCurveDetailView: View {
 		}
 	}
 
-	// 起止电量 · 时长 · 峰值功率 · 时间，一行看完
+	// 起止电量 · 时长 · 充电器 · 峰值功率 · 时间，一行看完
 	private var summaryText: String {
 		var parts = ["\(session.startPercent)% → \(session.endPercent)%", "\(DurationFormatter.chinese(minutes: session.durationMinutes))"]
+		if let chargerName, !chargerName.isEmpty {
+			parts.append(chargerName)
+		}
 		if session.peakInputW >= 1 {
 			parts.append(String(format: "峰值%.0fW", session.peakInputW))
 		}

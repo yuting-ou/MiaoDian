@@ -170,6 +170,7 @@ struct BatteryReportBuilder {
 		case .chargedFull: return "充满电"
 		case .sleep: return "进入睡眠"
 		case .wake: return "唤醒"
+		case .batteryReplaced: return "更换电池"
 		}
 	}
 	

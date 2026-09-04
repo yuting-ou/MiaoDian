@@ -51,6 +51,7 @@ struct PowerEventTimelineSection: View {
 		case .chargedFull: return ("battery.100percent.bolt", .green, "充满电")
 		case .sleep: return ("moon.fill", .indigo, "进入睡眠")
 		case .wake: return ("sun.max.fill", .yellow, "唤醒")
+		case .batteryReplaced: return ("wrench.and.screwdriver.fill", .teal, "电池更换")
 		}
 	}
 	

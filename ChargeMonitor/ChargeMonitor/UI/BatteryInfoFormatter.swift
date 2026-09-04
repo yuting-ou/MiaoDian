@@ -413,14 +413,19 @@ struct BatteryInfoFormatter {
 		guard enabledOptions.contains(.sleepDrainReport) else { return nil }
 		guard let record = sleepDrain, record.droppedPercent >= 1 else { return nil }
 		guard Date().timeIntervalSince(record.wakeDate) < 24 * 3600 else { return nil }
-		
+
 		// 跟提醒同一套判定：掉得偏快的把数字染橙警示
 		let isHeavy = record.durationMinutes >= 60 && record.dropPerHour >= 2
+		var value = String(format: "合盖%@ 掉了%d%%（%.1f%%/小时）", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
+		// 元凶留档后，面板也能复述"谁在阻止睡眠"
+		if let culprits = record.culpritNames, !culprits.isEmpty {
+			value += "（元凶：\(culprits.prefix(2).joined(separator: "、"))\(culprits.count > 2 ? "等" : "")）"
+		}
 		return BatteryInfoItem(
 			group: .battery,
 			symbol: "moon.zzz.fill",
 			label: "睡眠掉电",
-			value: String(format: "合盖%@ 掉了%d%%（%.1f%%/小时）", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour),
+			value: value,
 			iconTint: .indigo,
 			valueTint: isHeavy ? .orange : nil
 		)

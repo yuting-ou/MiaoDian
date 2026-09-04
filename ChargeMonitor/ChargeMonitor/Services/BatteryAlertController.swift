@@ -432,18 +432,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		// 先记账再发：哪怕通知投递失败，也不靠重复轰炸来“补偿”
 		defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
 
-		// 点名正在阻止睡眠的进程（若有）：合盖想睡却睡不下去，元凶通常就在断言列表里。
-		// pmset 子进程读取有耗时，放后台执行后再回主线程发通知
-		Task { [weak self] in
-			let reader = SleepAssertionReader()
-			let owners = await Task.detached(priority: .utility) { reader.assertionOwnerNames() }.value
-			guard let self else { return }
-			var body = String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
-			if !owners.isEmpty {
-				body += "\n正在阻止睡眠：\(owners.joined(separator: "、"))"
-			}
-			self.send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
+		// 元凶名单由历史记录器在醒来时抓取并留档，这里直接复述
+		var body = String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
+		if let owners = record.culpritNames, !owners.isEmpty {
+			body += "\n正在阻止睡眠：\(owners.joined(separator: "、"))"
 		}
+		send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
 	}
 	
 	// 纯判定，供单测直接调：

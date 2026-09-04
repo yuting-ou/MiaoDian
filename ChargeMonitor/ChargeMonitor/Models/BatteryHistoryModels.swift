@@ -44,9 +44,11 @@ nonisolated struct ChargeSession: Codable, Equatable, Identifiable, Sendable {
 	var peakInputW: Double
 	// 电量随时间的曲线；旧数据没有这字段，用可选兼容解码
 	var curve: [ChargePoint]? = nil
-	
+	// 这次充电用的充电器身份键（旧档无此字段，解码为 nil）
+	var chargerKey: String? = nil
+
 	var id: Date { startDate }
-	
+
 	var durationMinutes: Int {
 		max(1, Int(endDate.timeIntervalSince(startDate) / 60))
 	}
@@ -127,13 +129,14 @@ nonisolated struct SOCSample: Codable, Equatable, Sendable {
 	let isCharging: Bool
 }
 
-// 电源事件：插拔电、充满、睡眠/唤醒的时间线记录
+// 电源事件：插拔电、充满、睡眠/唤醒、电池更换的时间线记录
 nonisolated enum PowerEventKind: String, Codable, Sendable {
 	case pluggedIn
 	case unplugged
 	case chargedFull
 	case sleep
 	case wake
+	case batteryReplaced
 }
 
 nonisolated struct PowerEvent: Codable, Equatable, Identifiable, Sendable {
@@ -149,6 +152,8 @@ nonisolated struct SleepDrainRecord: Codable, Equatable, Sendable {
 	let wakeDate: Date
 	let startPercent: Int
 	let endPercent: Int
+	// 醒来时正在持有"阻止系统睡眠"断言的进程名（旧档无此字段）
+	var culpritNames: [String]? = nil
 	
 	var durationMinutes: Int {
 		max(1, Int(wakeDate.timeIntervalSince(sleepDate) / 60))

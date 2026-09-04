@@ -422,7 +422,8 @@ struct BatteryPopoverView: View {
 	private func healthTrendCard(_ configuration: AppConfiguration, showsHealthCurve: Bool) -> some View {
 		if configuration.enabledOptions.contains(.healthTrend), showsHealthCurve {
 			HealthTrendSection(
-				samples: historyRecorder.healthSamples,
+				// 只画电池更换之后的样本：换电池前的旧曲线与新电池不可比
+				samples: historyRecorder.trendHealthSamples,
 				isCollapsed: isCardCollapsed(.healthTrend),
 				onToggle: { toggleCard(.healthTrend) }
 			)

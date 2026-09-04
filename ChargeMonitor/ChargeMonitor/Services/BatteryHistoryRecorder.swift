@@ -59,6 +59,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 	private var lastAppEnergySave = Date.distantPast
 	// 跳变检测用：电池模式下上一次采样的电量与时刻（充电/插电即重置）
 	private var lastSocSample: (date: Date, percent: Int)?
+	// 最近一次检测到电池更换的时刻（序列号变化）；nil = 从未换过
+	private var batteryReplacedAt: Date?
 	// monitor 引用：应用耗电累计要读它的"面板是否打开"与当前高耗电列表
 	private let monitor: BatteryMonitor
 	private var cancellables: Set<AnyCancellable> = []
@@ -85,6 +87,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated private static let hourlyDrainKey = "hourlyDrainStats"
 	nonisolated private static let appEnergyKey = "appEnergy"
 	nonisolated private static let socJumpEventsKey = "socJumpEvents"
+	// 电池序列号与更换边界：序列号变了 = 现实里换过电池
+	nonisolated private static let batterySerialKey = "batterySerialLastSeen"
+	nonisolated private static let batteryReplacedAtKey = "batteryReplacedAt"
 	nonisolated private static let maxSessions = 20
 	nonisolated private static let maxHealthSamples = 400
 	// 用电历史保留 90 天：七天柱图只看末尾 7 天，日历热力图需要更长跨度
@@ -150,6 +155,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 		hourlyDrainStats = load(HourlyDrainStats.self, key: Self.hourlyDrainKey) ?? HourlyDrainStats()
 		appEnergy = load([AppEnergyUsage].self, key: Self.appEnergyKey) ?? []
 		socJumpEvents = load([SocJumpEvent].self, key: Self.socJumpEventsKey) ?? []
+		batteryReplacedAt = defaults.object(forKey: Self.batteryReplacedAtKey) as? Date
+		detectBatterySwap()
 		// 监听系统睡眠/唤醒，统计合盖期间掉了多少电
 		let workspaceCenter = NSWorkspace.shared.notificationCenter
 		workspaceCenter.addObserver(self, selector: #selector(handleWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
@@ -163,11 +170,23 @@ final class BatteryHistoryRecorder: ObservableObject {
 			.store(in: &cancellables)
 	}
 	
+	// 电池更换事件边界：换电池后旧趋势与新读数不可比，健康趋势/预测只看更换之后的样本
+	var trendHealthSamples: [HealthSample] {
+		Self.filteringHealthSamplesForTrend(healthSamples, replacedAt: batteryReplacedAt)
+	}
+
+	// 纯函数，供单测直测：更换边界前的样本全部丢弃
+	nonisolated static func filteringHealthSamplesForTrend(_ samples: [HealthSample], replacedAt: Date?) -> [HealthSample] {
+		guard let replacedAt else { return samples }
+		return samples.filter { $0.date >= replacedAt }
+	}
+
 	// 健康趋势：最早一笔和最新一笔的对比（跨度至少 1 天才有意义）
 	var healthTrend: (earliest: HealthSample, latest: HealthSample)? {
+		let samples = trendHealthSamples
 		guard
-			let earliest = healthSamples.first,
-			let latest = healthSamples.last,
+			let earliest = samples.first,
+			let latest = samples.last,
 			latest.date.timeIntervalSince(earliest.date) >= 24 * 3600
 		else { return nil }
 		return (earliest, latest)
@@ -175,8 +194,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 	
 	private func process(_ snapshot: BatterySnapshot) {
 		finalizeSleepDrainIfNeeded(snapshot)
-		updateChargeSession(snapshot)
+		// 先认充电器再开会话：新会话要带上"是谁充的"身份键
 		updateChargerProfile(snapshot)
+		updateChargeSession(snapshot)
 		accumulateChargerPower(snapshot)
 		recordDailyHealth(snapshot)
 		updateDailyUsage(snapshot)
@@ -377,6 +397,28 @@ final class BatteryHistoryRecorder: ObservableObject {
 		return SleepDrainRecord(sleepDate: sleepDate, wakeDate: wakeDate, startPercent: startPercent, endPercent: endPercent)
 	}
 	
+	// MARK: - 电池更换检测
+
+	// 序列号变了 = 现实里换过电池：记一条电源事件作为趋势边界，
+	// 否则健康曲线会凭空"反弹"、寿命预测拿旧电池的趋势套新电池
+	private func detectBatterySwap() {
+		guard let serial = monitor.batteryIdentity?.serialNumber, !serial.isEmpty else { return }
+		let stored = defaults.string(forKey: Self.batterySerialKey)
+		defaults.set(serial, forKey: Self.batterySerialKey)
+		guard Self.shouldFlagBatterySwap(stored: stored, current: serial) else { return }
+		let now = Date()
+		batteryReplacedAt = now
+		defaults.set(now, forKey: Self.batteryReplacedAtKey)
+		powerEvents = Self.appendingPowerEvent(powerEvents, kind: .batteryReplaced, now: now)
+		save(powerEvents, key: Self.powerEventsKey)
+	}
+
+	// 纯判定（供单测）：首次运行只记基准；读不到序列号不误报；变了才算更换
+	nonisolated static func shouldFlagBatterySwap(stored: String?, current: String?) -> Bool {
+		guard let stored, !stored.isEmpty, let current, !current.isEmpty else { return false }
+		return stored != current
+	}
+
 	// MARK: - 充电记录
 	
 	private func updateChargeSession(_ snapshot: BatterySnapshot) {
@@ -400,6 +442,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 				session.endDate = Date()
 				session.endPercent = percent
 				session.peakInputW = max(session.peakInputW, inputW)
+				// 首帧可能还没认出充电器（无名头要等几秒），认出来后补记
+				if session.chargerKey == nil { session.chargerKey = activeChargerKey }
 				// 电量变化时记一个曲线点，事后能看出这次充电是先快后慢还是全程稳定
 				if percentChanged, (session.curve?.count ?? 0) < Self.maxCurvePoints {
 					var curve = session.curve ?? []
@@ -421,7 +465,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 					startPercent: percent,
 					endPercent: percent,
 					peakInputW: inputW,
-					curve: [ChargePoint(minuteOffset: 0, percent: percent)]
+					curve: [ChargePoint(minuteOffset: 0, percent: percent)],
+					chargerKey: activeChargerKey
 				)
 				activeSession = session
 				persistActiveSession(session)
@@ -517,6 +562,23 @@ final class BatteryHistoryRecorder: ObservableObject {
 		) else { return }
 		lastSleepDrain = record
 		save(record, key: Self.sleepDrainKey)
+		fetchSleepCulprits(for: record)
+	}
+
+	// 醒来结算后异步抓取"谁在持有阻止睡眠断言"，回填进记录——
+	// 通知、面板、报告都能复述元凶，而不是只在通知里闪现一次
+	private func fetchSleepCulprits(for record: SleepDrainRecord) {
+		let reader = SleepAssertionReader()
+		Task { [weak self] in
+			let owners = await Task.detached(priority: .utility) { reader.assertionOwnerNames() }.value
+			guard let self, !owners.isEmpty else { return }
+			// 期间可能又睡了一觉，只回填还是"那一觉"的记录
+			guard self.lastSleepDrain?.sleepDate == record.sleepDate else { return }
+			var updated = record
+			updated.culpritNames = owners
+			self.lastSleepDrain = updated
+			self.save(updated, key: Self.sleepDrainKey)
+		}
 	}
 	
 	// 功率统计只保留仍建档的充电器（纯函数，单测直测）
