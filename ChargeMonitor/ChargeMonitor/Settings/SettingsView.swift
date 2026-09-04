@@ -65,6 +65,8 @@ struct SettingsView: View {
 			Label("数据存档", systemImage: "externaldrive")
 		}
 
+		chargerSection
+
 		Section {
 			aboutRow
 		} header: {
@@ -128,6 +130,59 @@ struct SettingsView: View {
 
 	private var appVersion: String {
 		Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+	}
+
+	// MARK: - 充电器命名
+
+	// 系统只认得苹果原厂头，第三方氮化镓大多只报额定瓦数——
+	// 让用户给认不出的头认领名字，面板/报告/慢充洞察立刻说人话
+	@ViewBuilder
+	private var chargerSection: some View {
+		Section {
+			if historyRecorder.chargerProfiles.isEmpty {
+				Text("还没有见过充电器。插上电源后，这里会列出每只充电器，给认不出的起个名字。")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+			} else {
+				ForEach(historyRecorder.chargerProfiles.sorted { $0.lastSeen > $1.lastSeen }, id: \.key) { profile in
+					chargerRow(profile)
+				}
+			}
+		} header: {
+			Label("充电器", systemImage: "powerplug")
+		}
+	}
+
+	private func chargerRow(_ profile: ChargerProfile) -> some View {
+		VStack(alignment: .leading, spacing: 5) {
+			HStack {
+				Text(profile.displayName)
+					.font(.system(size: 13, weight: .medium))
+				Spacer()
+				Text("见过 \(profile.connectCount) 次")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+			}
+			TextField("起个名字，如「Anker 65W · 桌面」", text: customNameBinding(profile.key))
+			.font(.system(size: 12))
+			if profile.name.isEmpty {
+				Text("系统未识别出名称（额定 \(profile.ratedWatts.map(String.init) ?? "未知")W），命名后面板与报告都会用这个名字")
+					.font(.system(size: 10))
+					.foregroundStyle(.tertiary)
+			} else if profile.customName?.isEmpty ?? true {
+				Text("系统识别：\(profile.name)")
+					.font(.system(size: 10))
+					.foregroundStyle(.tertiary)
+			}
+		}
+		.padding(.vertical, 3)
+	}
+
+	private func customNameBinding(_ key: String) -> Binding<String> {
+		Binding(
+			get: { historyRecorder.chargerProfiles.first { $0.key == key }?.customName ?? "" },
+			set: { historyRecorder.setChargerCustomName(key: key, customName: $0) }
+		)
 	}
 
 	// MARK: - 数值阈值（数据驱动：标题/候选值/单位/键路径一处一张表）

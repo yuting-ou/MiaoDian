@@ -253,13 +253,20 @@ struct BatteryInfoFormatter {
 	}
 	
 	// 充电器档案：认识的充电器打个招呼，第一次见的标出来；
+	// 有名字（用户起的或系统识别的）先亮名字，认不出的标"未命名"引导去设置认领；
 	// 有历史统计时附上"平均协商功率"，疑似慢充染橙提醒可能是线材/接口问题
 	private var chargerProfileItem: BatteryInfoItem? {
 		guard enabledOptions.contains(.chargerProfile) else { return nil }
 		guard snapshot.powerSource == .powerAdapter, let profile = chargerProfile else { return nil }
 
 		let isNew = profile.connectCount <= 1
-		var value = isNew ? "新面孔 · 第一次见" : "老朋友 · 见过 \(profile.connectCount) 次"
+		let isUnnamed = profile.name.isEmpty && (profile.customName?.isEmpty ?? true)
+		var value: String
+		if isUnnamed {
+			value = isNew ? "未命名 · 第一次见" : "未命名 · 见过 \(profile.connectCount) 次"
+		} else {
+			value = "\(profile.displayName) · \(isNew ? "第一次见" : "见过 \(profile.connectCount) 次")"
+		}
 		let tint: Color? = isNew ? .orange : .green
 		var valueTint: Color? = nil
 
@@ -276,7 +283,8 @@ struct BatteryInfoFormatter {
 			label: "充电器",
 			value: value,
 			iconTint: tint,
-			valueTint: valueTint
+			valueTint: valueTint,
+			helpText: isUnnamed ? "系统认不出这只充电器，可在设置 → 充电器里给它起个名字" : nil
 		)
 	}
 	

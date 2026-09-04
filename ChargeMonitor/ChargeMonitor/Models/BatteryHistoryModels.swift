@@ -163,6 +163,8 @@ nonisolated struct SleepDrainRecord: Codable, Equatable, Sendable {
 }
 
 // 充电器档案：记住见过的充电器，插上时能认出老朋友还是新面孔
+// 系统只认得苹果原厂头——第三方氮化镓大多只报额定瓦数，
+// 所以允许用户给认不出的头自己起名字（customName），下游功能立刻说人话
 nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	let key: String
 	var name: String
@@ -170,6 +172,16 @@ nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	let firstSeen: Date
 	var lastSeen: Date
 	var connectCount: Int
+	// 用户起的名字；系统识别不了时由用户认领，优先于 name 展示
+	var customName: String?
+
+	// 展示名：用户命名 > 系统识别名 > 额定瓦数兜底
+	var displayName: String {
+		if let customName, !customName.isEmpty { return customName }
+		if !name.isEmpty { return name }
+		if let ratedWatts, ratedWatts > 0 { return "\(ratedWatts)W 充电器" }
+		return "充电器"
+	}
 }
 
 // 充电器/线材质量诊断：按充电器累计多次充电的协商功率，识别"协商功率长期低于额定"的劣质线/口

@@ -98,7 +98,7 @@ nonisolated enum ChargingHabitAnalyzer {
 
 		return ChargingHabitInsight(
 			message: String(format: "当前协商仅 %.0fW（充电器额定 %dW），偏慢；你之前用过的 %@（%@）能充得更快",
-							negotiated, rated, faster.name, "\(fasterRated)W"),
+							negotiated, rated, faster.displayName, "\(fasterRated)W"),
 			symbol: "bolt.badge.clock"
 		)
 	}

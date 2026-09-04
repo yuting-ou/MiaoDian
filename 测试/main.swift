@@ -397,11 +397,24 @@ do {
 	s.isCharging = true
 	let newcomer = ChargerProfile(key: "a|b|65", name: "65W 氮化镓", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 1)
 	let items = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, chargerProfile: newcomer).makeItems()
-	expectEqual(items.first { $0.label == "充电器" }?.value, "新面孔 · 第一次见", "充电器档案：第一次见标新面孔")
-	
+	expectEqual(items.first { $0.label == "充电器" }?.value, "65W 氮化镓 · 第一次见", "充电器档案：第一次见亮名字标新")
+
 	let regular = ChargerProfile(key: "a|b|65", name: "65W 氮化镓", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 12)
 	let items2 = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, chargerProfile: regular).makeItems()
-	expectEqual(items2.first { $0.label == "充电器" }?.value, "老朋友 · 见过 12 次", "充电器档案：见过多次算老朋友")
+	expectEqual(items2.first { $0.label == "充电器" }?.value, "65W 氮化镓 · 见过 12 次", "充电器档案：见过多次亮名字")
+
+	// 系统认不出的头（name 空）：标"未命名"并给命名引导
+	let anonymous = ChargerProfile(key: "||65", name: "", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 3)
+	let items3 = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, chargerProfile: anonymous).makeItems()
+	let anonRow = items3.first { $0.label == "充电器" }
+	expectEqual(anonRow?.value, "未命名 · 见过 3 次", "充电器档案：认不出标未命名")
+	expect(anonRow?.helpText?.contains("设置") == true, "充电器档案：未命名带引导提示")
+
+	// 用户认领后：面板直接说人话
+	var claimed = anonymous
+	claimed.customName = "Anker · 桌面"
+	let items4 = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, chargerProfile: claimed).makeItems()
+	expectEqual(items4.first { $0.label == "充电器" }?.value, "Anker · 桌面 · 见过 3 次", "充电器档案：用户命名优先展示")
 	
 	let onBattery = BatteryInfoFormatter(snapshot: batterySnap(percent: 60), configuration: fullConfig, chargerProfile: regular).makeItems()
 	expect(!onBattery.contains { $0.label == "充电器" }, "充电器档案：电池供电时不展示")
@@ -1718,6 +1731,33 @@ do {
 	// 会话归档:优化充电的暂停(仍插着电)不算结束,拔电才算
 	expect(!BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .powerAdapter), "会话归档:暂停充电不归档")
 	expect(BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .battery), "会话归档:拔电归档")
+}
+
+// MARK: - 充电器命名
+
+do {
+	// 展示名解析：用户命名 > 系统识别名 > 额定瓦数兜底
+	let anonymous = ChargerProfile(key: "||65", name: "", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 1)
+	expectEqual(anonymous.displayName, "65W 充电器", "命名：认不出按瓦数兜底")
+	var claimed = anonymous
+	claimed.customName = "Anker · 桌面"
+	expectEqual(claimed.displayName, "Anker · 桌面", "命名：用户命名优先")
+	let apple = ChargerProfile(key: "96W USB-C Power Adapter|Apple Inc.|96", name: "96W USB-C Power Adapter", ratedWatts: 96, firstSeen: t0, lastSeen: t0, connectCount: 5)
+	expectEqual(apple.displayName, "96W USB-C Power Adapter", "命名：系统识别名次之")
+
+	// 重连更新档案时用户命名必须存活（只动 lastSeen/connectCount）
+	let profiles = [claimed]
+	let after = BatteryHistoryRecorder.upsertingChargerProfile(profiles, name: "", manufacturer: "", ratedWatts: 65, now: t0.addingTimeInterval(3600))
+	expectEqual(after.first?.customName, "Anker · 桌面", "命名：重连保留用户命名")
+	expectEqual(after.first?.connectCount, 2, "命名：重连超窗正常计次")
+
+	// 旧版存档没有 customName 字段，解码缺省 nil 不炸
+	let legacyJSON = #"[{"key":"a|b|65","name":"65W","ratedWatts":65,"firstSeen":0,"lastSeen":0,"connectCount":3}]"#.data(using: .utf8)!
+	let decoder = JSONDecoder()
+	decoder.dateDecodingStrategy = .secondsSince1970
+	let decoded = try decoder.decode([ChargerProfile].self, from: legacyJSON)
+	expect(decoded.first?.customName == nil, "命名：旧档缺字段解码为 nil")
+	expectEqual(decoded.first?.displayName, "65W", "命名：旧档展示名正常")
 }
 
 // MARK: - 汇总

@@ -517,6 +517,15 @@ final class BatteryHistoryRecorder: ObservableObject {
 		guard let key = activeChargerKey else { return nil }
 		return chargerProfiles.first { $0.key == key }
 	}
+
+	// 用户给充电器起的名字（系统识别不了时由用户认领）；空字符串视为清除
+	func setChargerCustomName(key: String, customName: String?) {
+		guard let index = chargerProfiles.firstIndex(where: { $0.key == key }) else { return }
+		var profile = chargerProfiles[index]
+		profile.customName = (customName?.isEmpty == false) ? customName : nil
+		chargerProfiles[index] = profile
+		save(chargerProfiles, key: Self.chargerProfilesKey)
+	}
 	
 	private func updateChargerProfile(_ snapshot: BatterySnapshot) {
 		guard snapshot.powerSource == .powerAdapter else {

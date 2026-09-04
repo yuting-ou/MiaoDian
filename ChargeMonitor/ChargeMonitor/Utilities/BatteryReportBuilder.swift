@@ -43,7 +43,7 @@ struct BatteryReportBuilder {
 		if let charger = chargerProfiles.first(where: { $0.key == currentChargerKey }) {
 			sections.append("")
 			sections.append("【当前充电器】")
-			var line = charger.name
+			var line = charger.displayName
 			if let watts = charger.ratedWatts, watts > 0 { line += "  \(watts)W" }
 			line += "  已见 \(charger.connectCount) 次"
 			sections.append(line)
