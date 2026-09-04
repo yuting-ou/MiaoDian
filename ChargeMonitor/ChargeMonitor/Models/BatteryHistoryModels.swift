@@ -261,6 +261,9 @@ nonisolated struct AppEnergyUsage: Codable, Equatable, Sendable, Identifiable {
 	// dayKey -> 当天累计秒数（只保留最近 30 天）
 	var secondsByDay: [String: Double]
 	var lastSeen: Date
+	// 24 小时活跃分布（秒）：1.6.0 起新增，旧档无此字段为 nil。
+	// 长期滚动累积——用电习惯本就稳定，回答"这应用一般几点在费电"
+	var secondsByHour: [Double]?
 
 	var id: String { bundleId }
 

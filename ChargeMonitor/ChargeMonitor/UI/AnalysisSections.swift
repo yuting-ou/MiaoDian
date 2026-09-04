@@ -2,8 +2,8 @@ import SwiftUI
 
 struct SignificantEnergySection: View {
 	let apps: [SignificantEnergyApp]
-	// 本周累计 Top 应用（名称 + 秒数）；空则不显示该区块
-	let weeklyTop: [(name: String, seconds: Double)]
+	// 本周累计 Top 应用（名称 + 秒数 + 活跃峰值时段）；空则不显示该区块
+	let weeklyTop: [(name: String, seconds: Double, window: String?)]
 	let onRevealInFinder: (URL?) -> Void
 
 	var body: some View {
@@ -47,9 +47,17 @@ struct SignificantEnergySection: View {
 							.foregroundStyle(index == 0 ? Color.orange : Color.secondary)
 							.frame(width: 12)
 
-						Text(entry.name)
-							.font(.system(size: PopoverLayout.bodyFontSize))
-							.lineLimit(1)
+						VStack(alignment: .leading, spacing: 1) {
+							Text(entry.name)
+								.font(.system(size: PopoverLayout.bodyFontSize))
+								.lineLimit(1)
+							// 时段归因：把"谁最费电"细化到"一般几点在费电"
+							if let window = entry.window {
+								Text("集中在 \(window)")
+									.font(.system(size: 9))
+									.foregroundStyle(.tertiary)
+							}
+						}
 
 						Spacer(minLength: 8)
 

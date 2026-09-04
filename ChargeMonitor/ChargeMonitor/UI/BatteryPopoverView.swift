@@ -508,8 +508,9 @@ struct BatteryPopoverView: View {
 		}
 	}
 	
-	// 应用耗电"本周累计"排行：最近 7 天按累计秒数取前三（不足 1 分钟的不入榜）
-	private var weeklyAppEnergy: [(name: String, seconds: Double)] {
+	// 应用耗电"本周累计"排行：最近 7 天按累计秒数取前三（不足 1 分钟的不入榜）；
+	// 附活跃峰值时段（小时分布是长期滚动的习惯画像，比单周样本更稳）
+	private var weeklyAppEnergy: [(name: String, seconds: Double, window: String?)] {
 		var keys = Set<String>()
 		for offset in 0..<7 {
 			if let date = Calendar.current.date(byAdding: .day, value: -offset, to: Date()) {
@@ -517,11 +518,16 @@ struct BatteryPopoverView: View {
 			}
 		}
 		return historyRecorder.appEnergy
-			.map { ($0.name, $0.seconds(within: keys)) }
-			.filter { $0.1 >= 60 }
-			.sorted { $0.1 > $1.1 }
+			.compactMap { record -> (name: String, seconds: Double, window: String?)? in
+				let seconds = record.seconds(within: keys)
+				guard seconds >= 60 else { return nil }
+				let window = UsagePatternAnalyzer.peakActivityWindow(secondsByHour: record.secondsByHour ?? [])
+					.map { "\($0.start)–\($0.end) 点" }
+				return (record.name, seconds, window)
+			}
+			.sorted { $0.seconds > $1.seconds }
 			.prefix(3)
-			.map { (name: $0.0, seconds: $0.1) }
+			.map { (name: $0.name, seconds: $0.seconds, window: $0.window) }
 	}
 
 	private static let weeklyKeyFormatter: DateFormatter = {

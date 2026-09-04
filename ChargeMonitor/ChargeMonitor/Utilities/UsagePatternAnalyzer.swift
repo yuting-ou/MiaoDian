@@ -197,6 +197,32 @@ nonisolated enum UsagePatternAnalyzer {
 		}
 	}
 
+	// MARK: - 应用活跃时段归因
+
+	// 3 小时滑动窗口的峰值时段：窗口占比 ≥60% 且总时长 ≥30 分钟才给结论
+	// （分布太平说明全天都在用，"集中在几点"就是伪命题）
+	static func peakActivityWindow(
+		secondsByHour: [Double],
+		windowHours: Int = 3,
+		minShare: Double = 0.6,
+		minTotalSeconds: Double = 30 * 60
+	) -> (start: Int, end: Int)? {
+		guard secondsByHour.count == 24 else { return nil }
+		let total = secondsByHour.reduce(0, +)
+		guard total >= minTotalSeconds else { return nil }
+		var bestStart = 0
+		var bestSum = 0.0
+		for start in 0...(24 - windowHours) {
+			let sum = secondsByHour[start..<start + windowHours].reduce(0, +)
+			if sum > bestSum {
+				bestSum = sum
+				bestStart = start
+			}
+		}
+		guard bestSum / total >= minShare else { return nil }
+		return (bestStart, bestStart + windowHours)
+	}
+
 	// MARK: - 日期键
 
 	// 与历史记录同源的 POSIX 公历日期键（dayKey 是落盘主键，必须公历）

@@ -717,6 +717,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		ids: [String],
 		names: [String: String],
 		seconds: Double,
+		hour: Int,
 		dayKey: String,
 		cutoffDayKey: String,
 		now: Date,
@@ -725,10 +726,15 @@ final class BatteryHistoryRecorder: ObservableObject {
 		guard seconds > 0 else { return records }
 		// 输入来自磁盘存档——理论上不会重键，但手改/异常数据不能把应用炸掉
 		var byID = Dictionary(records.map { ($0.bundleId, $0) }, uniquingKeysWith: { first, _ in first })
+		let bucket = min(max(hour, 0), 23)
 		for id in ids {
 			var record = byID[id] ?? AppEnergyUsage(bundleId: id, name: names[id] ?? id, secondsByDay: [:], lastSeen: now)
 			if let latestName = names[id], !latestName.isEmpty { record.name = latestName }
 			record.secondsByDay[dayKey, default: 0] += seconds
+			// 小时分布：旧档首次累计时补建 24 桶
+			var hourly = record.secondsByHour ?? Array(repeating: 0, count: 24)
+			hourly[bucket] += seconds
+			record.secondsByHour = hourly
 			record.lastSeen = now
 			byID[id] = record
 		}
@@ -760,6 +766,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 			ids: monitor.significantEnergyApps.map(\.id),
 			names: Dictionary(monitor.significantEnergyApps.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
 			seconds: elapsed,
+			hour: Calendar.current.component(.hour, from: now),
 			dayKey: dayKey,
 			cutoffDayKey: cutoff,
 			now: now,

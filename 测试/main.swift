@@ -1196,6 +1196,7 @@ do {
 	// 首次累计：建档并计入当日秒数
 	var records = BatteryHistoryRecorder.appendingEnergySeconds(
 		[], ids: ["com.a"], names: ["com.a": "应用A"], seconds: 10,
+		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0, maxApps: 50
 	)
 	expectEqual(records.count, 1, "应用耗电：首次累计建档")
@@ -1204,6 +1205,7 @@ do {
 	// 再次累计：同日累加
 	records = BatteryHistoryRecorder.appendingEnergySeconds(
 		records, ids: ["com.a", "com.b"], names: ["com.a": "应用A", "com.b": "应用B"], seconds: 5,
+		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0, maxApps: 50
 	)
 	expectEqual(records.count, 2, "应用耗电：新应用入档")
@@ -1217,6 +1219,7 @@ do {
 	}
 	let capped = BatteryHistoryRecorder.appendingEnergySeconds(
 		crowded, ids: ["com.0"], names: ["com.0": "应用0"], seconds: 5,
+		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0.addingTimeInterval(999), maxApps: 50
 	)
 	expectEqual(capped.count, 50, "应用耗电：总数封顶 50")
@@ -1503,6 +1506,7 @@ do {
 	]
 	let merged = BatteryHistoryRecorder.appendingEnergySeconds(
 		duplicated, ids: ["com.a"], names: ["com.a": "A"], seconds: 3,
+		hour: 14,
 		dayKey: "2026-08-29", cutoffDayKey: "2026-08-01", now: t0, maxApps: 50
 	)
 	expectEqual(merged.count, 1, "应用耗电：重复 bundleId 合并不崩")
@@ -1913,6 +1917,38 @@ do {
 
 	var resumed = batterySnap(percent: 80, charging: true, onBattery: false)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
+}
+
+// MARK: - 应用活跃时段归因
+
+do {
+	// 小时分布随累计写入
+	var records = BatteryHistoryRecorder.appendingEnergySeconds(
+		[], ids: ["com.a"], names: ["com.a": "A"], seconds: 60,
+		hour: 15, dayKey: "2026-08-29", cutoffDayKey: "2026-08-01", now: t0, maxApps: 50
+	)
+	expectEqual(records.first?.secondsByHour?[15], 60, "时段归因：秒数计入当前小时桶")
+	expectEqual(records.first?.secondsByHour?.count, 24, "时段归因：24 桶齐全")
+
+	// 峰值窗口：14-17 点集中 80%
+	var hourly = Array(repeating: 0.0, count: 24)
+	hourly[14] = 40 * 60; hourly[15] = 30 * 60; hourly[16] = 10 * 60
+	hourly[9] = 5 * 60
+	let window = UsagePatternAnalyzer.peakActivityWindow(secondsByHour: hourly)
+	expectEqual(window?.start, 14, "时段归因：峰值窗口起点")
+	expectEqual(window?.end, 17, "时段归因：峰值窗口终点")
+
+	// 分布太平（无 60% 集中）不给结论
+	let flat = Array(repeating: 10.0 * 60, count: 24)
+	expect(UsagePatternAnalyzer.peakActivityWindow(secondsByHour: flat) == nil, "时段归因：全天均匀不下结论")
+
+	// 总时长不足 30 分钟不下结论
+	var sparse = Array(repeating: 0.0, count: 24)
+	sparse[14] = 10 * 60
+	expect(UsagePatternAnalyzer.peakActivityWindow(secondsByHour: sparse) == nil, "时段归因：样本太少不下结论")
+
+	// 旧档无小时分布（空数组）不崩
+	expect(UsagePatternAnalyzer.peakActivityWindow(secondsByHour: []) == nil, "时段归因：空数据不崩")
 }
 
 // MARK: - 汇总
