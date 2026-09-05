@@ -35,6 +35,10 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		)
 		panel.titlebarAppearsTransparent = true
 		panel.titleVisibility = .hidden
+		// 隐藏红绿灯：面板成为 key 的瞬间交通灯会浮在头部上（"面板外面的东西"），菜单栏面板不需要它们
+		panel.standardWindowButton(.closeButton)?.isHidden = true
+		panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+		panel.standardWindowButton(.zoomButton)?.isHidden = true
 		panel.isMovable = false
 		panel.hidesOnDeactivate = false
 		panel.isOpaque = false
