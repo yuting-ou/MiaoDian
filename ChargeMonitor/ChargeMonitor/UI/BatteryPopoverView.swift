@@ -6,10 +6,6 @@ struct BatteryPopoverView: View {
 	@ObservedObject var configurationManager: ConfigurationManager
 	@ObservedObject var historyRecorder: BatteryHistoryRecorder
 	@ObservedObject var alertController: BatteryAlertController
-	// 面板"设置"行打开独立设置窗口
-	@Environment(\.openSettings) private var openSettings
-	// 充电记录行打开独立曲线窗口（不用 sheet：会连带弹窗窗口跳动）
-	@Environment(\.openWindow) private var openWindow
 	
 	// 面板打开期间已分好列的卡片：后到的新卡只追加到较矮列，已有卡不滑动不换位，
 	// 避免曲线数据陆续到位时整个面板在眼皮底下洗牌；关闭面板后清空，下次打开重新配平
@@ -497,11 +493,10 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	// 打开充电曲线独立窗口；先激活应用确保窗口浮到最上层（与"设置"同一套做法）
+	// 打开充电曲线独立窗口；控制器内部已激活应用确保窗口浮到最上层（与"设置"同一套做法）
 	private func openChargeCurve(_ session: ChargeSession) {
 		ChargeCurveSelection.shared.startDate = session.startDate
-		NSApp.activate(ignoringOtherApps: true)
-		openWindow(id: "charge-curve")
+		ChargeCurveWindowController.shared.show(historyRecorder: historyRecorder)
 	}
 	
 	@ViewBuilder
@@ -635,10 +630,11 @@ struct BatteryPopoverView: View {
 	}
 
 	private func openSettingsWindow() {
-		// 菜单栏应用(LSUIElement)没有 Dock 图标，直接 openSettings 可能不抢焦点、
-		// 弹窗被其他 App 盖住。先激活本应用让它成为前台，设置窗口才会浮到最上层
+		// 菜单栏应用(LSUIElement)没有 Dock 图标，直接开设置可能不抢焦点、
+		// 弹窗被其他 App 盖住。先激活本应用让它成为前台，设置窗口才会浮到最上层。
+		// 面板由 NSHostingView 承载，拿不到 @Environment(\.openSettings)，走 AppKit 动作打开 Settings 场景
 		NSApp.activate(ignoringOtherApps: true)
-		openSettings()
+		NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
 	}
 
 	private func openBatterySettings() {

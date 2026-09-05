@@ -1,60 +1,42 @@
-// 妙电应用图标生成器（仅开发工具，不进应用源码树——build.sh 只收集 ChargeMonitor/ChargeMonitor/**）
-// 用法：swiftc 工具/生成图标.swift -o /tmp/genicon && /tmp/genicon /tmp/icon_1024.png
-// 设计：苹果图标网格（1024 画布、824 内容、超椭圆 squircle）+ 液态玻璃语言——
-// 浅色渐变底板上浮一枚玻璃电池舱，绿色电量填充、圆角闪电、镜面高光与柔影，与面板重设计同一套材质观感
+// 妙电应用图标生成器（真实液态玻璃版）
+// 用法：swiftc 工具/生成图标.swift -o /tmp/genicon && caffeinate -u -t 30 /tmp/genicon /tmp/icon_1024.png
+//   （屏幕必须唤醒且未锁：捕获的是真实合成画面；产出 1024 PNG 后用 sips+iconutil 转 icns）
+//
+// 为什么是"双窗口+屏区捕获"而不是离屏渲染（均为实测结论）：
+//   1) ImageRenderer 不渲染 glassEffect——玻璃层整个消失；
+//   2) macOS 的液态玻璃采样的是窗口背后的合成内容（桌面），不是同窗口内的兄弟视图——
+//      单窗口里玻璃会去折射壁纸（灰雾/串色）；
+//   3) 透明玻璃窗整窗会带一层暗底，且暗底跟随 GlassEffectContainer 的矩形 frame——
+//      容器收缩到电池包围盒并 mask 到电池轮廓，暗底才不污染底板。
+//   所以：底窗画底板（不透明，含绿色电量"液体"），顶窗透明只画玻璃壳与闪电；
+//   玻璃经 window server 真实折射底窗内容，再截该屏区——得到系统材质管线的真实渲染。
 import AppKit
+import SwiftUI
+import ScreenCaptureKit
 
 let canvas: CGFloat = 1024
 
-// ---- 工具 ----
-
-func srgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) -> CGColor {
-	CGColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
+// sRGB 色值助手（参数 0~1）
+func c(_ r: Double, _ g: Double, _ b: Double, _ o: Double = 1) -> Color {
+	Color(.sRGB, red: r, green: g, blue: b, opacity: o)
 }
 
-// 超椭圆 squircle（苹果图标轮廓，指数 ~5）
-func squirclePath(in rect: CGRect, exponent: CGFloat = 5) -> CGPath {
-	let path = CGMutablePath()
-	let steps = 720
-	let a = rect.width / 2, b = rect.height / 2
-	for i in 0...steps {
-		let t = CGFloat(i) / CGFloat(steps) * 2 * .pi
-		let ct = cos(t), st = sin(t)
-		let x = rect.midX + a * (ct >= 0 ? 1 : -1) * pow(abs(ct), 2 / exponent)
-		let y = rect.midY + b * (st >= 0 ? 1 : -1) * pow(abs(st), 2 / exponent)
-		if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-	}
-	path.closeSubpath()
-	return path
-}
+// ---- 几何（苹果图标网格：1024 画布、824 内容、连续曲率 squircle）----
 
-func drawGradient(_ ctx: CGContext, colors: [CGColor], locations: [CGFloat], from: CGPoint, to: CGPoint, clip: CGPath) {
-	ctx.saveGState()
-	ctx.addPath(clip)
-	ctx.clip()
-	let grad = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!, colors: colors as CFArray, locations: locations)!
-	ctx.drawLinearGradient(grad, start: from, end: to, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-	ctx.restoreGState()
-}
+let tileRadius: CGFloat = 185
+let capsuleRect = CGRect(x: 196, y: 352, width: 600, height: 300)
+let terminalRect = CGRect(x: 794, y: 442, width: 46, height: 120)
+let chargeRect: CGRect = {
+	let inset: CGFloat = 40
+	let full = capsuleRect.insetBy(dx: inset, dy: inset)
+	return CGRect(x: full.minX, y: full.minY, width: full.width * 0.82, height: full.height)
+}()
+// 玻璃容器包围盒（舱∪帽，外留 3pt 边缘高光）
+let glassBBox = CGRect(x: 180, y: 336, width: 680, height: 332)
 
-func drawRadial(_ ctx: CGContext, colors: [CGColor], locations: [CGFloat], center: CGPoint, radius: CGFloat, clip: CGPath) {
-	ctx.saveGState()
-	ctx.addPath(clip)
-	ctx.clip()
-	let grad = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!, colors: colors as CFArray, locations: locations)!
-	ctx.drawRadialGradient(grad, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: [.drawsAfterEndLocation])
-	ctx.restoreGState()
-}
-
-// 圆角矩形（连续曲率近似：标准圆角即可，尺寸大时肉眼无差）
-func roundedPath(_ rect: CGRect, radius: CGFloat) -> CGPath {
-	CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
-}
-
-// 上游 AppIcon.icon 的圆角闪电路径（viewBox 339×552，y 轴向下），仿射变换进画布
+// 上游圆角闪电路径（viewBox 339×552，y 轴向下）
 func boltPath(scale: CGFloat, center: CGPoint) -> CGPath {
 	let p = CGMutablePath()
-	// SVG 坐标 → 画布坐标：左上原点，先平移缩放
 	func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
 		CGPoint(x: center.x + (x - 339 / 2) * scale, y: center.y + (y - 552 / 2) * scale)
 	}
@@ -75,162 +57,231 @@ func boltPath(scale: CGFloat, center: CGPoint) -> CGPath {
 	return p
 }
 
-// ---- 画布 ----
+// ---- 图层 ----
 
-let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024,
-	bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-	colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-let ctx = NSGraphicsContext(bitmapImageRep: rep)!.cgContext
+// 底板：薄荷渐变 + 天光 + 舱后绿色辉光 + 右下冷色光斑 + 电量绿液胶囊。
+// 明暗结构是给玻璃折射准备的"细节"——纯平渐变看不出弯折；
+// 电量是画在底板里的"液体"，由玻璃壳折射后自带弯折边缘，比 tint 染玻璃更鲜亮。
+struct TileLayer: View {
+	var body: some View {
+		LinearGradient(
+			colors: [c(226/255, 244/255, 231/255), c(186/255, 222/255, 197/255), c(138/255, 192/255, 158/255)],
+			startPoint: .top, endPoint: .bottom)
+			.overlay(
+				RadialGradient(colors: [Color.white.opacity(0.85), Color.white.opacity(0)],
+				               center: UnitPoint(x: 330/1024, y: 260/1024), startRadius: 0, endRadius: 560)
+			)
+			.overlay(
+				RadialGradient(colors: [c(130/255, 255/255, 175/255, 1.0),
+				                        c(70/255, 235/255, 120/255, 0.55),
+				                        c(48/255, 209/255, 88/255, 0)],
+				               center: UnitPoint(x: 420/1024, y: 502/1024), startRadius: 0, endRadius: 400)
+			)
+			.overlay(
+				RadialGradient(colors: [c(120/255, 190/255, 230/255, 0.35),
+				                        c(120/255, 190/255, 230/255, 0)],
+				               center: UnitPoint(x: 760/1024, y: 800/1024), startRadius: 0, endRadius: 380)
+			)
+			.overlay(
+				LinearGradient(colors: [c(105/255, 250/255, 145/255), c(28/255, 205/255, 82/255)],
+				               startPoint: .top, endPoint: .bottom)
+					.frame(width: chargeRect.width - 12, height: chargeRect.height - 12)
+					.clipShape(Capsule())
+					.position(x: chargeRect.midX, y: chargeRect.midY)
+					.blur(radius: 2)
+			)
+			.overlay(
+				// 弯月面：液面右缘凸出一颗"正要滴落"的肚，电量边界不再是死板的圆头
+				Circle()
+					.fill(c(60/255, 225/255, 110/255))
+					.frame(width: 56, height: 56)
+					.position(x: chargeRect.maxX - 14, y: chargeRect.midY + 6)
+					.blur(radius: 2)
+			)
+			.overlay(
+				// 液体气泡：两颗亮泡浮在绿液里，被玻璃壳折射后自带液态感
+				ZStack {
+					Circle().fill(c(225/255, 255/255, 235/255, 1.0))
+						.frame(width: 52, height: 52).position(x: 330, y: 450)
+					Circle().fill(c(225/255, 255/255, 235/255, 0.95))
+						.frame(width: 26, height: 26).position(x: 590, y: 575)
+				}
+				.blur(radius: 1)
+			)
+			.overlay(
+				// 斜向光带：只掠舱上缘，给透镜一条可弯折的明暗线（强了像划痕）
+				LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.16), Color.white.opacity(0)],
+				               startPoint: .init(x: 0, y: 0), endPoint: .init(x: 1, y: 1))
+					.frame(width: 1200, height: 70)
+					.rotationEffect(.degrees(38))
+					.position(x: 512, y: 400)
+					.blur(radius: 20)
+			)
+			.overlay(
+				// 焦散影：玻璃舱在底板上投下的柔影，下缘被壳折射后厚玻璃感立现
+				Ellipse()
+					.fill(c(40/255, 90/255, 60/255, 0.35))
+					.frame(width: capsuleRect.width * 0.92, height: 90)
+					.position(x: capsuleRect.midX, y: capsuleRect.maxY + 34)
+					.blur(radius: 26)
+			)
+			.overlay(
+				// 液面高光：绿液顶部一条镜面反光带
+				LinearGradient(colors: [c(220/255, 255/255, 230/255, 0.85), c(220/255, 255/255, 230/255, 0)],
+				               startPoint: .top, endPoint: .bottom)
+					.frame(width: chargeRect.width - 60, height: 34)
+					.clipShape(Capsule())
+					.position(x: chargeRect.midX - 10, y: chargeRect.minY + 26)
+					.blur(radius: 6)
+			)
+			.clipShape(RoundedRectangle(cornerRadius: tileRadius, style: .continuous))
+			.frame(width: canvas, height: canvas)
+	}
+}
 
-// 统一翻转到左上原点（与 SVG/设计稿同坐标系）
-ctx.translateBy(x: 0, y: canvas)
-ctx.scaleBy(x: 1, y: -1)
+// 电池轮廓遮罩：舱体与正极帽的并集（bbox 局部坐标）
+struct BatterySilhouette: Shape {
+	func path(in rect: CGRect) -> Path {
+		var p = Path()
+		func local(_ r: CGRect) -> CGRect {
+			CGRect(x: r.minX - glassBBox.minX, y: r.minY - glassBBox.minY, width: r.width, height: r.height)
+		}
+		p.addRoundedRect(in: local(capsuleRect), cornerSize: CGSize(width: 150, height: 150))
+		p.addRoundedRect(in: local(terminalRect).insetBy(dx: -3, dy: -3), cornerSize: CGSize(width: 26, height: 26))
+		return p
+	}
+}
 
-let iconRect = CGRect(x: 100, y: 100, width: 824, height: 824)
-let squircle = squirclePath(in: iconRect)
+// 玻璃层：外壳清玻璃 + 正极帽 + 白闪电（内容在玻璃之上）。
+// 闪电的 shadow 会强制窗口进入离屏合成——没有它玻璃根本不进捕获（实测）。
+struct GlassLayer: View {
+	var body: some View {
+		ZStack {
+			GlassEffectContainer(spacing: 24) {
+				ZStack {
+					Capsule()
+						.frame(width: capsuleRect.width, height: capsuleRect.height)
+						.position(x: capsuleRect.midX - glassBBox.minX, y: capsuleRect.midY - glassBBox.minY)
+						.glassEffect(.regular, in: .capsule)
+					Capsule()
+						.frame(width: terminalRect.width, height: terminalRect.height)
+						.position(x: terminalRect.midX - glassBBox.minX, y: terminalRect.midY - glassBBox.minY)
+						.glassEffect(.regular.tint(Color.white.opacity(0.30)), in: .capsule)
+				}
+			}
+			.frame(width: glassBBox.width, height: glassBBox.height)
+			.position(x: glassBBox.midX, y: glassBBox.midY)
+			// 容器矩形自带暗底：裁到电池轮廓，暗底不污染底板
+			.mask(
+				BatterySilhouette()
+					.fill()
+					.frame(width: glassBBox.width, height: glassBBox.height)
+					.position(x: glassBBox.midX, y: glassBBox.midY)
+			)
+			Path(boltPath(scale: 0.5, center: CGPoint(x: 512, y: 496)))
+				.fill(Color(white: 0.99))
+				.shadow(color: c(18/255, 110/255, 48/255, 0.4), radius: 8, y: 6)
+		}
+		.frame(width: canvas, height: canvas)
+	}
+}
 
-// 1) 底板：冷薄荷绿纵向渐变——加深一档，让白色玻璃舱浮得出来（浅底白舱对比不足是 v2 的主因）
-drawGradient(ctx,
-	colors: [srgb(238, 248, 240), srgb(206, 232, 214), srgb(168, 210, 182)],
-	locations: [0, 0.55, 1],
-	from: CGPoint(x: 512, y: 100), to: CGPoint(x: 512, y: 924), clip: squircle)
+// ---- 双窗口捕获 ----
 
-// 2) 底板环境光：左上角一抹冷白高光，模拟天光
-drawRadial(ctx,
-	colors: [srgb(255, 255, 255, 0.85), srgb(255, 255, 255, 0)],
-	locations: [0, 1], center: CGPoint(x: 330, y: 260), radius: 560, clip: squircle)
+final class CaptureDelegate: NSObject, NSApplicationDelegate {
+	let outPath: String
+	var tileWindow: NSWindow?
+	var glassWindow: NSWindow?
+	init(outPath: String) { self.outPath = outPath }
 
-// 3) 电池舱后方的绿色环境辉光：让"能量"从玻璃里透出来
-drawRadial(ctx,
-	colors: [srgb(48, 209, 88, 0.30), srgb(48, 209, 88, 0)],
-	locations: [0, 1], center: CGPoint(x: 470, y: 512), radius: 420, clip: squircle)
+	func applicationDidFinishLaunching(_ notification: Notification) {
+		NSApp.appearance = NSAppearance(named: .aqua)
+		// 放左上角空区：避开 Dock（底部）与菜单栏（顶 25pt），整窗必须在屏内——
+		// 玻璃采样屏外区域会得到黑底，整窗发灰
+		let screenH = NSScreen.main?.frame.height ?? 1117
+		let originY: CGFloat = 80
+		let frame = CGRect(x: 60, y: originY, width: canvas, height: canvas)
 
-// ---- 玻璃电池舱 ----
-let capsule = CGRect(x: 196, y: 352, width: 600, height: 300)
-let capsuleRadius: CGFloat = 150
-let capsulePath = roundedPath(capsule, radius: capsuleRadius)
-// 正极小帽：紧贴舱体右缘（留 2pt 缝防穿帮），同玻璃材质
-let terminal = CGRect(x: 794, y: 442, width: 46, height: 120)
-let terminalPath = roundedPath(terminal, radius: 23)
+		let tile = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+		tile.isOpaque = true
+		tile.backgroundColor = .black
+		tile.hasShadow = false
+		tile.level = .screenSaver
+		tile.contentView = NSHostingView(rootView: TileLayer())
+		tile.makeKeyAndOrderFront(nil)
 
-// 4) 舱体投影：柔和悬浮影
-ctx.saveGState()
-ctx.addPath(capsulePath)
-ctx.addPath(terminalPath)
-ctx.setShadow(offset: CGSize(width: 0, height: 26), blur: 52, color: srgb(30, 60, 40, 0.22))
-ctx.setFillColor(srgb(255, 255, 255, 0.01))
-ctx.fillPath()
-ctx.restoreGState()
+		let glass = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+		glass.isOpaque = false
+		glass.backgroundColor = .clear
+		glass.hasShadow = false
+		glass.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+		glass.contentView = NSHostingView(rootView: GlassLayer())
+		glass.makeKeyAndOrderFront(nil)
 
-// 5) 舱体玻璃壳：半透明白渐变（上亮下暗=厚度感）
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.9), srgb(255, 255, 255, 0.5), srgb(228, 242, 234, 0.62)],
-	locations: [0, 0.5, 1],
-	from: CGPoint(x: 512, y: capsule.minY), to: CGPoint(x: 512, y: capsule.maxY), clip: capsulePath)
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.9), srgb(255, 255, 255, 0.5), srgb(228, 242, 234, 0.62)],
-	locations: [0, 0.5, 1],
-	from: CGPoint(x: 817, y: terminal.minY), to: CGPoint(x: 817, y: terminal.maxY), clip: terminalPath)
-// 舱体外缘淡轮廓：与浅色底板拉开对比，玻璃体不再"融"进背景
-ctx.saveGState()
-ctx.addPath(capsulePath)
-ctx.addPath(terminalPath)
-ctx.setStrokeColor(srgb(70, 115, 88, 0.4))
-ctx.setLineWidth(5)
-ctx.strokePath()
-ctx.restoreGState()
-// 舱体内底反射：底部一道淡绿反光（玻璃厚度里弹回来的桌面光）
-ctx.saveGState()
-ctx.addPath(capsulePath)
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(150, 220, 170, 0), srgb(150, 220, 170, 0.5)],
-	locations: [0, 1],
-	from: CGPoint(x: 0, y: capsule.maxY - 110), to: CGPoint(x: 0, y: capsule.maxY - 14),
-	clip: CGPath(rect: capsule.insetBy(dx: -20, dy: -20), transform: nil))
-ctx.restoreGState()
+		self.tileWindow = tile
+		self.glassWindow = glass
 
-// 6) 电量填充：舱内左侧 78% 绿色玻璃条，亮绿渐变+顶部镜面高光
-let inset: CGFloat = 34
-let fillFull = capsule.insetBy(dx: inset, dy: inset)
-let fillRect = CGRect(x: fillFull.minX, y: fillFull.minY, width: fillFull.width * 0.78, height: fillFull.height)
-let fillPath = roundedPath(fillRect, radius: fillFull.height / 2)
-drawGradient(ctx,
-	colors: [srgb(96, 235, 138), srgb(52, 208, 96), srgb(30, 168, 68)],
-	locations: [0, 0.55, 1],
-	from: CGPoint(x: 0, y: fillRect.minY), to: CGPoint(x: 0, y: fillRect.maxY), clip: fillPath)
-// 填充条上半镜面高光
-ctx.saveGState()
-ctx.addPath(fillPath)
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.5), srgb(255, 255, 255, 0)],
-	locations: [0, 1],
-	from: CGPoint(x: 0, y: fillRect.minY), to: CGPoint(x: 0, y: fillRect.midY + 20), clip: fillPath)
-ctx.restoreGState()
-// 绿缘辉光：能量从填充右端透进空舱的玻璃里
-drawRadial(ctx,
-	colors: [srgb(52, 208, 96, 0.5), srgb(52, 208, 96, 0)],
-	locations: [0, 1], center: CGPoint(x: fillRect.maxX, y: fillRect.midY), radius: 150, clip: capsulePath)
+		// 等材质稳定合成，再把光标挪开、截该屏区
+		DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+			guard let self else { exit(1) }
+			let topLeftY = screenH - originY - canvas
+			CGWarpMouseCursorPosition(CGPoint(x: screenH * 0.5, y: 40))
+			// SCK 抓整屏再裁剪（screencapture -R 区域模式在本机不稳定）
+			SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
+				guard let display = content?.displays.first else {
+					FileHandle.standardError.write("找不到显示器：\(String(describing: error))（屏幕是否唤醒？）\n".data(using: .utf8)!)
+					exit(1)
+				}
+				let filter = SCContentFilter(display: display, excludingWindows: [])
+				let config = SCStreamConfiguration()
+				let px = 2 // Retina
+				config.width = display.width * px
+				config.height = display.height * px
+				SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
+					guard let full = image else {
+						FileHandle.standardError.write("捕获失败：\(String(describing: error))（检查屏幕录制权限）\n".data(using: .utf8)!)
+						exit(1)
+					}
+					let crop = CGRect(x: frame.minX * CGFloat(px), y: topLeftY * CGFloat(px),
+					                  width: canvas * CGFloat(px), height: canvas * CGFloat(px))
+					guard let src = full.cropping(to: crop) else {
+						FileHandle.standardError.write("裁剪区域越界\n".data(using: .utf8)!)
+						exit(1)
+					}
+					DispatchQueue.main.async {
+						self.saveMasked(src, to: self.outPath)
+						exit(0)
+					}
+				}
+			}
+		}
+	}
 
-// 7) 舱体内壁描边：上缘亮线（玻璃受光边）+ 整体淡轮廓
-ctx.saveGState()
-ctx.addPath(capsulePath)
-ctx.setLineWidth(7)
-ctx.replacePathWithStrokedPath()
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.95), srgb(255, 255, 255, 0.15), srgb(120, 150, 130, 0.35)],
-	locations: [0, 0.5, 1],
-	from: CGPoint(x: 0, y: capsule.minY), to: CGPoint(x: 0, y: capsule.maxY),
-	clip: CGPath(rect: capsule.insetBy(dx: -10, dy: -10), transform: nil))
-ctx.restoreGState()
+	// 缩放到 1024、转 sRGB 并套 squircle 遮罩（顶窗透明角漏出的壁纸不进图标）
+	@MainActor
+	func saveMasked(_ cg: CGImage, to path: String) {
+		let side = Int(canvas)
+		let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+		let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+		                    space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+		let mask = CGPath(roundedRect: CGRect(x: 99, y: 99, width: 826, height: 826),
+		                  cornerWidth: tileRadius, cornerHeight: tileRadius, transform: nil)
+		ctx.addPath(mask)
+		ctx.clip()
+		ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+		let out = ctx.makeImage()!
+		let rep = NSBitmapImageRep(cgImage: out)
+		let data = rep.representation(using: .png, properties: [:])!
+		try! data.write(to: URL(fileURLWithPath: path))
+		print("written: \(path)")
+	}
+}
 
-// 8) 闪电：白色玻璃质感，居中压在舱体上；投影收紧、绿色背光减弱防发糊
-let bolt = boltPath(scale: 0.5, center: CGPoint(x: 512, y: 496))
-ctx.saveGState()
-ctx.addPath(bolt)
-ctx.setShadow(offset: CGSize(width: 0, height: 8), blur: 16, color: srgb(18, 110, 48, 0.4))
-ctx.setFillColor(srgb(255, 255, 255, 0.98))
-ctx.fillPath()
-ctx.restoreGState()
-// 闪电顶部微高光
-ctx.saveGState()
-ctx.addPath(bolt)
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(226, 242, 231), srgb(255, 255, 255, 0)],
-	locations: [0, 1],
-	from: CGPoint(x: 0, y: 320), to: CGPoint(x: 0, y: 470),
-	clip: CGPath(rect: CGRect(x: 380, y: 300, width: 280, height: 200), transform: nil))
-ctx.restoreGState()
+// ---- 入口 ----
 
-// 9) 舱体顶部镜面反射：沿上缘柔和渐隐的天光带（液态玻璃掠射感），不用硬边光带避免留脏痕
-ctx.saveGState()
-ctx.addPath(capsulePath)
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.65), srgb(255, 255, 255, 0)],
-	locations: [0, 1],
-	from: CGPoint(x: 0, y: capsule.minY + 8), to: CGPoint(x: 0, y: capsule.minY + 96),
-	clip: CGPath(rect: capsule.insetBy(dx: -20, dy: -20), transform: nil))
-ctx.restoreGState()
-
-// 10) squircle 顶缘亮线：图标玻璃砖的受光上缘
-ctx.saveGState()
-ctx.addPath(squircle)
-ctx.setLineWidth(5)
-ctx.replacePathWithStrokedPath()
-ctx.clip()
-drawGradient(ctx,
-	colors: [srgb(255, 255, 255, 0.9), srgb(255, 255, 255, 0)],
-	locations: [0, 0.35],
-	from: CGPoint(x: 0, y: 100), to: CGPoint(x: 0, y: 924),
-	clip: CGPath(rect: iconRect.insetBy(dx: -20, dy: -20), transform: nil))
-ctx.restoreGState()
-
-// 输出
-let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/icon_1024.png"
-let data = rep.representation(using: .png, properties: [:])!
-try! data.write(to: URL(fileURLWithPath: outPath))
-print("written: \(outPath)")
+let outPath = CommandLine.arguments.dropFirst().first ?? "/tmp/icon_1024.png"
+let app = NSApplication.shared
+let delegate = CaptureDelegate(outPath: outPath)
+app.delegate = delegate
+app.setActivationPolicy(.accessory)
+app.run()
