@@ -17,6 +17,9 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	// 不加这道闸就会"关而又开"，看起来像点了没反应
 	private var lastClosedAt = Date.distantPast
 	private var cancellables: Set<AnyCancellable> = []
+	// 调试模式（MIAODIAN_DEBUG_OPEN_PANEL）下面板不因失焦自动关闭：
+	// 无人值守截图时终端/前台应用会抢走 key 焦点，正常失焦关会让面板在截图前就消失
+	private var debugKeepOpen = false
 
 	func install() {
 		let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -55,9 +58,17 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		}
 		refreshLabel()
 
-		// 调试通道：带环境变量启动时自动弹出面板，供无人值守截图验收
+		// 调试通道：带环境变量启动时自动弹出面板，供无人值守截图验收。
+		// 状态项就位时间不定（iBar 回流、系统繁忙都可能拖慢），0.6/2/5s 三次重试兜底；
+		// 已可见则跳过，避免重复重建内容打断截图
 		if ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_OPEN_PANEL"] != nil {
-			DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.showPanel() }
+			debugKeepOpen = true
+			for delay in [0.6, 2.0, 5.0] {
+				DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+					guard let self, self.panel?.isVisible != true else { return }
+					self.showPanel()
+				}
+			}
 		}
 	}
 
@@ -73,11 +84,22 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		}
 	}
 
+	private func closePanel() {
+		guard let panel, panel.isVisible else { return }
+		lastClosedAt = Date()
+		panel.orderOut(nil)
+		// 摘掉内容视图（contentView 非可选，用空视图顶替）：触发 SwiftUI onDisappear → stopPolling，关闭期间零耗
+		panel.contentView = NSView()
+	}
+
+	// 点面板外任意处 → 失焦即关（与 MenuBarExtra 行为一致）；调试模式豁免
+	func windowDidResignKey(_ notification: Notification) {
+		if debugKeepOpen { return }
+		closePanel()
+	}
+
 	private func showPanel() {
-		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else {
-			DiagnosticLog.failureOnce("dbg-showpanel-guard", category: "glass", "调试：showPanel 前置对象未就绪")
-			return
-		}
+		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else { return }
 		// 每次打开重建内容视图：@State 全新 → 入场级联动画重播、onAppear 驱动 startPolling，
 		// 与 MenuBarExtra"面板每次打开销毁重建"的既有行为一致
 		let root = BatteryPopoverView(
@@ -103,22 +125,6 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示
 		panel.orderFrontRegardless()
 		panel.makeKey()
-		DiagnosticLog.failureOnce("dbg-shown", category: "glass",
-			"调试：shown buttonFrame=\(NSStringFromRect(buttonFrame)) fitting=\(NSStringFromSize(size)) frame=\(NSStringFromRect(panel.frame)) visible=\(panel.isVisible)")
-	}
-
-	private func closePanel() {
-		DiagnosticLog.failureOnce("dbg-close", category: "glass", "调试：closePanel 被调用")
-		guard let panel, panel.isVisible else { return }
-		lastClosedAt = Date()
-		panel.orderOut(nil)
-		// 摘掉内容视图（contentView 非可选，用空视图顶替）：触发 SwiftUI onDisappear → stopPolling，关闭期间零耗
-		panel.contentView = NSView()
-	}
-
-	// 点面板外任意处 → 失焦即关（与 MenuBarExtra 行为一致）
-	func windowDidResignKey(_ notification: Notification) {
-		closePanel()
 	}
 
 	// MARK: - 菜单栏标签（8 种显示模式，自 MenuBarExtra label 移植）

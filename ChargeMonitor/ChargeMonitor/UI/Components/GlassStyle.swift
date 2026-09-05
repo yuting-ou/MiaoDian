@@ -11,11 +11,13 @@ enum GlassMetrics {
 }
 
 extension View {
-	/// 面板外壳：26 一整块 clear 玻璃板（采样桌面、模糊而不染色，regular 的奶白染色会洗掉壁纸色彩）；
-	/// 15–25 用 regularMaterial 自给背景——宿主 NSPanel 底是全透明的，降级路径必须自己垫底
+	/// 面板外壳：26 一整块 regular 玻璃板——材质自带亮度下限，浅色模式下任意壁纸（含深色）
+	/// 面板都保持浅底黑字（实测 clear 玻璃跟随后壁变暗，深色壁纸上黑字对比度 2.5:1 不达 AA；
+	/// 作业书材质映射表即指定 Glass.regular）。15–25 用 regularMaterial 自给背景——
+	/// 宿主 NSPanel 底是全透明的，降级路径必须自己垫底
 	@ViewBuilder func panelShell() -> some View {
 		if #available(macOS 26.0, *) {
-			glassEffect(.clear, in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
+			glassEffect(.regular, in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
 		} else {
 			background(
 				.regularMaterial,

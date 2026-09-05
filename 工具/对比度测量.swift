@@ -25,9 +25,9 @@ guard w > 10, h > 10 else { print("区域太小"); exit(1) }
 guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
 	space: CGColorSpace(name: CGColorSpace.sRGB)!,
 	bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-ctx.translateBy(x: 0, y: CGFloat(h))
-ctx.scaleBy(x: 1, y: -1)
-ctx.draw(image, in: CGRect(x: -x, y: -y, width: image.width, height: image.height))
+// 默认左下原点上下文：要让图的第 (x,y) 像素落在位图 (0,0)（位图第0行=图顶行），
+// draw 矩形的左下角 = (-x, h - 图高)——即图的顶行贴位图顶行
+ctx.draw(image, in: CGRect(x: CGFloat(-x), y: CGFloat(h) - CGFloat(image.height), width: CGFloat(image.width), height: CGFloat(image.height)))
 guard let data = ctx.data else { exit(1) }
 let bytes = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
 
@@ -45,6 +45,7 @@ for row in 0..<h {
 	}
 }
 lums.sort()
+print(String(format: "MIN=%.3f MAX=%.3f 样本=%d", lums.first!, lums.last!, lums.count))
 let p5 = lums[lums.count * 5 / 100]
 let p50 = lums[lums.count / 2]
 let p95 = lums[lums.count * 95 / 100]
