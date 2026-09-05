@@ -150,7 +150,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		}
 		
 		lastSleepDrain = load(SleepDrainRecord.self, key: Self.sleepDrainKey)
-		chargerProfiles = load([ChargerProfile].self, key: Self.chargerProfilesKey) ?? []
+		chargerProfiles = Self.foldingOrphanProfiles(load([ChargerProfile].self, key: Self.chargerProfilesKey) ?? [])
 		socSamples = load([SOCSample].self, key: Self.socSamplesKey) ?? []
 		powerEvents = load([PowerEvent].self, key: Self.powerEventsKey) ?? []
 		chargerPowerStats = load([String: ChargerPowerStats].self, key: Self.chargerPowerStatsKey) ?? [:]
@@ -324,6 +324,168 @@ final class BatteryHistoryRecorder: ObservableObject {
 		tiers.map { "\($0.maxVoltageMV)V\($0.maxCurrentMA)A" }.sorted().joined(separator: "/")
 	}
 
+	// 兜底名判定：建档时名称/厂商没广播出来，档案名落到"N瓦 充电器"模式——
+	// 这是"没认出来"的痕迹而非真名，归并判定与真名回填都以它为信号
+	nonisolated static func isFallbackChargerName(_ name: String, ratedWatts: Int?) -> Bool {
+		if name.isEmpty { return true }
+		if name.hasSuffix("W 充电器") { return true }
+		if let ratedWatts, ratedWatts > 0, name == "\(ratedWatts)W 充电器" { return true }
+		return false
+	}
+
+	// 识别 v2：降档形态判定——同一只头被分走功率时，本口广播的档位与满载母集
+	// 同数量、同电压阶梯、电流只降不增（如 20V/3.5A 是 20V/5A 的降档形态）。
+	// 刻意要求档位数量一致：不同的小头（如 65W 缺 15V 档）逐档被包含也不算同一只
+	nonisolated static func tiers(_ degraded: [PowerTier], degradationOf mother: [PowerTier]) -> Bool {
+		guard degraded.count == mother.count, !degraded.isEmpty else { return false }
+		return degraded.allSatisfy { tier in
+			mother.contains { $0.maxVoltageMV == tier.maxVoltageMV && $0.maxCurrentMA >= tier.maxCurrentMA }
+		}
+	}
+
+	// 档位签名反解析（归并判定要拿母档案的档位集合比较）
+	nonisolated static func tiers(fromSignature signature: String) -> [PowerTier] {
+		signature.split(separator: "/").compactMap { token in
+			let parts = token.split(separator: "V")
+			guard parts.count == 2, let v = Int(parts[0]), let a = Int(parts[1].dropLast()) else { return nil }
+			return PowerTier(maxVoltageMV: v, maxCurrentMA: a)
+		}
+	}
+
+	// 别名感知的档案查找：正式键或别名键都认（归并后的历史会话键是别名）
+	nonisolated static func chargerProfile(matching key: String, in profiles: [ChargerProfile]) -> ChargerProfile? {
+		profiles.first { $0.key == key || $0.aliases?.contains(key) == true }
+	}
+
+	// 识别 v2 核心：把"无名降档孤儿"归并进"有名母档案"，返回归并后档案与正式键。
+	// 孤儿 = 名称为空的档案或未建档的新键（多口分功率时名称/厂商/瓦数/档位会一起漂移）；
+	// 母档案条件 = 有名 + 孤儿档位 ⊆ 母档位 + 无线标记一致。
+	// 幂等：归并后孤儿键进 aliases，再次调用命中别名直接返回母键。
+	// 保守边界：有名的新键视为真新头不归并；无名对无名不归并（无信号）。
+	nonisolated static func foldingOrphanCharger(
+		profiles: [ChargerProfile],
+		orphanKey: String,
+		orphanName: String,
+		orphanConnectCount: Int,
+		orphanRatedWatts: Int?,
+		orphanTiers: [PowerTier],
+		isWireless: Bool
+	) -> (profiles: [ChargerProfile], canonicalKey: String) {
+		// 精确命中（正式键或别名）→ 正式键；命中的若是有名档案即完成
+		if let hit = chargerProfile(matching: orphanKey, in: profiles) {
+			// 命中的是无名/兜底名档案：尝试把它并入某个有名母档案（历史遗留孤儿的收编）
+			if !isFallbackChargerName(hit.name, ratedWatts: hit.ratedWatts) { return (profiles, hit.key) }
+			// 命中的是无名档案：尝试把它并入某个有名母档案（历史遗留孤儿的收编）；
+			// 必须带上孤儿自己的档位/次数/瓦数——它们描述的是同一只头的降档历史
+			if let resolved = foldingOrphanIntoMother(
+				profiles: profiles,
+				orphanKey: orphanKey,
+				orphanConnectCount: hit.connectCount,
+				orphanRatedWatts: hit.ratedWatts,
+				orphanTiers: tiers(fromSignature: hit.tierSignature ?? ""),
+				isWireless: hit.key.hasSuffix("|无线")
+			) {
+				return (resolved.profiles, resolved.canonicalKey)
+			}
+			return (profiles, hit.key)
+		}
+		// 未建档的新键：无名（含兜底名）才可能是有名母档案的降档形态；有名新键就是新头
+		guard isFallbackChargerName(orphanName, ratedWatts: orphanRatedWatts), !orphanTiers.isEmpty,
+			let resolved = foldingOrphanIntoMother(
+				profiles: profiles,
+				orphanKey: orphanKey,
+				orphanConnectCount: 0,
+				orphanRatedWatts: orphanRatedWatts,
+				orphanTiers: orphanTiers,
+				isWireless: isWireless
+			) else { return (profiles, orphanKey) }
+		return (resolved.profiles, resolved.canonicalKey)
+	}
+
+	// 归并执行：孤儿（已有档案或仅新键）并入母档案。次数相加、首见取早、末见取晚、
+	// 观察瓦数并集、别名收编（孤儿自己的别名一并带上，链式归并不断链）
+	nonisolated private static func foldingOrphanIntoMother(
+		profiles: [ChargerProfile],
+		orphanKey: String,
+		orphanConnectCount: Int = 0,
+		orphanRatedWatts: Int? = nil,
+		orphanTiers: [PowerTier] = [],
+		isWireless: Bool = false
+	) -> (profiles: [ChargerProfile], canonicalKey: String)? {
+		guard let motherIndex = profiles.firstIndex(where: { mother in
+			// "有名" = 有真名或用户认领名（customName 是最强身份信号）；
+			// 纯兜底名（"100W 充电器"）即使是母头本尊，也因无真名信号而保持独立
+			(!isFallbackChargerName(mother.name, ratedWatts: mother.ratedWatts)
+				|| mother.customName?.isEmpty == false)
+				&& mother.key != orphanKey
+				&& tiers(orphanTiers, degradationOf: tiers(fromSignature: mother.tierSignature ?? ""))
+				&& mother.key.hasSuffix("|无线") == isWireless
+		}) else { return nil }
+
+		var mother = profiles[motherIndex]
+		var aliases = mother.aliases ?? []
+		aliases.append(orphanKey)
+
+		var result = profiles
+		if let orphanIndex = result.firstIndex(where: { $0.key == orphanKey }) {
+			let orphan = result[orphanIndex]
+			mother.connectCount += orphan.connectCount
+			mother.firstSeen = Swift.min(mother.firstSeen, orphan.firstSeen)
+			mother.lastSeen = Swift.max(mother.lastSeen, orphan.lastSeen)
+			if mother.customName == nil { mother.customName = orphan.customName }
+			aliases.append(contentsOf: orphan.aliases ?? [])
+			result.remove(at: orphanIndex)
+		}
+		var observed = Set(mother.observedWatts ?? [])
+		if let orphanRatedWatts, orphanRatedWatts > 0 { observed.insert(orphanRatedWatts) }
+		if let motherRated = mother.ratedWatts, motherRated > 0 { observed.insert(motherRated) }
+		mother.aliases = Array(Set(aliases)).filter { $0 != mother.key }.sorted()
+		mother.observedWatts = observed.sorted()
+		result[motherIndex] = mother
+		return (result, mother.key)
+	}
+
+	// 识别 v2 迁移：把历史遗留的"无名降档孤儿档案"并回有名母档案（幂等，读档后跑一次）。
+	// 一轮归并可能露出新的可归并对（别名链），循环到不再变化
+	nonisolated static func foldingOrphanProfiles(_ profiles: [ChargerProfile]) -> [ChargerProfile] {
+		var result = profiles
+		var changed = true
+		while changed {
+			changed = false
+			for orphan in result where isFallbackChargerName(orphan.name, ratedWatts: orphan.ratedWatts) {
+				let orphanTiers = tiers(fromSignature: orphan.tierSignature ?? "")
+				guard !orphanTiers.isEmpty else { continue }
+				let folded = foldingOrphanCharger(
+					profiles: result,
+					orphanKey: orphan.key,
+					orphanName: orphan.name,
+					orphanConnectCount: orphan.connectCount,
+					orphanRatedWatts: orphan.ratedWatts,
+					orphanTiers: orphanTiers,
+					isWireless: orphan.key.hasSuffix("|无线")
+				)
+				guard folded.profiles.count < result.count else { continue }
+				result = folded.profiles
+				changed = true
+				break
+			}
+		}
+		return result
+	}
+
+	// 名称后到补全：建档时名没广播出来（10 秒兜底建档），后续采样把真名补上——
+	// 显示与归并判定都以真名为准
+	nonisolated static func backfillingChargerName(profiles: [ChargerProfile], key: String, name: String) -> [ChargerProfile] {
+		var profiles = profiles
+		guard !name.isEmpty,
+			let index = profiles.firstIndex(where: { $0.key == key || $0.aliases?.contains(key) == true }),
+			isFallbackChargerName(profiles[index].name, ratedWatts: profiles[index].ratedWatts) else { return profiles }
+		var profile = profiles[index]
+		profile.name = name
+		profiles[index] = profile
+		return profiles
+	}
+
 	// 已知身份的充电器更新或建档：
 	// 重连窗口内再见不重复计次（如应用重启），超窗算一次新连接；档案满了挤掉最久没见的
 	nonisolated static func upsertingChargerProfile(
@@ -333,6 +495,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		manufacturer: String,
 		ratedWatts: Int,
 		tierSignature: String? = nil,
+		observedWatts: Int? = nil,
 		now: Date
 	) -> [ChargerProfile] {
 		var profiles = profiles
@@ -341,6 +504,14 @@ final class BatteryHistoryRecorder: ObservableObject {
 				profiles[index].connectCount += 1
 			}
 			profiles[index].lastSeen = now
+			// 名称后到补全 + 观察瓦数并集（同一头随负载浮动，见多识广不是换头）
+			if profiles[index].name.isEmpty, !name.isEmpty { profiles[index].name = name }
+			if let observedWatts, observedWatts > 0 {
+				var seen = Set(profiles[index].observedWatts ?? [])
+				seen.insert(observedWatts)
+				if let rated = profiles[index].ratedWatts, rated > 0 { seen.insert(rated) }
+				profiles[index].observedWatts = Array(seen).sorted()
+			}
 		} else {
 			let fallbackName = manufacturer.isEmpty ? "\(ratedWatts)W 充电器" : manufacturer
 			profiles.append(ChargerProfile(
@@ -350,7 +521,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 				firstSeen: now,
 				lastSeen: now,
 				connectCount: 1,
-				tierSignature: tierSignature
+				tierSignature: tierSignature,
+				aliases: nil,
+				observedWatts: ratedWatts > 0 ? [ratedWatts] : nil
 			))
 			if profiles.count > maxChargerProfiles {
 				profiles.sort { $0.lastSeen < $1.lastSeen }
@@ -628,7 +801,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 当前接着的充电器对应的档案（拔电后为 nil）
 	var currentChargerProfile: ChargerProfile? {
 		guard let key = activeChargerKey else { return nil }
-		return chargerProfiles.first { $0.key == key }
+		return Self.chargerProfile(matching: key, in: chargerProfiles)
 	}
 
 	// 用户给充电器起的名字（系统识别不了时由用户认领）；空字符串视为清除
@@ -647,8 +820,15 @@ final class BatteryHistoryRecorder: ObservableObject {
 			return
 		}
 		if adapterConnectedAt == nil { adapterConnectedAt = Date() }
-		// 本次接入已建档就不再动，避免适配器信息陆续到位时被重复计次
-		guard activeChargerKey == nil else { return }
+		guard activeChargerKey == nil else {
+			// 已建档的会话：名广播出来后回填（建档时名没到位走的是兜底建档）——
+			// 显示与归并判定都以真名为准
+			if let key = activeChargerKey {
+				let incomingName = snapshot.adapterName ?? ""
+				chargerProfiles = Self.backfillingChargerName(profiles: chargerProfiles, key: key, name: incomingName)
+			}
+			return
+		}
 		
 		let name = snapshot.adapterName ?? ""
 		let manufacturer = snapshot.adapterManufacturer ?? ""
@@ -660,23 +840,37 @@ final class BatteryHistoryRecorder: ObservableObject {
 				Date().timeIntervalSince(connectedAt) >= Self.chargerIdentityWaitSeconds
 			else { return }
 		}
-		// 档位签名进键：两只同瓦数的不同充电器分开建档；无线头带标记
+		// 档位签名进键：两只同瓦数的不同充电器分开建档；无线头带标记。
+		// 识别 v2：无名降档会话先做物理头归并解析——同一只头（多口分功率/协议降档）沿用老档案，
+		// 统计与速度对比连成一条线；正式键 = 母档案首建档键，降档键收进别名
 		let signature = Self.tierSignature(snapshot.powerTiers)
-		let key = Self.chargerKey(
+		let wireless = snapshot.chargingProtocol == "无线充电"
+		let rawKey = Self.chargerKey(
 			name: name,
 			manufacturer: manufacturer,
 			ratedWatts: rated,
 			tiers: snapshot.powerTiers,
-			isWireless: snapshot.chargingProtocol == "无线充电"
+			isWireless: wireless
 		)
-		activeChargerKey = key
+		let resolved = Self.foldingOrphanCharger(
+			profiles: chargerProfiles,
+			orphanKey: rawKey,
+			orphanName: name,
+			orphanConnectCount: 0,
+			orphanRatedWatts: rated > 0 ? rated : nil,
+			orphanTiers: snapshot.powerTiers,
+			isWireless: wireless
+		)
+		chargerProfiles = resolved.profiles
+		activeChargerKey = resolved.canonicalKey
 		chargerProfiles = Self.upsertingChargerProfile(
 			chargerProfiles,
-			key: key,
+			key: resolved.canonicalKey,
 			name: name,
 			manufacturer: manufacturer,
 			ratedWatts: rated,
 			tierSignature: signature.isEmpty ? nil : signature,
+			observedWatts: rated > 0 ? rated : nil,
 			now: Date()
 		)
 		save(chargerProfiles, key: Self.chargerProfilesKey)

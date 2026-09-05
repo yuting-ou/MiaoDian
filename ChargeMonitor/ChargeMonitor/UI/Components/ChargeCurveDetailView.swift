@@ -19,12 +19,16 @@ struct ChargeCurveWindowHost: View {
 	var body: some View {
 		if let date = selection.startDate,
 		   let session = historyRecorder.recentSessions.first(where: { $0.startDate == date }) {
+			let aliases = session.chargerKey.flatMap { key in
+				BatteryHistoryRecorder.chargerProfile(matching: key, in: historyRecorder.chargerProfiles)?.aliases
+			} ?? nil
 			ChargeCurveDetailView(
 				session: session,
 				history: historyRecorder.recentSessions,
 				chargerName: session.chargerKey.flatMap { key in
 					historyRecorder.chargerProfiles.first { $0.key == key }?.displayName
-				}
+				},
+				chargerAliases: Set(aliases ?? [])
 			)
 		} else {
 			ChargeCurveEmptyView()
@@ -62,6 +66,8 @@ struct ChargeCurveDetailView: View {
 	var history: [ChargeSession] = []
 	// 这次充电用的充电器展示名（会话认得出时显示）
 	var chargerName: String? = nil
+	// 该充电器的别名键（识别 v2 归并）：速度对比池把降档会话一起算上
+	var chargerAliases: Set<String> = []
 
 	@Environment(\.dismiss) private var dismiss
 
@@ -98,7 +104,7 @@ struct ChargeCurveDetailView: View {
 	}
 
 	private var comparison: String? {
-		UsagePatternAnalyzer.chargeSpeedComparison(current: session, history: history)
+		UsagePatternAnalyzer.chargeSpeedComparison(current: session, history: history, chargerAliases: chargerAliases)
 	}
 
 	// MARK: - 头部汇总

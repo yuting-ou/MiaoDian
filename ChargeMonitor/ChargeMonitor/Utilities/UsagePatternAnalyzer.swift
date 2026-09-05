@@ -146,7 +146,7 @@ nonisolated enum UsagePatternAnalyzer {
 
 	// 本次充电 vs 历史平均充速（%/分钟）；时长太短、涨得太少或样本不足不给结论。
 	// 会话认得出充电器时优先和"同一只头"比——不同头的速度本就不一样，混着比没有意义
-	static func chargeSpeedComparison(current: ChargeSession, history: [ChargeSession]) -> String? {
+	static func chargeSpeedComparison(current: ChargeSession, history: [ChargeSession], chargerAliases: Set<String> = []) -> String? {
 		let gained = current.endPercent - current.startPercent
 		guard current.durationMinutes >= 5, gained >= 10 else { return nil }
 		let speed = Double(gained) / Double(current.durationMinutes)
@@ -157,7 +157,8 @@ nonisolated enum UsagePatternAnalyzer {
 				&& ($0.endPercent - $0.startPercent) >= 10
 		}
 		let sameCharger: [ChargeSession] = current.chargerKey.map { key in
-			eligible.filter { $0.chargerKey == key }
+			// 识别 v2：归并档案的历史会话键是别名——同一只头的降档会话也进对比池
+			eligible.filter { $0.chargerKey == key || chargerAliases.contains($0.chargerKey ?? "") }
 		} ?? []
 		let pool = sameCharger.count >= 2 ? sameCharger : eligible
 		guard pool.count >= 2 else { return nil }

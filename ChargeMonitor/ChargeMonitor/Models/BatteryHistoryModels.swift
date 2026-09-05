@@ -174,13 +174,18 @@ nonisolated struct ChargerProfile: Codable, Equatable, Sendable {
 	let key: String
 	var name: String
 	var ratedWatts: Int?
-	let firstSeen: Date
+	var firstSeen: Date
 	var lastSeen: Date
 	var connectCount: Int
 	// 用户起的名字；系统识别不了时由用户认领，优先于 name 展示
 	var customName: String?
 	// PD 源功率档位签名（展示用）：两只同瓦数的不同充电器靠它辨认
 	var tierSignature: String?
+	// 识别 v2：同一物理头因协议降档/多口分功率产生的新身份键，归并后收进别名；
+	// 正式键保持首建档键，历史会话的 chargerKey 继续指向它，速度对比不丢样本
+	var aliases: [String]? = nil
+	// 识别 v2：观察到的协商功率（去重升序，封顶）——同一头随负载在档位间浮动属正常，不是换了头
+	var observedWatts: [Int]? = nil
 
 	// 展示名：用户命名 > 系统识别名 > 额定瓦数兜底
 	var displayName: String {

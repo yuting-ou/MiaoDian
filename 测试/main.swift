@@ -877,6 +877,149 @@ do {
 	expect(after.contains { $0.name == "新面孔" }, "充电器建档：新面孔入档")
 }
 
+// MARK: - 充电器识别 v2（物理头归并：同一只头协议降档/多口分功率不再裂成两个档案）
+
+do {
+	// 满载母集与降档形态（多口充电器被分走功率时本口的实际广播）
+	let full = [
+		PowerTier(maxVoltageMV: 5000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 15000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 20000, maxCurrentMA: 5000),
+	]
+	let degraded = [
+		PowerTier(maxVoltageMV: 5000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 15000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 20000, maxCurrentMA: 3500),
+	]
+	expect(BatteryHistoryRecorder.tiers(degraded, degradationOf: full), "降档形态：同数量同电压阶梯，电流只降不增")
+	expect(!BatteryHistoryRecorder.tiers(full, degradationOf: degraded), "降档形态：母集不是降档（变异检验：≥ 写反必红）")
+	expect(!BatteryHistoryRecorder.tiers([], degradationOf: full), "降档形态：空集不算")
+
+	// 签名反解析往返一致
+	let roundTrip = BatteryHistoryRecorder.tiers(fromSignature: BatteryHistoryRecorder.tierSignature(full))
+	expectEqual(BatteryHistoryRecorder.tierSignature(roundTrip), BatteryHistoryRecorder.tierSignature(full), "签名反解析：往返一致")
+
+	let motherKey = BatteryHistoryRecorder.chargerKey(name: "酷态科10号 Ultra", manufacturer: "", ratedWatts: 100, tiers: full)
+	let mother = ChargerProfile(
+		key: motherKey, name: "酷态科10号 Ultra", ratedWatts: 100,
+		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: BatteryHistoryRecorder.tierSignature(full)
+	)
+	let orphanKey = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 70, tiers: degraded)
+
+	// 无名降档会话 → 投靠有名母档案：正式键=母键、次数相加、降档键入别名、观察瓦数并集
+	let (folded, canonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [mother], orphanKey: orphanKey, orphanName: "", orphanConnectCount: 0,
+		orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(canonical, motherKey, "归并：正式键=母档案键")
+	expectEqual(folded.count, 1, "归并：孤儿档案消失")
+	expectEqual(folded.first?.connectCount, 8, "归并：新键无历史，次数不虚加")
+	expect(folded.first?.aliases?.contains(orphanKey) == true, "归并：降档键收进别名")
+	expectEqual(folded.first?.observedWatts, [70, 100], "归并：观察瓦数并集升序")
+
+	// 幂等：再次调用命中别名直接返回母键，档案不动
+	let (again, canonicalAgain) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: folded, orphanKey: orphanKey, orphanName: "", orphanConnectCount: 0,
+		orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(canonicalAgain, motherKey, "归并幂等：别名命中返回母键")
+	expectEqual(again.count, 1, "归并幂等：档案不再变化")
+
+	// 不同头（缺 15V 档，非子集）→ 不归并、独立建档
+	let other = [
+		PowerTier(maxVoltageMV: 5000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000),
+		PowerTier(maxVoltageMV: 20000, maxCurrentMA: 3250),
+	]
+	let otherKey = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65, tiers: other)
+	let (notMerged, newKey) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [mother], orphanKey: otherKey, orphanName: "", orphanConnectCount: 1,
+		orphanRatedWatts: 65, orphanTiers: other, isWireless: false
+	)
+	expectEqual(notMerged.count, 1, "非子集：不同头不归并（未建新档，输入原样）")
+	expectEqual(newKey, otherKey, "非子集：独立建档")
+
+	// 有名新键 = 真新头，不归并（哪怕档位成子集）
+	let (namedNew, _) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [mother], orphanKey: BatteryHistoryRecorder.chargerKey(name: "小米 120W", manufacturer: "", ratedWatts: 120, tiers: degraded),
+		orphanName: "小米 120W", orphanConnectCount: 0, orphanRatedWatts: 120, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(namedNew.count, 1, "有名新键：真新头不归并（未建新档）")
+
+	// 读档迁移：历史遗留的无名孤儿档案（已建档）并回母档案
+	let orphanProfile = ChargerProfile(
+		key: orphanKey, name: "", ratedWatts: 70,
+		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
+		connectCount: 2, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+	)
+	let (migrated, mCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [mother, orphanProfile], orphanKey: orphanKey, orphanName: "",
+		orphanConnectCount: 2, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(mCanonical, motherKey, "迁移：孤儿档案并回母档案")
+	expectEqual(migrated.count, 1, "迁移：孤儿档案条目消失")
+	expectEqual(migrated.first?.connectCount, 10, "迁移：两段历史次数相加")
+
+	// 用户真实形态：母档案名字段是兜底名但 customName 非空（酷态科10号Ultra）——也算有名母档案
+	var realMother = ChargerProfile(
+		key: BatteryHistoryRecorder.chargerKey(name: "100W 充电器", manufacturer: "", ratedWatts: 100, tiers: full),
+		name: "100W 充电器", ratedWatts: 100,
+		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: BatteryHistoryRecorder.tierSignature(full)
+	)
+	realMother.customName = "酷态科10号Ultra"
+	var realOrphan = ChargerProfile(
+		key: orphanKey, name: "70W 充电器", ratedWatts: 70,
+		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
+		connectCount: 5, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+	)
+	realOrphan.observedWatts = [70]
+	let (foldedReal, realCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [realMother, realOrphan], orphanKey: orphanKey, orphanName: "70W 充电器",
+		orphanConnectCount: 5, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(realCanonical, realMother.key, "真实形态归并：正式键=母档案键")
+	expectEqual(foldedReal.count, 1, "真实形态归并：70W 孤儿并入")
+	expectEqual(foldedReal.first?.connectCount, 13, "真实形态归并：次数相加（8+5）")
+	expectEqual(foldedReal.first?.displayName, "酷态科10号Ultra", "真实形态归并：显示名保持用户命名")
+
+	// 兜底名（"70W 充电器"）也算未识别：用户实测里降档会话的档案名正是兜底名
+	expect(BatteryHistoryRecorder.isFallbackChargerName("70W 充电器", ratedWatts: 70), "兜底名：N瓦 充电器模式算未识别")
+	expect(!BatteryHistoryRecorder.isFallbackChargerName("酷态科10号 Ultra", ratedWatts: 100), "兜底名：真名不算未识别")
+	let fallbackOrphan = ChargerProfile(
+		key: orphanKey, name: "70W 充电器", ratedWatts: 70,
+		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
+		connectCount: 5, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+	)
+	let (foldedFallback, fbCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+		profiles: [mother, fallbackOrphan], orphanKey: orphanKey, orphanName: "70W 充电器",
+		orphanConnectCount: 5, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
+	)
+	expectEqual(fbCanonical, motherKey, "兜底名归并：正式键=母档案键")
+	expectEqual(foldedFallback.first?.connectCount, 13, "兜底名归并：次数相加（8+5）")
+	expectEqual(foldedFallback.first?.observedWatts, [70, 100], "兜底名归并：观察瓦数并集")
+
+	// 名称后到补全：兜底名可被真名覆盖
+	let backfilled = BatteryHistoryRecorder.backfillingChargerName(
+		profiles: [fallbackOrphan], key: orphanKey, name: "酷态科10号 Ultra"
+	)
+	expectEqual(backfilled.first?.name, "酷态科10号 Ultra", "名称回填：兜底名可被真名覆盖")
+
+	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
+	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
+	let motherPast = ChargeSession(startDate: t0.addingTimeInterval(-7200), endDate: t0.addingTimeInterval(-7200 + 3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
+	let orphanPast = ChargeSession(startDate: t0.addingTimeInterval(-14400), endDate: t0.addingTimeInterval(-14400 + 9000), startPercent: 20, endPercent: 50, peakInputW: 30, chargerKey: orphanKey)
+	let poolWithAlias = UsagePatternAnalyzer.chargeSpeedComparison(
+		current: current, history: [motherPast, orphanPast], chargerAliases: [orphanKey]
+	)
+	expect(poolWithAlias?.contains("用这只充电器") == true, "速度对比：别名会话进同一只头对比池")
+	let poolWithoutAlias = UsagePatternAnalyzer.chargeSpeedComparison(
+		current: current, history: [motherPast, orphanPast]
+	)
+	expect(poolWithoutAlias?.contains("比平时") == true, "速度对比：无别名时退回全量池")
+}
+
 // MARK: - 今日用电累计
 
 do {

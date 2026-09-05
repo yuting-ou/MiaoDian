@@ -289,10 +289,20 @@ struct BatteryInfoFormatter {
 			value: value,
 			iconTint: tint,
 			valueTint: valueTint,
-			helpText: isUnnamed ? "系统认不出这只充电器，可在设置 → 充电器里给它起个名字" : nil
+			// 识别 v2：多口分功率/协议降档时同一只头会协商出不同瓦数——观察档位进悬停提示，
+			// 用户追问"这只头到底多大"时答案就在手上
+			helpText: helpText(isUnnamed: isUnnamed, profile: profile)
 		)
 	}
-	
+
+	// 充电器行悬停提示：未命名引导认领；已识别的展示观察功率档（如"观察功率档：70W/100W"）
+	private func helpText(isUnnamed: Bool, profile: ChargerProfile?) -> String? {
+		if isUnnamed { return "系统认不出这只充电器，可在设置 → 充电器里给它起个名字" }
+		guard let profile, let observed = profile.observedWatts, observed.count > 1 else { return nil }
+		let tiersText = observed.map { "\($0)W" }.joined(separator: "/")
+		return "同一只头随负载协商不同功率，观察功率档：\(tiersText)"
+	}
+
 	// MARK: - 电池相关
 	
 	private var cycleCountItem: BatteryInfoItem? {
