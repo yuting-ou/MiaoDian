@@ -11,21 +11,10 @@ enum GlassMetrics {
 }
 
 extension View {
-	/// 面板外壳：ultraThinMaterial + 窗口底色半透明地板（双路径统一）。
-	/// 实测记录：clear/regular 玻璃、纯 ultraThin 都会跟随壁纸亮度——深色壁纸下面板变暗，
-	/// 浅色模式的黑字对比度跌到 1.7~2.5:1。地板用 windowBackgroundColor（自适应：
-	/// 浅色外观=白、深色外观=黑），保证任意壁纸下文字对比度达标；
-	/// 0.5 浓度下壁纸色彩仍柔和透出，玻璃感由控件/徽章/仪表层的 interactive/tint 玻璃承担
-	@ViewBuilder func panelShell() -> some View {
-		background(
-			RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
-				.fill(.ultraThinMaterial)
-				.overlay(
-					RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
-						.fill(Color(nsColor: .windowBackgroundColor).opacity(0.5))
-				)
-		)
-	}
+	/// 面板外壳：26 与控件/徽章统一为 glassEffect（同一液态玻璃材质系统），
+	/// 白色 tint 作亮度地板——玻璃跟随壁纸，地板托住对比度（材质直跟壁纸实测 1.7~2.5:1 不达标）；
+	/// 深色外观自适应补黑。15–25 用 regularMaterial（无玻璃 API，降级质感）
+	func panelShell() -> some View { modifier(PanelShellModifier()) }
 
 	/// 卡片分区：26 极淡填充+发丝线（内容对比度由外壳玻璃统一柔化，分区本身不再加模糊层）；
 	/// 15–25 原 quaternarySystemFill+0.06 描边，观感与玻璃化之前完全一致
@@ -140,6 +129,25 @@ private struct BadgeBackground: ViewModifier {
 			content.glassEffect(.clear.tint(color.opacity(0.5)), in: .capsule)
 		} else {
 			content.background(Capsule().fill(color.opacity(0.13)))
+		}
+	}
+}
+
+// 面板外壳实现：玻璃 + 自适应亮度地板。浅色外观补白、深色外观补黑——
+// 玻璃跟着壁纸走，地板保证黑字/白字对比度始终达标（苹果美学=液态质感，可读性=地板兜底）
+private struct PanelShellModifier: ViewModifier {
+	@Environment(\.colorScheme) private var colorScheme
+
+	@ViewBuilder
+	func body(content: Content) -> some View {
+		if #available(macOS 26.0, *) {
+			let floor: Color = colorScheme == .dark ? .black.opacity(0.35) : .white.opacity(0.4)
+			content.glassEffect(.regular.tint(floor), in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
+		} else {
+			content.background(
+				.regularMaterial,
+				in: RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+			)
 		}
 	}
 }
