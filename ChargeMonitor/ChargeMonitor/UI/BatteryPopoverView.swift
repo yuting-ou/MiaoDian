@@ -596,10 +596,30 @@ struct BatteryPopoverView: View {
 				notificationPermissionWarning
 			}
 			// 设置已迁到独立设置窗口，这里只负责打开它；
-			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多
-			PopoverActionRow("设置", systemImageName: "gear") {
-				openSettingsWindow()
+			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多。
+			// 必须用 SettingsLink：sendAction(showSettingsWindow:) 在 NSHostingView 宿主里被系统
+			// 拒绝（运行时 Fault "Please use SettingsLink"，实测在案）；simultaneousGesture 补激活——
+			// LSUIElement 应用不抢前台，不激活的话设置窗口会埋在其他 App 后面
+			SettingsLink {
+				GlassRow {
+					HStack(spacing: 6) {
+						Image(systemName: "gear")
+							.font(.system(size: 11, weight: .medium))
+							.foregroundStyle(.secondary)
+							.frame(width: 16)
+						Text("设置")
+							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.foregroundStyle(.primary)
+						Spacer(minLength: 8)
+					}
+					.frame(maxWidth: .infinity, minHeight: PopoverLayout.rowHeight, alignment: .leading)
+					.padding(.horizontal, PopoverLayout.rowHorizontalPadding)
+					.contentShape(Rectangle())
+				}
 			}
+			.simultaneousGesture(TapGesture().onEnded {
+				NSApp.activate(ignoringOtherApps: true)
+			})
 			
 			PopoverActionRow("导出报告", systemImageName: "square.and.arrow.up") {
 				exportReport()
@@ -630,14 +650,6 @@ struct BatteryPopoverView: View {
 			}
 			.keyboardShortcut("q")
 		}
-	}
-
-	private func openSettingsWindow() {
-		// 菜单栏应用(LSUIElement)没有 Dock 图标，直接开设置可能不抢焦点、
-		// 弹窗被其他 App 盖住。先激活本应用让它成为前台，设置窗口才会浮到最上层。
-		// 面板由 NSHostingView 承载，拿不到 @Environment(\.openSettings)，走 AppKit 动作打开 Settings 场景
-		NSApp.activate(ignoringOtherApps: true)
-		NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
 	}
 
 	private func openBatterySettings() {
