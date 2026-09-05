@@ -599,7 +599,8 @@ struct BatteryPopoverView: View {
 			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多。
 			// 必须用 SettingsLink：sendAction(showSettingsWindow:) 在 NSHostingView 宿主里被系统
 			// 拒绝（运行时 Fault "Please use SettingsLink"，实测在案）；simultaneousGesture 补激活——
-			// LSUIElement 应用不抢前台，不激活的话设置窗口会埋在其他 App 后面
+			// LSUIElement 应用不抢前台，不激活的话设置窗口会埋在其他 App 后面。
+			// buttonStyle(.plain) 剥掉 SettingsLink 自带的链接态底色——行观感必须与其他控制行完全一致
 			SettingsLink {
 				GlassRow {
 					HStack(spacing: 6) {
@@ -617,6 +618,7 @@ struct BatteryPopoverView: View {
 					.contentShape(Rectangle())
 				}
 			}
+			.buttonStyle(.plain)
 			.simultaneousGesture(TapGesture().onEnded {
 				NSApp.activate(ignoringOtherApps: true)
 			})
