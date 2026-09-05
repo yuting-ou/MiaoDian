@@ -1,39 +1,137 @@
 import SwiftUI
 
-// 液态玻璃设计令牌：面板材质语言的唯一入口（macOS 26 部署目标由 build.sh 保证，无需可用性分支）。
-// 卡片/按钮/徽章的材质全部在此定义，Section 只引用不内联——改观感只动这一处。
-// 苹果美学的核心是用材质做层级：玻璃自带边缘高光与透底，不再需要手动发丝描边和灰底色块。
-enum GlassTokens {
-	// 卡片底材质：clear 玻璃——保留折射与边缘高光但无 regular 的奶白染色，
-	// 壁纸色彩能真正透进来（regular 叠两层会把面板洗成白板，液态感尽失）
-	nonisolated static let card: Glass = .clear
-	// 交互材质：悬停/按压出现镜面高光，用于控制行与可点元素
-	nonisolated static let interactive: Glass = .clear.interactive()
-
-	// 圆角体系：卡片 16、头部大卡 20、行 10——对齐系统面板量级，连续曲率
-	nonisolated static let cardCornerRadius: CGFloat = 16
-	nonisolated static let headerCornerRadius: CGFloat = 20
+// 液态玻璃材质 token 与可用性感知修饰符（macOS 26 玻璃 / 15–25 原质感降级，双路径）。
+// 裁决规则：玻璃让一步，可读性不让步——文本、数字、图表是内容层，永不坐在玻璃上；
+// 玻璃只给外壳（一整块板）、控件（悬停/按压有弹性高光）、徽章与仪表（tint 着色）。
+// 卡片在 26 上降为玻璃板上的极淡分区+发丝线，不各自成玻璃（避免"玻璃汤"）。
+enum GlassMetrics {
+	nonisolated static let shellCornerRadius: CGFloat = 12
+	nonisolated static let cardCornerRadius: CGFloat = 12
 	nonisolated static let rowCornerRadius: CGFloat = 10
+}
 
-	// 着色玻璃：只留给语义状态（充电绿/低电红/高温橙）；clear 底不吃色，tint 浓度给足
-	nonisolated static func tinted(_ color: Color) -> Glass {
-		.clear.tint(color.opacity(0.5))
+extension View {
+	/// 面板外壳：26 一整块 clear 玻璃板（采样桌面、模糊而不染色，regular 的奶白染色会洗掉壁纸色彩）；
+	/// 15–25 用 regularMaterial 自给背景——宿主 NSPanel 底是全透明的，降级路径必须自己垫底
+	@ViewBuilder func panelShell() -> some View {
+		if #available(macOS 26.0, *) {
+			glassEffect(.clear, in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
+		} else {
+			background(
+				.regularMaterial,
+				in: RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+			)
+		}
+	}
+
+	/// 卡片分区：26 极淡填充+发丝线（内容对比度由外壳玻璃统一柔化，分区本身不再加模糊层）；
+	/// 15–25 原 quaternarySystemFill+0.06 描边，观感与玻璃化之前完全一致
+	@ViewBuilder func cardSection() -> some View {
+		if #available(macOS 26.0, *) {
+			background(
+				RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+					.fill(Color.primary.opacity(0.045))
+			)
+			.overlay(
+				RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+					.strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+			)
+		} else {
+			background(
+				RoundedRectangle(cornerRadius: 10, style: .continuous)
+					.fill(Color(nsColor: .quaternarySystemFill))
+			)
+			.overlay(
+				RoundedRectangle(cornerRadius: 10, style: .continuous)
+					.strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+			)
+		}
+	}
+
+	/// 可交互控件玻璃：26 clear+interactive（悬停高光、按压弹性，"液态"的灵魂在反馈）；
+	/// 15–25 不施玻璃，由调用方保留原悬停灰底行为
+	@ViewBuilder func controlGlass(in shape: GlassControlShape = .rect) -> some View {
+		if #available(macOS 26.0, *) {
+			switch shape {
+			case .rect:
+				glassEffect(.clear.interactive(), in: .rect(cornerRadius: GlassMetrics.rowCornerRadius))
+			case .circle:
+				glassEffect(.clear.interactive(), in: .circle)
+			}
+		} else {
+			self
+		}
+	}
+
+	/// 仪表玻璃底：头部圆环仪表下垫 clear 玻璃圆（仪器是控件不是内容，允许上玻璃）；15–25 无
+	@ViewBuilder func gaugeGlassBase() -> some View {
+		if #available(macOS 26.0, *) {
+			glassEffect(.clear, in: .circle)
+		} else {
+			self
+		}
+	}
+
+	/// 头部/图表容器分区：26 与卡片同款发丝分区（它们本无容器，降级路径保持"无"以复刻原观感）
+	@ViewBuilder func glassSection() -> some View {
+		if #available(macOS 26.0, *) {
+			cardSection()
+		} else {
+			self
+		}
+	}
+
+	/// 着色玻璃图标块（蓝牙设备等）：26 clear+tint；15–25 原实色 16% 圆角底
+	@ViewBuilder func tintedTile(_ color: Color, cornerRadius: CGFloat) -> some View {
+		if #available(macOS 26.0, *) {
+			glassEffect(.clear.tint(color.opacity(0.5)), in: .rect(cornerRadius: cornerRadius))
+		} else {
+			background(
+				RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+					.fill(color.opacity(0.16))
+			)
+		}
 	}
 }
 
-// 着色玻璃胶囊徽章：替代旧的 Capsule().fill(color.opacity(0.13)) 色块底。
-// 同一种状态语言（图标+短语），但底从"贴纸"变成"染了色的玻璃"，深浅色与桌面壁纸自动协调
+enum GlassControlShape {
+	case rect, circle
+}
+
+/// "关闭"按钮样式：26 玻璃胶囊、15–25 系统淡底——曲线窗口空态用
+struct CloseButtonStyle: ButtonStyle {
+	@ViewBuilder
+	func makeBody(configuration: Configuration) -> some View {
+		if #available(macOS 26.0, *) {
+			configuration.label
+				.padding(.horizontal, 14)
+				.padding(.vertical, 6)
+				.glassEffect(.regular.interactive(), in: .capsule)
+		} else {
+			configuration.label
+				.padding(.horizontal, 10)
+				.padding(.vertical, 4)
+				.background(
+					RoundedRectangle(cornerRadius: 6, style: .continuous)
+						.fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.06))
+				)
+		}
+	}
+}
+
+/// 着色玻璃徽章：26 clear 玻璃+语义色 tint（绿/红是"带信息的颜色"，tint 只染色不夺读）；
+/// 15–25 原 Capsule 实色 13% 底。文字色始终用语义色本身，保证辨识度
 struct GlassBadge: View {
 	let color: Color
 	let systemImage: String?
 	let text: String
-	
+
 	init(symbol: String? = nil, text: String, color: Color) {
 		self.systemImage = symbol
 		self.text = text
 		self.color = color
 	}
-	
+
 	var body: some View {
 		HStack(spacing: 3) {
 			if let systemImage {
@@ -46,11 +144,24 @@ struct GlassBadge: View {
 		.foregroundStyle(color)
 		.padding(.horizontal, 7)
 		.padding(.vertical, 2.5)
-		.glassEffect(GlassTokens.tinted(color), in: .capsule)
+		.modifier(BadgeBackground(color: color))
 	}
 }
 
-// 时段热力图配色：24 格时段图与用电日历共用同一套热力语言（此前两文件各一份逐字重复）
+private struct BadgeBackground: ViewModifier {
+	let color: Color
+
+	func body(content: Content) -> some View {
+		if #available(macOS 26.0, *) {
+			// clear 玻璃不吃淡色，tint 浓度给到 0.5 才压得住壁纸杂色
+			content.glassEffect(.clear.tint(color.opacity(0.5)), in: .capsule)
+		} else {
+			content.background(Capsule().fill(color.opacity(0.13)))
+		}
+	}
+}
+
+/// 时段热力图配色：24 格时段图与用电日历共用同一套热力语言（此前两文件各一份逐字重复）
 enum HeatmapPalette {
 	// 淡绿 → 绿 → 橙，越深越耗电；0 用电极淡底
 	nonisolated static func cellColor(_ level: Double) -> Color {

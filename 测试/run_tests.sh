@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/ChargeMonitor/ChargeMonitor"
 OUT="/tmp/chargemonitor_tests"
 # 测试跑在当前机器上（arm64），部署目标与主程序保持一致，可用性检查同源
-DEPLOYMENT_TARGET="26.0"
+DEPLOYMENT_TARGET="15.0"
 
 mkdir -p "$OUT"
 

@@ -11,7 +11,7 @@ SRC="$ROOT/ChargeMonitor/ChargeMonitor"
 OUT="/tmp/miaodian_preview"
 APP="$OUT/妙电预览.app"
 BUNDLE_ID="fun.crashsystem.MiaoDianPreview"
-DEPLOYMENT_TARGET="26.0"
+DEPLOYMENT_TARGET="15.0"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"

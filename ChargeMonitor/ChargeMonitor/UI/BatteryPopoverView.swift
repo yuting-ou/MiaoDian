@@ -6,6 +6,8 @@ struct BatteryPopoverView: View {
 	@ObservedObject var configurationManager: ConfigurationManager
 	@ObservedObject var historyRecorder: BatteryHistoryRecorder
 	@ObservedObject var alertController: BatteryAlertController
+	// 「减少动态效果」安全网：入场动画直接终态（见 CascadeIn 与容器淡入分支）
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	
 	// 面板打开期间已分好列的卡片：后到的新卡只追加到较矮列，已有卡不滑动不换位，
 	// 避免曲线数据陆续到位时整个面板在眼皮底下洗牌；关闭面板后清空，下次打开重新配平
@@ -62,33 +64,29 @@ struct BatteryPopoverView: View {
 			.modifier(CascadeIn(step: 0, active: didAppear))
 
 			if twoColumns {
-				// 头部玻璃卡自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线
-				// 双列卡片包进 GlassEffectContainer：相邻玻璃边缘互相融合流动（液态玻璃招牌效果）
-				GlassEffectContainer(spacing: 10) {
-					HStack(alignment: .top, spacing: 10) {
-						VStack(alignment: .leading, spacing: 8) {
-							ForEach(Array(split.left.enumerated()), id: \.element) { index, id in
-								cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-									.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-							}
+				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
+				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
+				HStack(alignment: .top, spacing: 10) {
+					VStack(alignment: .leading, spacing: 8) {
+						ForEach(Array(split.left.enumerated()), id: \.element) { index, id in
+							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
 						}
-						.frame(maxWidth: .infinity, alignment: .topLeading)
-
-						VStack(alignment: .leading, spacing: 8) {
-							ForEach(Array(split.right.enumerated()), id: \.element) { index, id in
-								cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-									.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-							}
-						}
-						.frame(maxWidth: .infinity, alignment: .topLeading)
 					}
+					.frame(maxWidth: .infinity, alignment: .topLeading)
+
+					VStack(alignment: .leading, spacing: 8) {
+						ForEach(Array(split.right.enumerated()), id: \.element) { index, id in
+							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+						}
+					}
+					.frame(maxWidth: .infinity, alignment: .topLeading)
 				}
 			} else {
-				GlassEffectContainer(spacing: 8) {
-					ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
-						cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-							.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-					}
+				ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
+					cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
 				}
 			}
 
@@ -102,14 +100,13 @@ struct BatteryPopoverView: View {
 		.padding(.top, 12)
 		.padding(.bottom, 8)
 		.frame(width: twoColumns ? 584 : 292)
-		// 面板级玻璃底：宿主窗口全透明后，卡片缝隙会直接漏出背后的窗口内容（文字穿帮）；
-		// 垫一层与窗口同圆角的玻璃底——缝隙透出柔化的桌面而非清晰文字，卡片浮于其上，
-		// 即控制中心"窗玻璃+控件玻璃"的两级层级做法
-		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: 12))
+		// 面板外壳：26 一整块 clear 玻璃板（缝隙只透柔化桌面，卡片浮于其上）；15–25 regularMaterial 垫底
+		.panelShell()
 		// 容器只留一层极快的背景淡入（纯 opacity，不做 scale 避免与内部 CascadeIn 的缩放叠加）；
-		// “浮现”观感完全交给内部各块的级联动画，单一时序才不会两套动画叠加相互干扰
-		.opacity(didAppear ? 1 : 0)
-		.animation(.easeOut(duration: 0.15), value: didAppear)
+		// “浮现”观感完全交给内部各块的级联动画，单一时序才不会两套动画叠加相互干扰。
+		// 「减少动态效果」：直接终态，无淡入
+		.opacity(didAppear || reduceMotion ? 1 : 0)
+		.animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: didAppear)
 		.onAppear {
 			monitor.startPolling()
 			// 用户可能刚在系统设置里改过通知权限，每次打开面板重新查

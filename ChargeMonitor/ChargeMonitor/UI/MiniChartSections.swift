@@ -187,9 +187,10 @@ struct SOCChartSection: View {
 	// 悬停所在画布的实际宽度（标题栏取最近采样点要用，画布外拿不到）
 	@State private var canvasWidth: CGFloat = 0
 	
-	private static let windowSeconds: TimeInterval = 24 * 3600
+	// Canvas 绘制闭包是 nonisolated 上下文，静态常量需显式 nonisolated（Swift 6 审计要求）
+	nonisolated private static let windowSeconds: TimeInterval = 24 * 3600
 	// 相邻采样间隔超过这个值视为断档，不连线
-	private static let gapSeconds: TimeInterval = 45 * 60
+	nonisolated private static let gapSeconds: TimeInterval = 45 * 60
 	
 	var body: some View {
 		PopoverCard {

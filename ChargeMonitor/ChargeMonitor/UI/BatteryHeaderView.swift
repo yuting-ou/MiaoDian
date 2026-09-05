@@ -49,11 +49,9 @@ struct BatteryHeaderView: View {
 					.accessibilityLabel("电池体检 \(checkup.score) 分，\(checkup.verdict)")
 			}
 		}
-		// 头部整块收进大圆角玻璃卡：它是面板上唯一"常驻置顶"的材质层，与下方卡片列拉开层级
-		.padding(.horizontal, 12)
-		.padding(.vertical, 10)
-		.frame(maxWidth: .infinity, alignment: .leading)
-		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: GlassTokens.headerCornerRadius))
+		// 头部容器：26 上与卡片同款发丝分区（头部是内容不是控件，不单独成玻璃）；
+		// 15–25 保持原裸排无底，降级观感与玻璃化之前一致
+		.modifier(HeaderSection())
 	}
 	
 	// 头部组合朗读：电量 + 状态 + 续航，拼成一句自然语句
@@ -151,27 +149,37 @@ struct BatteryHeaderView: View {
 				.foregroundStyle(gaugeColor)
 		}
 		.frame(width: 46, height: 46)
-		// 圆环浮在一枚小玻璃镜片上：与头部玻璃卡形成"层中透镜"的纵深，进度弧的端点不再悬空
+		// 圆环浮在一枚小玻璃镜片上（仪表属控件层，允许上玻璃）；15–25 无
 		.padding(3)
-		.glassEffect(GlassTokens.card, in: .circle)
+		.gaugeGlassBase()
 	}
 	
 	// 呼吸光点：限帧到 12fps（慢呼吸肉眼无差），模糊半径固定不变避免逐帧重算高斯模糊，
 	// 呼吸只动透明度和缩放。不用 repeatForever/symbolEffect 是因为那类持续动画
-	// 会以屏幕满帧率驱动整个面板视图树重算，CPU 开销大得多
+	// 会以屏幕满帧率驱动整个面板视图树重算，CPU 开销大得多。
+	// 「减少动态效果」：光点静止呈现（无 TimelineView 持续帧），不得有残留动画
 	private struct ChargingBreathingDot: View {
 		let color: Color
+		@Environment(\.accessibilityReduceMotion) private var reduceMotion
 		
 		var body: some View {
-			TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
-				let time = context.date.timeIntervalSinceReferenceDate
-				let breathe = 0.5 + 0.5 * sin(time * 2 * .pi / 1.8)
+			if reduceMotion {
 				Circle()
 					.fill(.white)
 					.frame(width: 4.5, height: 4.5)
 					.shadow(color: color, radius: 3)
-					.opacity(0.55 + 0.45 * breathe)
-					.scaleEffect(0.9 + 0.25 * breathe)
+					.opacity(0.8)
+			} else {
+				TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+					let time = context.date.timeIntervalSinceReferenceDate
+					let breathe = 0.5 + 0.5 * sin(time * 2 * .pi / 1.8)
+					Circle()
+						.fill(.white)
+						.frame(width: 4.5, height: 4.5)
+						.shadow(color: color, radius: 3)
+						.opacity(0.55 + 0.45 * breathe)
+						.scaleEffect(0.9 + 0.25 * breathe)
+				}
 			}
 		}
 	}
@@ -255,6 +263,21 @@ struct BatteryHeaderView: View {
 			}
 		}
 		return nil
+	}
+}
+
+// 头部容器双路径：26 玻璃板上的发丝分区，15–25 原裸排（仅水平 4pt 内边距）
+private struct HeaderSection: ViewModifier {
+	func body(content: Content) -> some View {
+		if #available(macOS 26.0, *) {
+			content
+				.padding(.horizontal, 12)
+				.padding(.vertical, 10)
+				.frame(maxWidth: .infinity, alignment: .leading)
+				.glassSection()
+		} else {
+			content.padding(.horizontal, 4)
+		}
 	}
 }
 

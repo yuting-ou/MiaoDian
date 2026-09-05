@@ -1,23 +1,30 @@
 import AppKit
 import SwiftUI
 
-// 面板入场级联动画：按 step 档位递增延迟，让头部、各卡片、控制行错峰依次“落位”，
-// 而非整块齐发——像控制中心元素逐个到位那种层次感。单列/双列共用，未入场时下移+缩小+淡出
+// 面板入场级联动画：按 step 档位递增延迟，让头部、各卡片、控制行错峰依次”落位”，
+// 而非整块齐发——像控制中心元素逐个到位那种层次感。单列/双列共用，未入场时下移+缩小+淡出。
+// 「减少动态效果」开启时直接呈现终态：不位移、不缩放、不淡入，也不挂动画（可读性安全网必须接住）
 struct CascadeIn: ViewModifier {
 	let step: Int
 	let active: Bool
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	// 首块与每块间隔的延迟（秒）；档位封顶避免卡片多时尾部拖得太晚
 	private var delay: Double { min(Double(step) * 0.038, 0.3) }
 	
+	@ViewBuilder
 	func body(content: Content) -> some View {
-		content
-			.opacity(active ? 1 : 0)
-			.offset(y: active ? 0 : 14)
-			// 用轻微缩放替代 blur 做“聚焦感”：blur 是逐帧高斯模糊，多卡片同时入场会掉帧；
-			// scale 走 GPU 变换几乎零开销，丝滑得多（见项目 numericText/持续动画掉帧的同类教训）
-			.scaleEffect(active ? 1 : 0.96, anchor: .top)
-			// 更长更柔的弹簧（阻尼 0.9 基本不回弹），配 blendDuration 让插值更连贯不顿挫
-			.animation(.spring(response: 0.5, dampingFraction: 0.9, blendDuration: 0.1).delay(active ? delay : 0), value: active)
+		if reduceMotion {
+			content
+		} else {
+			content
+				.opacity(active ? 1 : 0)
+				.offset(y: active ? 0 : 14)
+				// 用轻微缩放替代 blur 做”聚焦感”：blur 是逐帧高斯模糊，多卡片同时入场会掉帧；
+				// scale 走 GPU 变换几乎零开销，丝滑得多（见项目 numericText/持续动画掉帧的同类教训）
+				.scaleEffect(active ? 1 : 0.96, anchor: .top)
+				// 更长更柔的弹簧（阻尼 0.9 基本不回弹），配 blendDuration 让插值更连贯不顿挫
+				.animation(.spring(response: 0.5, dampingFraction: 0.9, blendDuration: 0.1).delay(active ? delay : 0), value: active)
+		}
 	}
 }
 
@@ -89,8 +96,8 @@ struct CollapsibleSectionHeader<Accessory: View>: View {
 	}
 }
 
-// 圆角卡片容器：regular 玻璃底。玻璃自带边缘高光与透底层级，旧的灰底色块+发丝描边一并退场；
-// 外层由 GlassEffectContainer 统一编排，相邻卡片边缘会互相融合流动
+// 圆角卡片容器：26 上是玻璃板的极淡分区+发丝线（不各自成玻璃，内容对比度由外壳统一柔化）；
+// 15–25 上保持原 quaternarySystemFill+描边质感。内边距维持 10/7——信息密度不得因玻璃倒退
 struct PopoverCard<Content: View>: View {
 	private let content: Content
 	
@@ -102,10 +109,10 @@ struct PopoverCard<Content: View>: View {
 		VStack(alignment: .leading, spacing: 0) {
 			content
 		}
-		.padding(.horizontal, 12)
-		.padding(.vertical, 9)
+		.padding(.horizontal, 10)
+		.padding(.vertical, 7)
 		.frame(maxWidth: .infinity, alignment: .leading)
-		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: GlassTokens.cardCornerRadius))
+		.cardSection()
 	}
 }
 
@@ -195,17 +202,26 @@ struct PopoverActionRow: View {
 	}
 }
 
-// 可交互玻璃行：控制行/警示行的统一底。常态即淡玻璃胶囊（按钮可供性写在材质上），
-// interactive 玻璃自己响应悬停与按压的镜面高光，不再需要手动 isHovering 灰底
+// 可交互玻璃行：控制行/警示行的统一底。26 上常态即淡玻璃药丸（按钮可供性写在材质上），
+// interactive 玻璃自己响应悬停与按压的镜面高光；15–25 退回原悬停灰底行为
 struct GlassRow<Content: View>: View {
 	private let content: Content
+	@State private var isHovering = false
 	
 	init(@ViewBuilder content: () -> Content) {
 		self.content = content()
 	}
 	
 	var body: some View {
-		content
-			.glassEffect(GlassTokens.interactive, in: .rect(cornerRadius: GlassTokens.rowCornerRadius))
+		if #available(macOS 26.0, *) {
+			content.controlGlass()
+		} else {
+			content
+				.background(
+					RoundedRectangle(cornerRadius: PopoverLayout.rowCornerRadius, style: .continuous)
+						.fill(isHovering ? Color.primary.opacity(0.08) : .clear)
+				)
+				.onHover { isHovering = $0 }
+		}
 	}
 }

@@ -74,7 +74,10 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	}
 
 	private func showPanel() {
-		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else { return }
+		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else {
+			DiagnosticLog.failureOnce("dbg-showpanel-guard", category: "glass", "调试：showPanel 前置对象未就绪")
+			return
+		}
 		// 每次打开重建内容视图：@State 全新 → 入场级联动画重播、onAppear 驱动 startPolling，
 		// 与 MenuBarExtra"面板每次打开销毁重建"的既有行为一致
 		let root = BatteryPopoverView(
@@ -100,9 +103,12 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示
 		panel.orderFrontRegardless()
 		panel.makeKey()
+		DiagnosticLog.failureOnce("dbg-shown", category: "glass",
+			"调试：shown buttonFrame=\(NSStringFromRect(buttonFrame)) fitting=\(NSStringFromSize(size)) frame=\(NSStringFromRect(panel.frame)) visible=\(panel.isVisible)")
 	}
 
 	private func closePanel() {
+		DiagnosticLog.failureOnce("dbg-close", category: "glass", "调试：closePanel 被调用")
 		guard let panel, panel.isVisible else { return }
 		lastClosedAt = Date()
 		panel.orderOut(nil)
