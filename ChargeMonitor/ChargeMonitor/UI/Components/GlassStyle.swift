@@ -4,20 +4,20 @@ import SwiftUI
 // 卡片/按钮/徽章的材质全部在此定义，Section 只引用不内联——改观感只动这一处。
 // 苹果美学的核心是用材质做层级：玻璃自带边缘高光与透底，不再需要手动发丝描边和灰底色块。
 enum GlassTokens {
-	// 卡片底材质：regular 玻璃，透而不喧；相邻卡片在 GlassEffectContainer 里边缘互相融合
-	nonisolated static let card: Glass = .regular
+	// 卡片底材质：clear 玻璃——保留折射与边缘高光但无 regular 的奶白染色，
+	// 壁纸色彩能真正透进来（regular 叠两层会把面板洗成白板，液态感尽失）
+	nonisolated static let card: Glass = .clear
 	// 交互材质：悬停/按压出现镜面高光，用于控制行与可点元素
-	nonisolated static let interactive: Glass = .regular.interactive()
+	nonisolated static let interactive: Glass = .clear.interactive()
 
 	// 圆角体系：卡片 16、头部大卡 20、行 10——对齐系统面板量级，连续曲率
 	nonisolated static let cardCornerRadius: CGFloat = 16
 	nonisolated static let headerCornerRadius: CGFloat = 20
 	nonisolated static let rowCornerRadius: CGFloat = 10
 
-	// 着色玻璃：只留给语义状态（充电绿/低电红/高温橙），着色克制——tint 浓度压低，
-	// 让玻璃还是玻璃，颜色只是透出来的一层情绪
+	// 着色玻璃：只留给语义状态（充电绿/低电红/高温橙）；clear 底不吃色，tint 浓度给足
 	nonisolated static func tinted(_ color: Color) -> Glass {
-		.regular.tint(color.opacity(0.35))
+		.clear.tint(color.opacity(0.5))
 	}
 }
 
