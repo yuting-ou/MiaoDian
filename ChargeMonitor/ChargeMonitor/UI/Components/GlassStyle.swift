@@ -26,27 +26,7 @@ extension View {
 
 	/// 卡片分区：26 极淡填充+发丝线（内容对比度由外壳玻璃统一柔化，分区本身不再加模糊层）；
 	/// 15–25 原 quaternarySystemFill+0.06 描边，观感与玻璃化之前完全一致
-	@ViewBuilder func cardSection() -> some View {
-		if #available(macOS 26.0, *) {
-			background(
-				RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-					.fill(Color.primary.opacity(0.045))
-			)
-			.overlay(
-				RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-					.strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
-			)
-		} else {
-			background(
-				RoundedRectangle(cornerRadius: 10, style: .continuous)
-					.fill(Color(nsColor: .quaternarySystemFill))
-			)
-			.overlay(
-				RoundedRectangle(cornerRadius: 10, style: .continuous)
-					.strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-			)
-		}
-	}
+	func cardSection() -> some View { modifier(CardSectionModifier()) }
 
 	/// 可交互控件玻璃：26 clear+interactive（悬停高光、按压弹性，"液态"的灵魂在反馈）；
 	/// 15–25 不施玻璃，由调用方保留原悬停灰底行为
@@ -157,6 +137,37 @@ private struct BadgeBackground: ViewModifier {
 			content.glassEffect(.clear.tint(color.opacity(0.5)), in: .capsule)
 		} else {
 			content.background(Capsule().fill(color.opacity(0.13)))
+		}
+	}
+}
+
+// 卡片分区的具体实现做成 ViewModifier：为了拿 @Environment——
+// 「增加对比度」开启时发丝线与淡填充加倍（Apple 的可读性安全网必须接住）
+private struct CardSectionModifier: ViewModifier {
+	@Environment(\.colorSchemeContrast) private var contrast
+
+	func body(content: Content) -> some View {
+		let increased = contrast == .increased
+		if #available(macOS 26.0, *) {
+			content
+				.background(
+					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+						.fill(Color.primary.opacity(increased ? 0.10 : 0.045))
+				)
+				.overlay(
+					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+						.strokeBorder(Color.primary.opacity(increased ? 0.22 : 0.09), lineWidth: 1)
+				)
+		} else {
+			content
+				.background(
+					RoundedRectangle(cornerRadius: 10, style: .continuous)
+						.fill(Color(nsColor: .quaternarySystemFill))
+				)
+				.overlay(
+					RoundedRectangle(cornerRadius: 10, style: .continuous)
+						.strokeBorder(Color.primary.opacity(increased ? 0.16 : 0.06), lineWidth: 1)
+				)
 		}
 	}
 }
