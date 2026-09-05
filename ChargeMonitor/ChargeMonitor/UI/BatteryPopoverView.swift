@@ -104,6 +104,20 @@ struct BatteryPopoverView: View {
 		// 顶满窗口——否则 SwiftUI 会避让隐形标题栏的安全区，面板顶部出现约 28pt 空档
 		.panelShell()
 		.ignoresSafeArea()
+		// 调试会话标记：程序化弹出的面板常驻不关（截图会话），没有它就无法与
+		// 用户手中的正式面板区分——曾因此让用户对着调试实例报"点击外部不关闭"
+		.overlay(alignment: .topLeading) {
+			if ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_OPEN_PANEL"] != nil {
+				Text("调试")
+					.font(.system(size: 8, weight: .bold))
+					.foregroundStyle(.white)
+					.padding(.horizontal, 5)
+					.padding(.vertical, 2)
+					.background(Capsule().fill(.orange))
+					.padding(.leading, 4)
+					.allowsHitTesting(false)
+			}
+		}
 		// 容器只留一层极快的背景淡入（纯 opacity，不做 scale 避免与内部 CascadeIn 的缩放叠加）；
 		// “浮现”观感完全交给内部各块的级联动画，单一时序才不会两套动画叠加相互干扰。
 		// 「减少动态效果」：直接终态，无淡入
