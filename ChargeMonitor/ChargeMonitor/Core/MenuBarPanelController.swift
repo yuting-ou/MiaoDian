@@ -20,6 +20,8 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	// 调试模式（MIAODIAN_DEBUG_OPEN_PANEL）下面板不因失焦自动关闭：
 	// 无人值守截图时终端/前台应用会抢走 key 焦点，正常失焦关会让面板在截图前就消失
 	private var debugKeepOpen = false
+	// 面板打开期间的全局鼠标监视器：点击我进程之外的任何位置即关面板（气泡语义硬保证）
+	private var outsideClickMonitor: Any?
 
 	func install() {
 		let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -94,12 +96,33 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		panel.orderOut(nil)
 		// 摘掉内容视图（contentView 非可选，用空视图顶替）：触发 SwiftUI onDisappear → stopPolling，关闭期间零耗
 		panel.contentView = NSView()
+		removeOutsideClickMonitor()
 	}
 
 	// 点面板外任意处 → 失焦即关（与 MenuBarExtra 行为一致）；调试模式豁免
 	func windowDidResignKey(_ notification: Notification) {
 		if debugKeepOpen { return }
 		closePanel()
+	}
+
+	// MARK: - 外部点击关闭（气泡语义的硬保证）
+
+	// 失焦事件依赖面板拿住 key 状态，而 makeKey 在非激活面板上不保证成功——
+	// key 没拿稳，失焦事件永远不会来，面板就会僵在屏幕上。
+	// 全局鼠标监视器不依赖 key：点击发生在我进程之外（其他 App/桌面）即关面板；
+	// 本进程内的点击（面板本体、状态项按钮）不经过全局监视器，由 toggle 逻辑处理
+	private func installOutsideClickMonitor() {
+		guard !debugKeepOpen, outsideClickMonitor == nil else { return }
+		outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+			DispatchQueue.main.async { self?.closePanel() }
+		}
+	}
+
+	private func removeOutsideClickMonitor() {
+		if let monitor = outsideClickMonitor {
+			NSEvent.removeMonitor(monitor)
+			outsideClickMonitor = nil
+		}
 	}
 
 	private func showPanel() {
@@ -129,6 +152,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示
 		panel.orderFrontRegardless()
 		panel.makeKey()
+		installOutsideClickMonitor()
 	}
 
 	// MARK: - 菜单栏标签（8 种显示模式，自 MenuBarExtra label 移植）
