@@ -100,8 +100,10 @@ struct BatteryPopoverView: View {
 		.padding(.top, 12)
 		.padding(.bottom, 8)
 		.frame(width: twoColumns ? 584 : 292)
-		// 面板外壳：26 一整块 clear 玻璃板（缝隙只透柔化桌面，卡片浮于其上）；15–25 regularMaterial 垫底
+		// 面板外壳：ultraThinMaterial+亮度地板（见 GlassStyle）。ignoresSafeArea 让外壳
+		// 顶满窗口——否则 SwiftUI 会避让隐形标题栏的安全区，面板顶部出现约 28pt 空档
 		.panelShell()
+		.ignoresSafeArea()
 		// 容器只留一层极快的背景淡入（纯 opacity，不做 scale 避免与内部 CascadeIn 的缩放叠加）；
 		// “浮现”观感完全交给内部各块的级联动画，单一时序才不会两套动画叠加相互干扰。
 		// 「减少动态效果」：直接终态，无淡入

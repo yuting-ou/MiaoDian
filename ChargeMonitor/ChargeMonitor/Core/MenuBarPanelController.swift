@@ -255,7 +255,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	}
 }
 
-// 非激活面板：弹出时不抢 App 激活态（菜单栏应用不该让前台易主），但要能接收点击与键盘
+// 非激活面板：弹出时不抢 App 激活态（菜单栏应用不该让前台易主），但要能接收点击与键盘。
+// constrainFrameRect 放行：.titled 窗口默认被系统强制"标题栏避开菜单栏"（往下压约 34pt），
+// 菜单栏贴靠面板必须贴住菜单栏下缘，故原样返回提议 frame
 private final class GlassPopoverPanel: NSPanel {
 	override var canBecomeKey: Bool { true }
+
+	override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+		frameRect
+	}
 }
