@@ -102,6 +102,10 @@ struct BatteryPopoverView: View {
 		.padding(.top, 12)
 		.padding(.bottom, 8)
 		.frame(width: twoColumns ? 584 : 292)
+		// 面板级玻璃底：宿主窗口全透明后，卡片缝隙会直接漏出背后的窗口内容（文字穿帮）；
+		// 垫一层与窗口同圆角的玻璃底——缝隙透出柔化的桌面而非清晰文字，卡片浮于其上，
+		// 即控制中心"窗玻璃+控件玻璃"的两级层级做法
+		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: 12))
 		// 容器只留一层极快的背景淡入（纯 opacity，不做 scale 避免与内部 CascadeIn 的缩放叠加）；
 		// “浮现”观感完全交给内部各块的级联动画，单一时序才不会两套动画叠加相互干扰
 		.opacity(didAppear ? 1 : 0)
