@@ -133,7 +133,7 @@ struct UsageCalendarSection: View {
 						.foregroundStyle(.tertiary)
 					ForEach([0.0, 0.3, 0.6, 1.0], id: \.self) { level in
 						RoundedRectangle(cornerRadius: 2, style: .continuous)
-							.fill(Self.cellColor(level))
+							.fill(HeatmapPalette.cellColor(level))
 							.frame(width: 9, height: 9)
 					}
 					Text("多")
@@ -174,7 +174,7 @@ struct UsageCalendarSection: View {
 		if let day {
 			let level = Double(day.drainedPercent) / Double(maxDrain)
 			RoundedRectangle(cornerRadius: 2, style: .continuous)
-				.fill(Self.cellColor(level))
+				.fill(HeatmapPalette.cellColor(level))
 				.frame(width: Self.cellSize, height: Self.cellSize)
 				.help("\(day.dayKey)：用电 \(day.drainedPercent)%")
 		} else {
@@ -183,15 +183,6 @@ struct UsageCalendarSection: View {
 				.fill(Color.secondary.opacity(0.08))
 				.frame(width: Self.cellSize, height: Self.cellSize)
 		}
-	}
-	
-	// 按用电强度映射绿→橙的热力色；0 用电用极淡底色
-	private static func cellColor(_ level: Double) -> Color {
-		if level <= 0.001 { return Color.secondary.opacity(0.12) }
-		// 低→高：淡绿 → 绿 → 橙，透明度也随强度增大
-		let clamped = min(max(level, 0), 1)
-		let hue = 0.33 - 0.25 * clamped   // 0.33 绿 → 0.08 橙红
-		return Color(hue: hue, saturation: 0.75, brightness: 0.85, opacity: 0.35 + 0.6 * clamped)
 	}
 	
 	// 把用电历史按自然周排成列；每列 7 格（周日=0…周六=6），缺的天为 nil

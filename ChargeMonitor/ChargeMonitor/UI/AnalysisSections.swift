@@ -144,7 +144,7 @@ struct HourlyDrainSection: View {
 		return HStack(spacing: 2) {
 			ForEach(0..<24, id: \.self) { hour in
 				RoundedRectangle(cornerRadius: 2, style: .continuous)
-					.fill(Self.cellColor(intensity[hour]))
+					.fill(HeatmapPalette.cellColor(intensity[hour]))
 					.frame(maxWidth: .infinity)
 					.frame(height: 26)
 					.help("\(hour) 点 · 日均掉电 \(String(format: "%.1f", averages[hour]))%")
@@ -163,14 +163,6 @@ struct HourlyDrainSection: View {
 			text += "，用电集中时段：" + hotHours.map { "\($0) 点" }.joined(separator: "、")
 		}
 		return text
-	}
-
-	// 与用电日历同一套热力语言：淡绿 → 绿 → 橙，越深越耗电
-	private static func cellColor(_ level: Double) -> Color {
-		if level <= 0.001 { return Color.secondary.opacity(0.12) }
-		let clamped = min(max(level, 0), 1)
-		let hue = 0.33 - 0.25 * clamped
-		return Color(hue: hue, saturation: 0.75, brightness: 0.85, opacity: 0.35 + 0.6 * clamped)
 	}
 }
 

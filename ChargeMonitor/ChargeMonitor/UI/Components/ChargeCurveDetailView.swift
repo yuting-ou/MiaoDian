@@ -45,11 +45,11 @@ struct ChargeCurveEmptyView: View {
 				.font(.system(size: 12))
 				.foregroundStyle(.secondary)
 			Button("关闭") { dismiss() }
+				.buttonStyle(.glass)
 				.keyboardShortcut(.cancelAction)
 		}
 		.padding(20)
 		.frame(width: 420, height: 240)
-		.background(Color(nsColor: .windowBackgroundColor))
 	}
 }
 
@@ -73,11 +73,12 @@ struct ChargeCurveDetailView: View {
 			header
 				.padding(.bottom, 12)
 
-			Divider()
-
+			// 图表收进玻璃卡：窗口底已是系统材质，图表浮在其上形成层级；旧的细分隔线退场
 			chart
 				.frame(height: 170)
-				.padding(.top, 14)
+				.padding(12)
+				.glassEffect(GlassTokens.card, in: .rect(cornerRadius: GlassTokens.cardCornerRadius))
+				.padding(.top, 2)
 				.accessibilityElement(children: .ignore)
 				.accessibilityLabel(chartAccessibilityLabel)
 
@@ -94,7 +95,6 @@ struct ChargeCurveDetailView: View {
 		}
 		.padding(20)
 		.frame(width: 420)
-		.background(Color(nsColor: .windowBackgroundColor))
 	}
 
 	private var comparison: String? {
@@ -116,9 +116,11 @@ struct ChargeCurveDetailView: View {
 			Spacer()
 
 			Button(action: { dismiss() }) {
-				Image(systemName: "xmark.circle.fill")
-					.font(.system(size: 16))
-					.foregroundStyle(.tertiary)
+				Image(systemName: "xmark")
+					.font(.system(size: 11, weight: .semibold))
+					.foregroundStyle(.secondary)
+					.frame(width: 24, height: 24)
+					.glassEffect(GlassTokens.interactive, in: .circle)
 			}
 			.buttonStyle(.plain)
 			.keyboardShortcut(.cancelAction)

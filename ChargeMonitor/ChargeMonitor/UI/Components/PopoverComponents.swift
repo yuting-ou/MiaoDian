@@ -89,7 +89,8 @@ struct CollapsibleSectionHeader<Accessory: View>: View {
 	}
 }
 
-// 圆角卡片容器：连续曲率圆角 + 发丝线描边，更贴近系统控制中心质感
+// 圆角卡片容器：regular 玻璃底。玻璃自带边缘高光与透底层级，旧的灰底色块+发丝描边一并退场；
+// 外层由 GlassEffectContainer 统一编排，相邻卡片边缘会互相融合流动
 struct PopoverCard<Content: View>: View {
 	private let content: Content
 	
@@ -101,17 +102,10 @@ struct PopoverCard<Content: View>: View {
 		VStack(alignment: .leading, spacing: 0) {
 			content
 		}
-		.padding(.horizontal, 10)
-		.padding(.vertical, 7)
+		.padding(.horizontal, 12)
+		.padding(.vertical, 9)
 		.frame(maxWidth: .infinity, alignment: .leading)
-		.background(
-			RoundedRectangle(cornerRadius: 10, style: .continuous)
-				.fill(Color(nsColor: .quaternarySystemFill))
-		)
-		.overlay(
-			RoundedRectangle(cornerRadius: 10, style: .continuous)
-				.strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-		)
+		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: GlassTokens.cardCornerRadius))
 	}
 }
 
@@ -166,7 +160,7 @@ struct PopoverActionRow: View {
 	
 	var body: some View {
 		Button(action: action) {
-			HoverHighlightRow {
+			GlassRow {
 				HStack(spacing: 6) {
 					if let icon {
 						Image(nsImage: icon)
@@ -201,9 +195,10 @@ struct PopoverActionRow: View {
 	}
 }
 
-struct HoverHighlightRow<Content: View>: View {
+// 可交互玻璃行：控制行/警示行的统一底。常态即淡玻璃胶囊（按钮可供性写在材质上），
+// interactive 玻璃自己响应悬停与按压的镜面高光，不再需要手动 isHovering 灰底
+struct GlassRow<Content: View>: View {
 	private let content: Content
-	@State private var isHovering = false
 	
 	init(@ViewBuilder content: () -> Content) {
 		self.content = content()
@@ -211,10 +206,6 @@ struct HoverHighlightRow<Content: View>: View {
 	
 	var body: some View {
 		content
-			.background(
-				RoundedRectangle(cornerRadius: PopoverLayout.rowCornerRadius, style: .continuous)
-					.fill(isHovering ? Color.primary.opacity(0.08) : .clear)
-			)
-			.onHover { isHovering = $0 }
+			.glassEffect(GlassTokens.interactive, in: .rect(cornerRadius: GlassTokens.rowCornerRadius))
 	}
 }

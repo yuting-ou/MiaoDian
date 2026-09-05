@@ -7,9 +7,9 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/ChargeMonitor/ChargeMonitor"
 OUT="$ROOT/输出"
 APP="$OUT/妙电.app"
-# 代码用到的最新 API 为 macOS 14 时代（openSettings/onChange 新签名等），
-# 15 起还能用 SwiftUI Window 的 defaultLaunchBehavior，无需可用性分支
-DEPLOYMENT_TARGET="15.0"
+# v1.7.0 起采用液态玻璃（glassEffect/GlassEffectContainer 为 macOS 26 API），
+# 部署目标升到 26.0：单一代码路径不做可用性分支，macOS 15 用户留在旧版本 Releases
+DEPLOYMENT_TARGET="26.0"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

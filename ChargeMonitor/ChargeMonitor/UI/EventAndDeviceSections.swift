@@ -115,17 +115,14 @@ struct BluetoothDevicesSection: View {
 		}
 	}
 	
-	// 彩色圆角图标块，按设备类型配色
+	// 彩色玻璃图标块，按设备类型着色：色块底换成着色玻璃，与头部状态徽章同一套材质语言
 	private func deviceBadge(for kind: BluetoothDeviceKind) -> some View {
 		let style = Self.badgeStyle(kind)
-		return RoundedRectangle(cornerRadius: 6, style: .continuous)
-			.fill(style.color.opacity(0.16))
+		return Image(systemName: style.symbol)
+			.font(.system(size: 11, weight: .semibold))
+			.foregroundStyle(style.color)
 			.frame(width: 24, height: 24)
-			.overlay {
-				Image(systemName: style.symbol)
-					.font(.system(size: 11, weight: .semibold))
-					.foregroundStyle(style.color)
-			}
+			.glassEffect(GlassTokens.tinted(style.color), in: .rect(cornerRadius: 7))
 	}
 	
 	private func batteryBar(percent: Int) -> some View {

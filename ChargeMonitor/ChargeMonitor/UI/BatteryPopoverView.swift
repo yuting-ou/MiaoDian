@@ -66,30 +66,33 @@ struct BatteryPopoverView: View {
 			.modifier(CascadeIn(step: 0, active: didAppear))
 
 			if twoColumns {
-				// 头部续航横幅之下用一条细分隔线收口，再分左右两列
-				Divider()
-					.modifier(CascadeIn(step: cascadeStep(1), active: didAppear))
-				HStack(alignment: .top, spacing: 10) {
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(Array(split.left.enumerated()), id: \.element) { index, id in
-							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+				// 头部玻璃卡自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线
+				// 双列卡片包进 GlassEffectContainer：相邻玻璃边缘互相融合流动（液态玻璃招牌效果）
+				GlassEffectContainer(spacing: 10) {
+					HStack(alignment: .top, spacing: 10) {
+						VStack(alignment: .leading, spacing: 8) {
+							ForEach(Array(split.left.enumerated()), id: \.element) { index, id in
+								cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+									.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+							}
 						}
-					}
-					.frame(maxWidth: .infinity, alignment: .topLeading)
+						.frame(maxWidth: .infinity, alignment: .topLeading)
 
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(Array(split.right.enumerated()), id: \.element) { index, id in
-							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+						VStack(alignment: .leading, spacing: 8) {
+							ForEach(Array(split.right.enumerated()), id: \.element) { index, id in
+								cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+									.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+							}
 						}
+						.frame(maxWidth: .infinity, alignment: .topLeading)
 					}
-					.frame(maxWidth: .infinity, alignment: .topLeading)
 				}
 			} else {
-				ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
-					cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+				GlassEffectContainer(spacing: 8) {
+					ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
+						cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+							.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+					}
 				}
 			}
 
@@ -645,7 +648,7 @@ struct BatteryPopoverView: View {
 	
 	private var notificationPermissionWarning: some View {
 		Button(action: openNotificationSettings) {
-			HoverHighlightRow {
+			GlassRow {
 				HStack(spacing: 6) {
 					Image(systemName: "bell.slash.fill")
 						.font(.system(size: 11, weight: .medium))

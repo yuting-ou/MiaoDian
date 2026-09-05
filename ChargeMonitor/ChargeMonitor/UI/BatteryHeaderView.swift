@@ -49,7 +49,11 @@ struct BatteryHeaderView: View {
 					.accessibilityLabel("电池体检 \(checkup.score) 分，\(checkup.verdict)")
 			}
 		}
-		.padding(.horizontal, 4)
+		// 头部整块收进大圆角玻璃卡：它是面板上唯一"常驻置顶"的材质层，与下方卡片列拉开层级
+		.padding(.horizontal, 12)
+		.padding(.vertical, 10)
+		.frame(maxWidth: .infinity, alignment: .leading)
+		.glassEffect(GlassTokens.card, in: .rect(cornerRadius: GlassTokens.headerCornerRadius))
 	}
 	
 	// 头部组合朗读：电量 + 状态 + 续航，拼成一句自然语句
@@ -147,6 +151,9 @@ struct BatteryHeaderView: View {
 				.foregroundStyle(gaugeColor)
 		}
 		.frame(width: 46, height: 46)
+		// 圆环浮在一枚小玻璃镜片上：与头部玻璃卡形成"层中透镜"的纵深，进度弧的端点不再悬空
+		.padding(3)
+		.glassEffect(GlassTokens.card, in: .circle)
 	}
 	
 	// 呼吸光点：限帧到 12fps（慢呼吸肉眼无差），模糊半径固定不变避免逐帧重算高斯模糊，
@@ -193,16 +200,8 @@ struct BatteryHeaderView: View {
 	}
 	
 	private func statusBadge(symbol: String, text: String, color: Color) -> some View {
-		HStack(spacing: 3) {
-			Image(systemName: symbol)
-				.font(.system(size: 9, weight: .bold))
-			Text(text)
-				.font(.system(size: 10.5, weight: .medium))
-		}
-		.foregroundStyle(color)
-		.padding(.horizontal, 7)
-		.padding(.vertical, 2.5)
-		.background(Capsule().fill(color.opacity(0.13)))
+		// 着色玻璃胶囊：状态色从"贴纸色块"变成"染色的玻璃"，深浅色与桌面自动协调
+		GlassBadge(symbol: symbol, text: text, color: color)
 	}
 	
 	private var isLowBattery: Bool {
