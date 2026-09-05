@@ -27,7 +27,7 @@ guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, b
 	bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
 // 默认左下原点上下文：要让图的第 (x,y) 像素落在位图 (0,0)（位图第0行=图顶行），
 // draw 矩形的左下角 = (-x, h - 图高)——即图的顶行贴位图顶行
-ctx.draw(image, in: CGRect(x: CGFloat(-x), y: CGFloat(h) - CGFloat(image.height), width: CGFloat(image.width), height: CGFloat(image.height)))
+ctx.draw(image, in: CGRect(x: CGFloat(-x), y: CGFloat(h) - CGFloat(image.height) + CGFloat(y), width: CGFloat(image.width), height: CGFloat(image.height)))
 guard let data = ctx.data else { exit(1) }
 let bytes = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
 

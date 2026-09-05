@@ -11,19 +11,20 @@ enum GlassMetrics {
 }
 
 extension View {
-	/// 面板外壳：26 一整块 regular 玻璃板——材质自带亮度下限，浅色模式下任意壁纸（含深色）
-	/// 面板都保持浅底黑字（实测 clear 玻璃跟随后壁变暗，深色壁纸上黑字对比度 2.5:1 不达 AA；
-	/// 作业书材质映射表即指定 Glass.regular）。15–25 用 regularMaterial 自给背景——
-	/// 宿主 NSPanel 底是全透明的，降级路径必须自己垫底
+	/// 面板外壳：ultraThinMaterial + 窗口底色半透明地板（双路径统一）。
+	/// 实测记录：clear/regular 玻璃、纯 ultraThin 都会跟随壁纸亮度——深色壁纸下面板变暗，
+	/// 浅色模式的黑字对比度跌到 1.7~2.5:1。地板用 windowBackgroundColor（自适应：
+	/// 浅色外观=白、深色外观=黑），保证任意壁纸下文字对比度达标；
+	/// 0.5 浓度下壁纸色彩仍柔和透出，玻璃感由控件/徽章/仪表层的 interactive/tint 玻璃承担
 	@ViewBuilder func panelShell() -> some View {
-		if #available(macOS 26.0, *) {
-			glassEffect(.regular, in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
-		} else {
-			background(
-				.regularMaterial,
-				in: RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
-			)
-		}
+		background(
+			RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+				.fill(.ultraThinMaterial)
+				.overlay(
+					RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+						.fill(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+				)
+		)
 	}
 
 	/// 卡片分区：26 极淡填充+发丝线（内容对比度由外壳玻璃统一柔化，分区本身不再加模糊层）；
