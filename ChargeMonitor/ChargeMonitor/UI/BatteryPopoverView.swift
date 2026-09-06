@@ -10,9 +10,13 @@ struct BatteryPopoverView: View {
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	
 	// 面板打开期间已分好列的卡片：后到的新卡只追加到较矮列，已有卡不滑动不换位，
-	// 避免曲线数据陆续到位时整个面板在眼皮底下洗牌；关闭面板后清空，下次打开重新配平
+	// 避免曲线数据陆续到位时整个面板在眼皮底下洗牌；关闭面板后清空，下次打开重新配平。
+	// 自动模式保持 v1.13 贪心双列——高度门已证实行式密铺出厂态超屏（+12%起），列式是物理最优
 	@State private var assignedLeft: [CardID] = []
 	@State private var assignedRight: [CardID] = []
+	// 进入编辑/开始拖拽时播种的行表：与工作副本一致则「完成」禁用（未改动不落盘，
+	// 防止"进编辑什么都不动、保存后列式变行式平白长高一截"）
+	@State private var layoutSeed: PanelLayout? = nil
 	// 入场动画开关：面板打开时从 false→true 驱动淡入上滑，关闭时复位供下次重播
 	@State private var didAppear = false
 	// 首次打开播错峰级联，之后每次打开整块淡入（高频开关面板不看腻）
@@ -26,7 +30,7 @@ struct BatteryPopoverView: View {
 	@State private var trayExpanded = false
 	// 常态拖拽状态机：nil = 未在拖
 	@State private var dragState: CardDragState? = nil
-	// 每列每卡的实时 frame（落点计算用），由卡片背景 GeometryReader 采集
+	// 每张卡的实时 frame（落点计算用），由卡片背景 GeometryReader 采集
 	@State private var frameTable = CardDropResolver.FrameTable()
 	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
 	@State private var previewLayout: PanelLayout? = nil
@@ -34,6 +38,12 @@ struct BatteryPopoverView: View {
 	@State private var isHandleHovering: String? = nil
 	// "本会话只播一次级联"挂类型上：面板每次打开销毁重建，@State 撑不住跨打开
 	private static var hasPlayedCascade = false
+
+	// 跨列卡（华容网格 v3）：横向内容在半宽里被截断的三张，按卡型静态判定、不可配置。
+	// 华容道的本质是把要紧的块塞进有界的框——块型只有系统知道的这一种，用户只管阅读序与去留
+	private static let wideCardIDs: Set<String> = Set(
+		[CardID.dailySummary, CardID.chargeHistory, CardID.energyApps].map(\.layoutID)
+	)
 	
 	var body: some View {
 		let configuration = configurationManager.configuration
@@ -51,7 +61,7 @@ struct BatteryPopoverView: View {
 		)
 		let powerItems = formatter.makeItems(in: .power)
 		let batteryItems = formatter.makeItems(in: .battery)
-		// 按预估高度枚举当前可见卡片；≥ 5 张就拉宽面板双列，否则窄单列
+		// 按语义顺序枚举当前可见卡片；≥ 5 张就拉宽面板双列，否则窄单列
 		let cards = visibleCards(configuration, showsHealthCurve: showsHealthCurve, powerItems: powerItems, batteryItems: batteryItems)
 		let twoColumns = cards.count >= 5
 		// 宽面板时体检评分搬进头部右侧的空白区，不再占卡片位
@@ -63,20 +73,24 @@ struct BatteryPopoverView: View {
 		) : nil
 		let displayCards = twoColumns ? cards.filter { $0.id != .checkup } : cards
 		let cardIDs = displayCards.map(\.id)
-		// 华容道：编辑模式按工作副本渲染；自定义布局已存时正常模式也按它渲染；
-		// 都没有走自动配平。布局列里条件不可见的卡片渲染时跳过、位置保留
-		let hasCustomLayout = configuration.panelLayout != nil
-		let usingLayout = twoColumns && (isEditingLayout || hasCustomLayout || dragState != nil)
-		// 预先算好分列与“控制行”的级联档位（供入场错峰动画与 onAppear 固化共用）
+		let availableIDs = Set(cardIDs.map(\.layoutID))
+		// 预先算好分列与"控制行"的级联档位（供入场错峰动画与 onAppear 固化共用）
 		let split = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
-		let layoutColumns: (left: [CardID], right: [CardID]) = usingLayout ? {
-			let known = Set(CardID.allCases.map(\.layoutID))
-			// 优先级：拖动预览 > 编辑工作副本 > 已存布局 > 自动配平
-			let effective: PanelLayout? = previewLayout ?? (isEditingLayout ? layoutDraft : configuration.panelLayout)
-			let normalized = PanelLayoutEditor.normalize(effective ?? PanelLayout(), known: known)
-			return (normalized.left.compactMap { CardID(rawValue: $0) }, normalized.right.compactMap { CardID(rawValue: $0) })
-		}() : (left: split.left, right: split.right)
-		let controlStep = (twoColumns ? max(layoutColumns.left.count, layoutColumns.right.count) : cardIDs.count) + 1
+		// 华容网格 v4 双路径：自定义布局/编辑/拖拽走显式行存储（渲染即存储，预览=落盘=重开）；
+		// 纯自动模式走会话冻结的贪心双列独立堆叠（高度最优、不洗牌——高度门已证明
+		// 行式对齐密铺出厂态超屏 +12% 起，列式是物理最优）
+		let usingRows = twoColumns && (isEditingLayout || dragState != nil || configuration.panelLayout != nil)
+		let rowSource: PanelLayout = previewLayout
+			?? (isEditingLayout || dragState != nil ? layoutDraft : nil)
+			?? configuration.panelLayout
+			?? PanelLayout()
+		let segments: [PanelFlow.Segment] = usingRows
+			? PanelFlow.renderSegments(
+				PanelFlow.normalize(rowSource, known: Set(CardID.allCases.map(\.layoutID))).effectiveRows,
+				available: availableIDs
+			)
+			: []
+		let controlStep = max(segments.count, max(split.left.count, split.right.count)) + 1
 		
 		VStack(alignment: .leading, spacing: 8) {
 			BatteryHeaderView(
@@ -89,10 +103,20 @@ struct BatteryPopoverView: View {
 
 			if isEditingLayout {
 				HStack(spacing: 8) {
-					Text("点「眼睛」隐藏不想看到的卡片")
+					Text("点「眼睛」隐藏不想看到的卡片，拖把手调整位置")
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 					Spacer()
+					if configurationManager.configuration.panelLayout != nil {
+						Button {
+							resetLayout()
+						} label: {
+							Text("重置")
+								.font(.system(size: 11))
+								.foregroundStyle(GlassTokens.labelOnGlass)
+						}
+						.buttonStyle(.plain)
+					}
 					Button {
 						exitLayoutEdit(save: false)
 					} label: {
@@ -116,9 +140,29 @@ struct BatteryPopoverView: View {
 			if twoColumns {
 				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
 				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
-				HStack(alignment: .top, spacing: 10) {
-					cardColumn(.left, columns: layoutColumns, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-					cardColumn(.right, columns: layoutColumns, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+				if usingRows {
+					// 华容网格：显式行渲染——宽卡独行、半宽成对，所见即存储
+					VStack(alignment: .leading, spacing: 8) {
+						ForEach(segments, id: \.self) { segment in
+							segmentView(
+								segment,
+								layoutValue: rowSource,
+								powerItems: powerItems,
+								batteryItems: batteryItems,
+								configuration: configuration,
+								showsHealthCurve: showsHealthCurve
+							)
+						}
+						// 编辑模式全藏光时保持板面高度
+						if isEditingLayout, segments.isEmpty {
+							Spacer(minLength: 40)
+						}
+					}
+				} else {
+					HStack(alignment: .top, spacing: 10) {
+						cardColumn(true, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+						cardColumn(false, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					}
 				}
 			} else {
 				ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
@@ -165,39 +209,39 @@ struct BatteryPopoverView: View {
 		// 「减少动态效果」：直接终态，无淡入
 		.opacity(didAppear || reduceMotion ? 1 : 0)
 		.animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: didAppear)
-		.onAppear {
-			monitor.startPolling()
-			// 用户可能刚在系统设置里改过通知权限，每次打开面板重新查
-			alertController.refreshAuthorizationStatus()
-			let next = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
-			assignedLeft = next.left
-			assignedRight = next.right
-			// 本会话第一次打开播错峰级联，之后 cascadeStep 全归零、整块同时落位
-			playCascade = !Self.hasPlayedCascade
-			Self.hasPlayedCascade = true
-			// 置 true 触发入场：容器自带淡入动画，内部各块由 CascadeIn 按档位落位
-			didAppear = true
-		}
-		.onChange(of: cardIDs) {
-			// 卡片增减时把最新分列结果固化下来，已有卡片的归属不变
-			let configuration = configurationManager.configuration
-			let showsHealthCurve = configuration.enabledOptions.contains(.healthTrend) && historyRecorder.healthSamples.count >= 2
-			let cards = visibleCards(configuration, showsHealthCurve: showsHealthCurve, powerItems: powerItems, batteryItems: batteryItems)
-			let display = cards.count >= 5 ? cards.filter { $0.id != .checkup } : cards
-			let split = mergedColumns(display, left: assignedLeft, right: assignedRight)
-			assignedLeft = split.left
-			assignedRight = split.right
-		}
-		.onDisappear {
-			// 编辑中直接关面板：按取消处理（不落盘半成品布局）
-			if isEditingLayout { exitLayoutEdit(save: false) }
-			monitor.stopPolling()
-			// 下次打开时重新配平，避免上一次的历史分配越积越歪
-			assignedLeft = []
-			assignedRight = []
-			// 复位入场动画标志，下次打开才会重新淡入
-			didAppear = false
-		}
+			.onAppear {
+				monitor.startPolling()
+				// 用户可能刚在系统设置里改过通知权限，每次打开面板重新查
+				alertController.refreshAuthorizationStatus()
+				let next = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
+				assignedLeft = next.left
+				assignedRight = next.right
+				// 本会话第一次打开播错峰级联，之后 cascadeStep 全归零、整块同时落位
+				playCascade = !Self.hasPlayedCascade
+				Self.hasPlayedCascade = true
+				// 置 true 触发入场：容器自带淡入动画，内部各块由 CascadeIn 按档位落位
+				didAppear = true
+			}
+			.onChange(of: cardIDs) {
+				// 卡片增减时把最新分列结果固化下来，已有卡片的归属不变
+				let configuration = configurationManager.configuration
+				let showsHealthCurve = configuration.enabledOptions.contains(.healthTrend) && historyRecorder.healthSamples.count >= 2
+				let cards = visibleCards(configuration, showsHealthCurve: showsHealthCurve, powerItems: powerItems, batteryItems: batteryItems)
+				let display = cards.count >= 5 ? cards.filter { $0.id != .checkup } : cards
+				let split = mergedColumns(display, left: assignedLeft, right: assignedRight)
+				assignedLeft = split.left
+				assignedRight = split.right
+			}
+			.onDisappear {
+				// 编辑中直接关面板：按取消处理（不落盘半成品布局）
+				if isEditingLayout { exitLayoutEdit(save: false) }
+				monitor.stopPolling()
+				// 下次打开时重新配平，避免上一次的历史分配越积越歪
+				assignedLeft = []
+				assignedRight = []
+				// 复位入场动画标志，下次打开才会重新淡入
+				didAppear = false
+			}
 	}
 	
 	// MARK: - 卡片枚举与自适应分列
@@ -233,213 +277,8 @@ struct BatteryPopoverView: View {
 		}
 	}
 	
-	// 当前能显示出来的卡片及其预估高度（按自然阅读顺序）；高度用于两列配平
-	// MARK: - 华容道布局编辑
-
-	/// 单列渲染：编辑模式走工作副本并带每卡控制条；正常模式按已存布局（或自动配平）只渲染
-	private func cardColumn(
-		_ column: PanelLayoutEditor.Column,
-		columns: (left: [CardID], right: [CardID]),
-		available: Set<CardID>,
-		powerItems: [BatteryInfoItem],
-		batteryItems: [BatteryInfoItem],
-		configuration: AppConfiguration,
-		showsHealthCurve: Bool
-	) -> some View {
-		let ids = column == .left ? columns.left : columns.right
-		// 条件不可见的卡片（数据门槛未满足等）跳过渲染，位置保留
-		let visible = ids.filter { available.contains($0) }
-		return VStack(alignment: .leading, spacing: 8) {
-			ForEach(Array(visible.enumerated()), id: \.element) { index, id in
-				let base = cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-				if let drag = dragState, drag.card == id.layoutID {
-					// 正被拖动的卡：offset 跟手 + 浮起（弹簧动画让跟随丝滑）
-					base
-						.background(CardFrameProbe(id: id.layoutID, table: $frameTable, column: column))
-						.overlay(alignment: .topTrailing) { dragHandle(id) }
-						.offset(x: drag.translation.width, y: drag.translation.height)
-						.scaleEffect(1.04)
-						.shadow(color: .black.opacity(0.28), radius: 18, y: 8)
-						.zIndex(10)
-						.animation(.spring(response: 0.22, dampingFraction: 0.85), value: drag.translation)
-				} else {
-					ZStack(alignment: .top) {
-						base
-							.background(CardFrameProbe(id: id.layoutID, table: $frameTable, column: column))
-						if isEditingLayout {
-							cardControls(id)
-						}
-					}
-					.animation(.spring(response: 0.32, dampingFraction: 0.82), value: visible)
-				}
-			}
-			// 空列占位（编辑模式全藏光时保持列宽）
-			if visible.isEmpty, isEditingLayout {
-				Spacer(minLength: 40)
-			}
-		}
-		.frame(maxWidth: .infinity, alignment: .topLeading)
-	}
-
-	/// 被拖卡片折叠后的占位高度（卡高约 200pt，取 40 即可示意让位槽）
-	private var dragPlaceholderHeight: CGFloat { 40 }
-
-	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（自动补位预览）
-	private func updatePreview() {
-		guard let drag = dragState, drag.isDragging else { return }
-		let start = frameTable.framesFor(drag.card, column: drag.originColumn).first ?? CGRect.zero
-		// frame 表是拖动开始前采集的静态几何（预览布局驱动重排后探针会刷新，
-		// 但为避免反馈振荡，位移始终以起始几何为基准计算落点）
-		let current = CGPoint(x: start.midX + drag.translation.width, y: start.midY + drag.translation.height)
-		guard let (column, before) = CardDropResolver.resolve(point: current, table: frameTable) else { return }
-		let targetLayout = previewLayout ?? configurationManager.configuration.panelLayout ?? PanelLayout()
-		let candidate = PanelLayoutEditor.move(targetLayout, card: drag.card, toColumn: column, before: before)
-		if candidate != targetLayout { previewLayout = candidate }
-	}
-
-	/// 松手：落点在面板内 → 提交预览布局并持久化；面板外 → 丢弃预览回弹
-	private func finishDrag() {
-		defer {
-			dragState = nil
-			previewLayout = nil
-		}
-		guard let drag = dragState, drag.isDragging else { return }
-		// 手指当前点 = 原卡位置 + 位移（窗口坐标）
-		let origin = frameTable.allFrames().first { $0.value.contains(CGPoint(x: 0, y: -99999)) } // 占位，实际用下方落点
-		_ = origin
-		let start = frameTable.framesFor(drag.card, column: drag.originColumn).first ?? CGRect.zero
-		let current = CGPoint(x: start.midX + drag.translation.width, y: start.midY + drag.translation.height)
-		guard let (column, before) = CardDropResolver.resolve(point: current, table: frameTable) else { return }
-		let targetLayout = previewLayout ?? configurationManager.configuration.panelLayout ?? PanelLayout()
-		let moved = PanelLayoutEditor.move(targetLayout, card: drag.card, toColumn: column, before: before)
-		configurationManager.setPanelLayout(moved)
-	}
-
-
-
-	/// 常态拖拽把手：六点把手图标，DragGesture 独占（simultaneous 不需要——它没有兄弟手势竞争）。
-	/// 按住即进入拖拽态，落点实时驱动其他卡片让位，松手落盘
-	private func dragHandle(_ id: CardID) -> some View {
-		Image(systemName: "line.3.horizontal")
-			.font(.system(size: 9, weight: .semibold))
-			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.6))
-			.padding(5)
-			.background(Capsule().fill(.ultraThinMaterial))
-			.padding(3)
-			.contentShape(Circle())
-			.opacity(dragState?.card == id.layoutID ? 0 : 1)
-			.onHover { h in isHandleHovering = h ? id.layoutID : nil }
-			.scaleEffect(isHandleHovering == id.layoutID ? 1.3 : 1.0)
-			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID)
-			.gesture(
-				DragGesture(minimumDistance: 0, coordinateSpace: .global)
-					.onChanged { drag in
-						if dragState == nil {
-							// 拖动开始：以当前生效布局（已存或自动配平）播种工作副本
-							let known = Set(CardID.allCases.map(\.layoutID))
-							layoutDraft = PanelLayoutEditor.normalize(
-								configurationManager.configuration.panelLayout ?? PanelLayoutEditor.seed(
-									left: assignedLeft.map(\.layoutID),
-									right: assignedRight.map(\.layoutID)
-								),
-								known: known
-							)
-							dragState = CardDragState(
-								card: id.layoutID,
-								translation: drag.translation,
-								originColumn: layoutDraft.left.contains(id.layoutID) ? .left : .right,
-								originRow: 0
-							)
-						}
-						dragState?.translation = drag.translation
-						updatePreview()
-					}
-					.onEnded { _ in
-						finishDrag()
-					}
-			)
-			.help("拖动调整这张卡片的位置")
-	}
-
-	/// 编辑模式（隐藏管理）每卡的控制条：只剩隐藏
-	private func cardControls(_ id: CardID) -> some View {
-		HStack(spacing: 2) {
-			controlButton("eye.slash") { applyLayout(PanelLayoutEditor.hide(layoutDraft, card: id.layoutID)) }
-		}
-		.padding(.horizontal, 4)
-		.padding(.vertical, 2)
-		.background(Capsule().fill(.ultraThinMaterial))
-		.padding(4)
-	}
-
-	private func controlButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-		Button(action: action) {
-			Image(systemName: symbol)
-				.font(.system(size: 8, weight: .bold))
-				.foregroundStyle(GlassTokens.labelOnGlass)
-				.frame(width: 16, height: 16)
-				.contentShape(Rectangle())
-		}
-		.buttonStyle(.plain)
-	}
-
-	/// 隐藏托盘：点 + 按顺序放回右列
-	private var hiddenTray: some View {
-		VStack(alignment: .leading, spacing: 6) {
-			Text("已隐藏的卡片（点 + 放回）")
-				.font(.system(size: 9))
-				.foregroundStyle(GlassTokens.labelOnGlass)
-			ForEach(Array(layoutDraft.hidden.enumerated()), id: \.element) { _, id in
-				HStack {
-					Text(CardID(rawValue: id)?.title ?? id)
-						.font(.system(size: 11))
-						.foregroundStyle(.primary)
-					Spacer()
-					Button {
-						applyLayout(PanelLayoutEditor.unhide(layoutDraft, card: id, to: .right))
-					} label: {
-						Image(systemName: "plus.circle.fill")
-							.font(.system(size: 12))
-							.foregroundStyle(Color.accentColor)
-					}
-					.buttonStyle(.plain)
-				}
-				.padding(.vertical, 2)
-			}
-		}
-		.padding(8)
-		.frame(maxWidth: .infinity, alignment: .leading)
-		.glassSection()
-	}
-
-	/// 应用布局变更到工作副本
-	private func applyLayout(_ layout: PanelLayout) {
-		layoutDraft = layout
-	}
-
-	/// 进入编辑布局：以当前生效布局（自定义或自动配平）播种工作副本
-	private func enterLayoutEdit() {
-		let known = Set(CardID.allCases.map(\.layoutID))
-		if let saved = configurationManager.configuration.panelLayout {
-			layoutDraft = PanelLayoutEditor.normalize(saved, known: known)
-		} else {
-			layoutDraft = PanelLayoutEditor.seed(
-				left: assignedLeft.map(\.layoutID),
-				right: assignedRight.map(\.layoutID)
-			)
-		}
-		isEditingLayout = true
-	}
-
-	/// 退出编辑：落盘（面板关闭时 onDisappear 兜底）
-	private func exitLayoutEdit(save: Bool) {
-		if save {
-			configurationManager.setPanelLayout(PanelLayoutEditor.normalize(layoutDraft, known: Set(CardID.allCases.map(\.layoutID))))
-		}
-		isEditingLayout = false
-		trayExpanded = false
-	}
-
+	// 当前能显示出来的卡片及其预估高度（按自然阅读顺序）；高度用于自动模式的贪心配平。
+	// 行式自定义布局不消费高度（显式行渲染），两者互不干扰
 	private func visibleCards(
 		_ configuration: AppConfiguration,
 		showsHealthCurve: Bool,
@@ -500,12 +339,12 @@ struct BatteryPopoverView: View {
 		}
 		return result.map { (id: $0.0, height: $0.1) }
 	}
-	
+
 	// 可折叠卡片折起后只剩一行标题，配平时按 32pt 算，否则按展开高度
 	private func cardHeight(_ option: DisplayOption, expanded: CGFloat) -> CGFloat {
 		configurationManager.configuration.collapsedCards.contains(option.rawValue) ? 32 : expanded
 	}
-	
+
 	// 贪心配平：按顺序把每张卡片塞进当前较矮的那列，不管哪些卡片出现都能两列收齐
 	private func balancedSplit(_ cards: [(id: CardID, height: CGFloat)]) -> (left: [CardID], right: [CardID]) {
 		var left: [CardID] = []
@@ -523,7 +362,7 @@ struct BatteryPopoverView: View {
 		}
 		return (left, right)
 	}
-	
+
 	// 沿用面板打开期间已有的分列：还在场的卡片保持原列原顺序，新到的追加到当前较矮列，
 	// 消失的卡片剔除；首次（无历史分配）直接走贪心配平
 	private func mergedColumns(
@@ -537,13 +376,13 @@ struct BatteryPopoverView: View {
 		if knownLeft.isEmpty, knownRight.isEmpty {
 			return balancedSplit(cards)
 		}
-		
+
 		let heightByID = Dictionary(cards.map { ($0.id, $0.height) }, uniquingKeysWith: { a, _ in a })
 		var resultLeft = knownLeft
 		var resultRight = knownRight
 		var leftHeight = knownLeft.reduce(0) { $0 + (heightByID[$1] ?? 0) }
 		var rightHeight = knownRight.reduce(0) { $0 + (heightByID[$1] ?? 0) }
-		
+
 		let placed = Set(knownLeft + knownRight)
 		for card in cards where !placed.contains(card.id) {
 			if leftHeight <= rightHeight {
@@ -556,7 +395,258 @@ struct BatteryPopoverView: View {
 		}
 		return (resultLeft, resultRight)
 	}
-	
+
+	/// 自动模式单列渲染（v1.13 原样）：贪心配平的独立双列堆叠
+	private func cardColumn(
+		_ column: Bool,
+		columns: (left: [CardID], right: [CardID]),
+		available: Set<CardID>,
+		powerItems: [BatteryInfoItem],
+		batteryItems: [BatteryInfoItem],
+		configuration: AppConfiguration,
+		showsHealthCurve: Bool
+	) -> some View {
+		let ids = column ? columns.left : columns.right
+		// 条件不可见的卡片（数据门槛未满足等）跳过渲染，位置保留
+		let visible = ids.filter { available.contains($0) }
+		return VStack(alignment: .leading, spacing: 8) {
+			ForEach(Array(visible.enumerated()), id: \.element) { index, id in
+				cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+			}
+		}
+		.frame(maxWidth: .infinity, alignment: .topLeading)
+	}
+
+	private func controlButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+		Button(action: action) {
+			Image(systemName: symbol)
+				.font(.system(size: 8, weight: .bold))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+				.frame(width: 16, height: 16)
+				.contentShape(Rectangle())
+		}
+		.buttonStyle(.plain)
+		.accessibilityLabel(Text(label))
+	}
+
+	/// 隐藏托盘：点 + 放回（追加阅读序末尾，位置可再拖微调）
+	private var hiddenTray: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("已隐藏的卡片（点 + 放回）")
+				.font(.system(size: 9))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+			ForEach(Array(layoutDraft.hidden.enumerated()), id: \.element) { _, id in
+				HStack {
+					Text(CardID(rawValue: id)?.title ?? id)
+						.font(.system(size: 11))
+						.foregroundStyle(.primary)
+					Spacer()
+					Button {
+						applyLayout(PanelFlow.unhide(layoutDraft, card: id))
+					} label: {
+						Image(systemName: "plus.circle.fill")
+							.font(.system(size: 12))
+							.foregroundStyle(Color.accentColor)
+					}
+					.buttonStyle(.plain)
+				}
+				.padding(.vertical, 2)
+			}
+		}
+		.padding(8)
+		.frame(maxWidth: .infinity, alignment: .leading)
+		.glassSection()
+	}
+
+	/// 应用布局变更到工作副本
+	private func applyLayout(_ layout: PanelLayout) {
+		layoutDraft = layout
+	}
+
+	// MARK: - 华容网格：段落渲染与拖拽
+
+	/// 一段密铺结果：宽卡（或拉通卡）独占整行；两张半宽卡并排
+	@ViewBuilder
+	private func segmentView(
+		_ segment: PanelFlow.Segment,
+		layoutValue: PanelLayout,
+		powerItems: [BatteryInfoItem],
+		batteryItems: [BatteryInfoItem],
+		configuration: AppConfiguration,
+		showsHealthCurve: Bool
+	) -> some View {
+		switch segment {
+		case .full(let id):
+			if let card = CardID(rawValue: id) {
+				cardSlot(card, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+			}
+		case .pair(let leftID, let rightID):
+			if let left = CardID(rawValue: leftID), let right = CardID(rawValue: rightID) {
+				HStack(alignment: .top, spacing: 10) {
+					cardSlot(left, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					cardSlot(right, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+				}
+			}
+		}
+	}
+
+	/// 单卡槽位：内容 + frame 探针 + 常驻把手（按住即拖）+ 编辑模式眼睛。
+	/// 正被拖动的卡 offset 跟手 + 浮起；其余卡在布局变化时弹簧让位
+	private func cardSlot(
+		_ id: CardID,
+		layoutValue: PanelLayout,
+		powerItems: [BatteryInfoItem],
+		batteryItems: [BatteryInfoItem],
+		configuration: AppConfiguration,
+		showsHealthCurve: Bool
+	) -> some View {
+		let isDragged = dragState?.card == id.layoutID
+		return ZStack(alignment: .top) {
+			cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+				.background(CardFrameProbe(id: id.layoutID, table: $frameTable))
+			dragHandle(id)
+			if isEditingLayout {
+				cardControls(id)
+			}
+		}
+		.scaleEffect(isDragged ? 1.04 : 1.0)
+		.shadow(color: isDragged ? .black.opacity(0.28) : .clear, radius: 18, y: 8)
+		.offset(x: isDragged ? (dragState?.translation.width ?? 0) : 0,
+				y: isDragged ? (dragState?.translation.height ?? 0) : 0)
+		.zIndex(isDragged ? 10 : 0)
+		.animation(.spring(response: 0.32, dampingFraction: 0.82), value: layoutValue)
+		.animation(.spring(response: 0.22, dampingFraction: 0.85), value: dragState?.translation ?? .zero)
+	}
+
+	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（行插入点预览）。
+	/// 位移始终以拖动开始瞬间的 frame 为基准（拖动开始时已固化进 originFrame），
+	/// 预览重排刷新 frame 表也不回灌落点计算——防反馈振荡
+	private func updatePreview() {
+		guard let drag = dragState, drag.isDragging else { return }
+		guard let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
+		let base = previewLayout ?? layoutDraft
+		let candidate = PanelFlow.insertLayout(base, card: drag.card, target: target)
+		if candidate != base { previewLayout = candidate }
+	}
+
+	/// 松手：落点有效 → 提交预览布局并持久化；面板外 → 丢弃预览回弹
+	private func finishDrag() {
+		defer {
+			dragState = nil
+			previewLayout = nil
+		}
+		guard let drag = dragState, drag.isDragging,
+			  let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
+		let moved = PanelFlow.insertLayout(previewLayout ?? layoutDraft, card: drag.card, target: target)
+		layoutDraft = moved
+		configurationManager.setPanelLayout(PanelFlow.normalize(moved, known: Set(CardID.allCases.map(\.layoutID))))
+	}
+
+	/// 常驻拖拽把手：六点把手胶囊，DragGesture 独占（无兄弟手势竞争）。
+	/// 按住即进入拖拽态，落点实时驱动其他卡片让位，松手落盘。
+	/// v1.13.0 回归修复：把手此前只挂在拖动中的卡上，常态无处可抓，拖拽实际无法发起
+	private func dragHandle(_ id: CardID) -> some View {
+		Image(systemName: "line.3.horizontal")
+			.font(.system(size: 9, weight: .semibold))
+			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.6))
+			.padding(5)
+			.background(Capsule().fill(.ultraThinMaterial))
+			.padding(3)
+			.contentShape(Circle())
+			.opacity(dragState?.card == id.layoutID ? 0 : 1)
+			.onHover { h in isHandleHovering = h ? id.layoutID : nil }
+			.scaleEffect(isHandleHovering == id.layoutID ? 1.3 : 1.0)
+			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID)
+			.gesture(
+				DragGesture(minimumDistance: 0, coordinateSpace: .global)
+					.onChanged { drag in
+						if dragState == nil {
+							// 拖动开始：播种工作副本（自定义布局或会话冻结双列）并固化起始 frame
+							let known = Set(CardID.allCases.map(\.layoutID))
+							layoutSeed = PanelFlow.normalize(
+								configurationManager.configuration.panelLayout ?? PanelLayout(
+									rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
+								),
+								known: known
+							)
+							layoutDraft = layoutSeed ?? PanelLayout()
+							dragState = CardDragState(
+								card: id.layoutID,
+								translation: drag.translation,
+								originFrame: frameTable.frames[id.layoutID] ?? .zero
+							)
+						}
+						dragState?.translation = drag.translation
+						updatePreview()
+					}
+					.onEnded { _ in
+						finishDrag()
+					}
+			)
+			.help("拖动调整这张卡片的位置")
+	}
+
+	/// 编辑模式每卡的控制条：隐藏（眼睛）+ 宽窄（宽块↔半宽，代价实时可见自己买单）
+	private func cardControls(_ id: CardID) -> some View {
+		HStack(spacing: 2) {
+			controlButton("eye.slash", label: "隐藏") { applyLayout(PanelFlow.hide(layoutDraft, card: id.layoutID)) }
+			let rows = layoutDraft.effectiveRows
+			let isWide = PanelFlow.locate(rows, id: id.layoutID).map { rows[$0.row].count == 1 } ?? false
+			if isWide {
+				// 当前独占整行 → 收窄（并回相邻行；无处可并则不显示此键）
+				if let narrowed = PanelFlow.toggleWide(layoutDraft, card: id.layoutID) {
+					controlButton("rectangle.compress.vertical", label: "收窄为半宽") { applyLayout(narrowed) }
+				}
+			} else {
+				// 半宽 → 拉宽独占整行（高度代价实时可见）
+				controlButton("rectangle.expand.vertical", label: "拉宽独占整行") {
+					if let widened = PanelFlow.toggleWide(layoutDraft, card: id.layoutID) {
+						applyLayout(widened)
+					}
+				}
+			}
+		}
+		.padding(.horizontal, 4)
+		.padding(.vertical, 2)
+		.background(Capsule().fill(.ultraThinMaterial))
+		.padding(4)
+	}
+
+	/// 进入编辑布局：以当前生效布局（自定义或会话冻结双列对齐成行）播种工作副本
+	private func enterLayoutEdit() {
+		let known = Set(CardID.allCases.map(\.layoutID))
+		layoutSeed = PanelFlow.normalize(
+			configurationManager.configuration.panelLayout ?? PanelLayout(
+				rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
+			),
+			known: known
+		)
+		layoutDraft = layoutSeed ?? PanelLayout()
+		isEditingLayout = true
+	}
+
+	/// 退出编辑：改动过才落盘（面板关闭时 onDisappear 兜底按取消处理）
+	private func exitLayoutEdit(save: Bool) {
+		if save, let seed = layoutSeed {
+			let normalized = PanelFlow.normalize(layoutDraft, known: Set(CardID.allCases.map(\.layoutID)))
+			// 未改动不落盘：防止"进编辑什么都不动，保存后列式对齐变行式平白长高"
+			if normalized != seed {
+				configurationManager.setPanelLayout(normalized)
+			}
+		}
+		isEditingLayout = false
+		trayExpanded = false
+		layoutSeed = nil
+	}
+
+	/// 一键重置：清掉自定义布局回自动模式（玩坏了的后悔药；恢复出厂语义阅读序）
+	private func resetLayout() {
+		layoutDraft = PanelLayout()
+		configurationManager.clearPanelLayout()
+		isEditingLayout = false
+	}
+
 	@ViewBuilder
 	private func cardView(
 		_ id: CardID,
@@ -894,7 +984,7 @@ struct BatteryPopoverView: View {
 			// 拒绝（运行时 Fault "Please use SettingsLink"，实测在案）；simultaneousGesture 补激活——
 			// LSUIElement 应用不抢前台，不激活的话设置窗口会埋在其他 App 后面。
 			// buttonStyle(.plain) 剥掉 SettingsLink 自带的链接态底色——行观感必须与其他控制行完全一致
-			// 华容道布局：进编辑模式重排/隐藏卡片（仅双列面板提供——当前会话配平出两列即满足）
+			// 华容网格：进编辑模式重排/隐藏卡片（仅双列面板提供——当前会话配平出两列即满足）
 			if !assignedLeft.isEmpty || !assignedRight.isEmpty {
 				PopoverActionRow("隐藏卡片", systemImageName: "eye.slash") {
 					enterLayoutEdit()

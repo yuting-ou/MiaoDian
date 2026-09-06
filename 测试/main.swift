@@ -1021,53 +1021,130 @@ do {
 	expectEqual(withoutCare.count, 3, "洞察收集：保养不在线则少一条（变异：恒真必红）")
 	expect(UsagePatternAnalyzer.chargingInsights(habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil).isEmpty, "洞察收集：全空返回空")
 
-	// —— 华容道布局编辑器（纯函数）——
-	let seed = PanelLayoutEditor.seed(left: ["a", "b", "c"], right: ["d", "e"])
-	expectEqual(seed.left, ["a", "b", "c"], "布局种子：左列保序")
-	expectEqual(seed.right, ["d", "e"], "布局种子：右列保序")
-	expectEqual(seed.hidden, [] as [String], "布局种子：初始无隐藏")
+	// —— 华容网格 PanelFlow（v4 显式行存储，纯函数）——
+	// renderSegments：宽卡（单张行）独占整行、双张行并排、条件卡跳过后剩单卡自动拉通
+	let rowSegs = PanelFlow.renderSegments(
+		[["a", "b"], ["W"], ["c", "d"], ["e", "f"]],
+		available: ["a", "b", "W", "c", "d", "e", "f"]
+	)
+	expectEqual(rowSegs, [
+		.pair(left: "a", right: "b"), .full("W"),
+		.pair(left: "c", right: "d"), .pair(left: "e", right: "f"),
+	], "渲染段落：双张并排/单张独行")
 
-	// 移动到右列锚点之前
-	let moved = PanelLayoutEditor.move(seed, card: "a", toColumn: .right, before: "e")
-	expectEqual(moved.left, ["b", "c"], "跨列移动：源列摘除")
-	expectEqual(moved.right, ["d", "a", "e"], "跨列移动：锚点之前插入")
+	// 条件卡缺席：位置保留，同伴剩单卡自动拉通（协议缺席→状态拉通的场景）
+	let gated = PanelFlow.renderSegments([["a", "b"], ["c"]], available: ["b", "c"])
+	expectEqual(gated, [.full("b"), .full("c")], "渲染段落：缺席卡跳过，同伴拉通不留半空行")
+	expect(PanelFlow.renderSegments([], available: []).isEmpty, "渲染段落：空板出空")
 
-	// 锚点不存在 → 追加末尾
-	let appended = PanelLayoutEditor.move(seed, card: "a", toColumn: .right, before: "不存在的锚")
-	expectEqual(appended.right, ["d", "e", "a"], "跨列移动：锚点缺失追加末尾")
+	// 双射门：行表 → renderSegments → 展开回行表 恒等（预览=落盘=重开的模型保证）
+	let baseRows = [["a", "b"], ["W"], ["c", "d"], ["e", "f"]]
+	let expanded = rowSegs.map { seg -> [String] in
+		switch seg {
+		case .full(let id): return [id]
+		case .pair(let l, let r): return [l, r]
+		}
+	}
+	expectEqual(expanded, baseRows, "双射：行表↔视觉展开恒等")
 
-	// 上移/下移与边界
-	let up = PanelLayoutEditor.shift(seed, card: "b", direction: .up)
-	expectEqual(up.left, ["b", "a", "c"], "上移：列内换位")
-	let upTop = PanelLayoutEditor.shift(up, card: "b", direction: .up)
-	expectEqual(upTop.left, ["b", "a", "c"], "上移：到顶原样返回")
-	let down = PanelLayoutEditor.shift(up, card: "a", direction: .down)
-	expectEqual(down.left, ["b", "c", "a"], "下移：列内换位")
-	let downBottom = PanelLayoutEditor.shift(down, card: "a", direction: .down)
-	expectEqual(downBottom.left, ["b", "c", "a"], "下移：到底原样返回")
+	// alignColumns：v1.13 旧档回退（两列按索引对齐成行）
+	expectEqual(
+		PanelFlow.alignColumns(left: ["a", "b", "c"], right: ["d"]),
+		[["a", "d"], ["b"], ["c"]],
+		"旧档对齐：按索引成行，列内相对序保留"
+	)
 
-	// 左右换列：保持同序位置
-	let toRight = PanelLayoutEditor.shift(seed, card: "a", direction: .right)
-	expectEqual(toRight.left, ["b", "c"], "换列：源列移除")
-	expectEqual(toRight.right, ["a", "d", "e"], "换列：同序插入右列")
+	expectEqual(
+		PanelFlow.insert([["a", "b"], ["c", "d"]], card: "a", before: "d"),
+		[["b"], ["a", "d"], ["c"]],
+		"insert：card 与 anchor 结对，原同伴 c 溢出末行"
+	)
+	expectEqual(
+		PanelFlow.insert([["a", "b"], ["c"]], card: "a", before: "c"),
+		[["b"], ["a", "c"]],
+		"insert：单行锚点（宽块）→ card 与锚点结对收窄"
+	)
+	expectEqual(
+		PanelFlow.insert([["a", "b"], ["c", "d"]], card: "a", before: nil),
+		[["b"], ["c", "d"], ["a"]],
+		"insert：锚点 nil 追加末尾单行"
+	)
+	expectEqual(
+		PanelFlow.insert([["a", "b"]], card: "a", before: "b"),
+		[["a", "b"]],
+		"insert：锚点是原同伴 → 摘除后重新结对，card 占前位"
+	)
 
-	// 隐藏与捞回
-	let hid = PanelLayoutEditor.hide(seed, card: "b")
-	expectEqual(hid.left, ["a", "c"], "隐藏：源列移除")
-	expectEqual(hid.hidden, ["b"], "隐藏：进托盘")
-	let back = PanelLayoutEditor.unhide(hid, card: "b", to: .left)
-	expectEqual(back.hidden, [] as [String], "捞回：托盘清空")
-	expectEqual(back.left, ["a", "c", "b"], "捞回：追加左列末尾（不插队）")
+	// hide / unhide
+	let hidFlow = PanelFlow.hide(PanelLayout(rows: [["a", "b"], ["c"]]), card: "b")
+	expectEqual(hidFlow.rows ?? [], [["a"], ["c"]], "隐藏：行表摘除（同伴保留单行）")
+	expectEqual(hidFlow.hidden, ["b"], "隐藏：进托盘")
+	let backFlow = PanelFlow.unhide(hidFlow, card: "b")
+	expectEqual(backFlow.rows ?? [], [["a"], ["c"], ["b"]], "捞回：追加末尾单行（不插队）")
+	expectEqual(backFlow.hidden, [] as [String], "捞回：托盘清空")
 
-	// 归一：未知 id 丢弃、去重、缺失的已知卡追加左列
-	let messy = PanelLayout(left: ["a", "x", "a", "新卡"], right: ["c", "x"], hidden: ["y"])
-	let clean = PanelLayoutEditor.normalize(messy, known: ["a", "b", "c", "d", "e", "新卡"])
-	expectEqual(clean.left, ["a", "新卡", "b", "d", "e"], "归一：左列过滤+缺失已知卡按序追加")
-	expectEqual(clean.right, ["c"], "归一：右列过滤")
-	expectEqual(clean.hidden, [] as [String], "归一：未知隐藏丢弃")
-	// 幂等：归一两次结果一致
-	let twice = PanelLayoutEditor.normalize(clean, known: ["a", "b", "c", "d", "e", "新卡"])
-	expectEqual(twice, clean, "归一：幂等")
+	// toggleWide：半宽拉宽（同伴与下一行首卡结对）/ 宽块收窄（与相邻行首卡结对）
+	expectEqual(
+		PanelFlow.toggleWide([["a", "b"], ["c", "d"]], card: "a"),
+		[["a"], ["b", "c"], ["d"]],
+		"拉宽：宽行插同伴行之前（阅读序不变），同伴与下行首卡结对"
+	)
+	expectEqual(
+		PanelFlow.toggleWide([["a"], ["b", "c"]], card: "a"),
+		[["b", "a"], ["c"]],
+		"收窄：与下行首卡结对，原同伴溢出单行"
+	)
+	expect(PanelFlow.toggleWide([["a"]], card: "a") == nil, "收窄：孤行无处可并返回 nil（不强拆）")
+
+	// 归一（行式）：未知 id 丢弃、全板去重、隐藏卡不残留、空行剔除、缺失按序追加、旧字段清零
+	let messyFlow = PanelLayout(rows: [["a", "x"], ["a", "新卡"]], hidden: ["y", "b"])
+	let cleanFlow = PanelFlow.normalize(messyFlow, known: ["a", "b", "c", "新卡"])
+	expectEqual(cleanFlow.rows ?? [], [["a"], ["新卡"], ["c"]], "归一：行过滤+缺失已知卡按序追加（藏着的 b 不回行表）")
+	expectEqual(cleanFlow.hidden, ["b"], "归一：隐藏过滤")
+	expectEqual(cleanFlow.left, [] as [String], "归一：旧字段清零")
+	expectEqual(PanelFlow.normalize(cleanFlow, known: ["a", "b", "c", "新卡"]), cleanFlow, "归一：幂等")
+	// 防御：隐藏卡不得残留在行表
+	let ghost = PanelFlow.normalize(PanelLayout(rows: [["a", "b"]], hidden: ["a"]), known: ["a", "b"])
+	expectEqual(ghost.rows ?? [], [["b"]], "归一：隐藏卡不残留行表")
+
+	// 旧档回退：v1.13 三表 JSON 解码（rows 缺省按索引对齐），v1.12 以下无 hidden 字段
+	let legacyJSON = #"{"left":["a","b"],"right":["c"],"hidden":["z"]}"#
+	let legacy = try! JSONDecoder().decode(PanelLayout.self, from: legacyJSON.data(using: .utf8)!)
+	expect(legacy.rows == nil, "旧档回退：rows 保持 nil")
+	expectEqual(legacy.effectiveRows, [["a", "c"], ["b"]], "旧档回退：left/right 按索引对齐成行")
+	// v4 往返编码
+	let movedFlow = PanelFlow.insertLayout(PanelLayout(rows: [["a", "b"]]), card: "a", target: .end)
+	let roundtrip = try! JSONDecoder().decode(PanelLayout.self, from: JSONEncoder().encode(movedFlow))
+	expectEqual(roundtrip, movedFlow, "v4 往返编码一致")
+
+	// insertLayout：DropTarget 直连 + 旧字段退役清零
+	expectEqual(movedFlow.rows ?? [], [["b"], ["a"]], "insertLayout：end 落点追加末尾单行")
+	expectEqual(movedFlow.left, [] as [String], "insertLayout：旧字段退役清零")
+
+	// 设计对账（记录用，恒真守门）：自动模式保持 v1.13 贪心双列——
+	// 高度门已证实行式对齐密铺出厂态超屏（贪心 1040 vs 行式 1385，+33%），
+	// 宽块只作为用户显式选择（宽窄键），系统不为可读性自动付高度税
+	expect(!PanelLayout(rows: [["a", "b"]]).effectiveRows.isEmpty, "行存储：基础读取通路")
+
+	// —— 落点几何 CardDropResolver（纯函数）——
+	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
+	var probeTable = CardDropResolver.FrameTable()
+	probeTable.frames = [
+		"a": CGRect(x: 0, y: 0, width: 270, height: 100),
+		"b": CGRect(x: 280, y: 0, width: 270, height: 100),
+		"W": CGRect(x: 0, y: 200, width: 550, height: 50),
+		"c": CGRect(x: 0, y: 260, width: 270, height: 100),
+		"d": CGRect(x: 280, y: 260, width: 270, height: 100),
+	]
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 100, y: 30), table: probeTable), .before("a"), "落点：首卡上半→插最前")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 100, y: 80), table: probeTable), .before("b"), "落点：首卡下半→它之后")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 300, y: 210), table: probeTable), .before("W"), "落点：宽卡上半→宽卡前")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 300, y: 240), table: probeTable), .before("c"), "落点：宽卡下半→其后一卡前")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 100, y: 400), table: probeTable), .end, "落点：超过末卡→追加末尾")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 100, y: -50), table: probeTable), .before("a"), "落点：顶于首卡上沿→插最前")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 300, y: 80), table: probeTable, excluding: "b"), .before("W"), "落点：排除被拖卡自身后按底板锚定")
+	expect(CardDropResolver.resolve(point: CGPoint(x: 1000, y: 80), table: probeTable) == nil, "落点：横向出界→丢弃回弹")
+	expect(CardDropResolver.resolve(point: CGPoint(x: 100, y: 80), table: CardDropResolver.FrameTable()) == nil, "落点：空板→nil")
 
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)

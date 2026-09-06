@@ -43,6 +43,11 @@ final class ConfigurationManager: ObservableObject {
         update { $0.panelLayout = layout }
     }
 
+    // 华容网格：一键重置为自动模式（panelLayout 置空即回语义阅读序）
+    func clearPanelLayout() {
+        update { $0.panelLayout = nil }
+    }
+
     // 图表卡片折叠/展开，状态随配置持久化
     func toggleCardCollapsed(_ option: DisplayOption) {
         update { config in

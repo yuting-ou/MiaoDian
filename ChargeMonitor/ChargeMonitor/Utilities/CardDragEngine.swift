@@ -1,71 +1,66 @@
 import SwiftUI
 
-/// 华容道拖拽状态机（面板级单份状态，随 BatteryPopoverView 生命周期）。
-/// 长按 ≥0.35s 激活 → DragGesture 跟手 → 落点实时驱动布局预览 → 松手提交持久化。
-/// 数据层复用 PanelLayoutEditor 纯函数（已测）；这里只管手势时序与几何计算。
+/// 华容网格拖拽状态机（面板级单份状态，随 BatteryPopoverView 生命周期）。
+/// 把手按住即拖 → DragGesture 跟手 → 落点实时驱动 flow 插入预览 → 松手提交持久化。
+/// 数据层复用 PanelFlow 纯函数（已测）；这里只管手势时序与几何计算。
 nonisolated struct CardDragState {
 	// 正被拖动的卡片
 	var card: String
 	// 手势位移（窗口坐标增量）
 	var translation: CGSize = .zero
-	// 拖动开始时该卡的原始位置（列, 行），松手失败回弹用
-	var originColumn: PanelLayoutEditor.Column
-	var originRow: Int
+	// 拖动开始瞬间该卡的窗口坐标 frame——落点计算的固定基准，
+	// 预览重排后探针会刷新 frame 表，但不能回灌落点计算（防反馈振荡）
+	var originFrame: CGRect = .zero
 
-	/// 激活判定：位移超过 6pt 才算真拖（纯长按不动=悬停预览态）
+	/// 激活判定：位移超过 6pt 才算真拖（纯按住不动=悬停预览态）
 	var isDragging: Bool {
 		hypot(translation.width, translation.height) > 6
 	}
+
+	/// 指针当前位置（窗口坐标）= 起始卡中心 + 位移
+	var pointer: CGPoint {
+		CGPoint(x: originFrame.midX + translation.width, y: originFrame.midY + translation.height)
+	}
 }
 
-/// 落点几何：把拖动卡片的中心点换算成 (目标列, 插入行)。
-/// rows 预存每列每卡的 frame（窗口坐标），由渲染层用 GeometryReader 采集。
+/// 落点几何：把指针位置换算成 flow 插入点。
+/// frames 预存每张卡的窗口坐标 frame（由渲染层 CardFrameProbe 采集）；
+/// 密铺渲染顺序 = flow 顺序，按 (minY, minX) 排序即视觉自上而下、自左而右。
 nonisolated enum CardDropResolver {
 	nonisolated struct FrameTable {
-		var left: [String: CGRect] = [:]
-		var right: [String: CGRect] = [:]
+		var frames: [String: CGRect] = [:]
 	}
 
+	/// 落点判定：返回插到某卡之前 / 追加末尾；nil = 落点在板面横向范围之外（丢弃回弹）。
+	/// excluding 排除被拖卡片自身——它的预览 frame 不参与锚定，否则"锚点是自己"
+	/// 会在摘除后失配、被误判为追加末尾。
 	nonisolated static func resolve(
 		point: CGPoint,
-		table: FrameTable
-	) -> (column: PanelLayoutEditor.Column, before: String?)? {
-		// 命中判定：点落在哪列的某张卡片竖直区间内（横向按列中心带划分）
-		for (column, frames) in [("L", table.left), ("R", table.right)] {
-			let sorted = frames.sorted { $0.value.minY < $1.value.minY }
-			guard let first = sorted.first else { continue }
-			// 列横向带：以该列卡片 frame 的水平范围外扩 20pt
-			let minX = (sorted.map { $0.value.minX }.min() ?? 0) - 20
-			let maxX = (sorted.map { $0.value.maxX }.max() ?? 0) + 20
-			guard point.x >= minX, point.x <= maxX else { continue }
-			// 顶于首卡上沿 → 插到最前
-			if point.y < first.value.midY {
-				return (column == "L" ? .left : .right, sorted.first?.key)
-			}
-			for f in sorted {
-				if point.y <= f.value.maxY {
-					// 落在卡片下半 → 插到它之后（返回它的后一张作锚点）
-					let idx = sorted.firstIndex { $0.key == f.key }!
-					let next = sorted.indices.contains(idx + 1) ? sorted[idx + 1].key : nil
-					return (column == "L" ? .left : .right, next)
-				}
-			}
-			// 超过最后一张 → 追加末尾
-			return (column == "L" ? .left : .right, nil)
+		table: FrameTable,
+		excluding: String? = nil
+	) -> PanelFlow.DropTarget? {
+		let sorted = table.frames
+			.filter { $0.key != excluding }
+			.sorted { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }
+		guard let first = sorted.first else { return nil }
+		// 横向出界判定：全部卡片 frame 的水平范围外扩 30pt 之外视为丢弃
+		let minX = (sorted.map { $0.value.minX }.min() ?? 0) - 30
+		let maxX = (sorted.map { $0.value.maxX }.max() ?? 0) + 30
+		guard point.x >= minX, point.x <= maxX else { return nil }
+		// 顶于首卡上沿 → 插到最前
+		if point.y < first.value.midY {
+			return .before(first.key)
 		}
-		return nil
-	}
-}
-
-
-extension CardDropResolver.FrameTable {
-	/// 两列 frame 合并视图
-	nonisolated func allFrames() -> [String: CGRect] {
-		left.merging(right) { _, new in new }
-	}
-
-	nonisolated func framesFor(_ id: String, column: PanelLayoutEditor.Column) -> [CGRect] {
-		(column == .left ? left[id] : right[id]).map { [$0] } ?? []
+		for (index, frame) in sorted.enumerated() {
+			guard point.y <= frame.value.maxY else { continue }
+			// 落在卡片下半 → 插到它之后（返回它的下一张作锚点）
+			if point.y >= frame.value.midY {
+				return index + 1 < sorted.count ? .before(sorted[index + 1].key) : .end
+			}
+			return .before(frame.key)
+		}
+		// 超过最后一张 → 追加末尾
+		return .end
 	}
 }
 
@@ -73,25 +68,16 @@ extension CardDropResolver.FrameTable {
 struct CardFrameProbe: View {
 	let id: String
 	@Binding var table: CardDropResolver.FrameTable
-	let column: PanelLayoutEditor.Column
 
 	var body: some View {
 		GeometryReader { geo in
 			Color.clear
 				.onAppear {
-					set(geo.frame(in: .global))
+					table.frames[id] = geo.frame(in: .global)
 				}
 				.onChange(of: geo.frame(in: .global)) { _, new in
-					set(new)
+					table.frames[id] = new
 				}
-		}
-	}
-
-	private func set(_ frame: CGRect) {
-		if column == .left {
-			table.left[id] = frame
-		} else {
-			table.right[id] = frame
 		}
 	}
 }
