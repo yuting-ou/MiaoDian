@@ -145,6 +145,28 @@ nonisolated enum UsagePatternAnalyzer {
 	// MARK: - 充电速度对比
 
 	// 本次充电 vs 历史平均充速（%/分钟）；时长太短、涨得太少或样本不足不给结论。
+	// 洞察链 v2：不再只挑第一条说——把四条洞察线的可用项按优先级全收上来，
+	// 由面板渲染成一条洞察卡的多行列表。纯函数：输入各分析器结果，输出排序后的列表
+	nonisolated static func chargingInsights(
+		habitBase: ChargingHabitInsight?,
+		careHolding: Bool,
+		careThresholdPercent: Int,
+		heatOverlap: ChargingHabitInsight?,
+		chargerInsight: ChargingHabitInsight?
+	) -> [ChargingHabitInsight] {
+		var result: [ChargingHabitInsight] = []
+		if let habitBase { result.append(habitBase) }
+		if careHolding {
+			result.append(ChargingHabitInsight(
+				message: "系统优化充电正在 \(careThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事，二选一即可（信系统就关掉提醒）",
+				symbol: "gearshape.2.fill"
+			))
+		}
+		if let heatOverlap { result.append(heatOverlap) }
+		if let chargerInsight { result.append(chargerInsight) }
+		return result
+	}
+
 	// 会话认得出充电器时优先和"同一只头"比——不同头的速度本就不一样，混着比没有意义
 	static func chargeSpeedComparison(current: ChargeSession, history: [ChargeSession], chargerAliases: Set<String> = []) -> String? {
 		let gained = current.endPercent - current.startPercent

@@ -550,7 +550,11 @@ do {
 	expectEqual(migrated.chargeCareThresholdPercent, 80, "配置迁移：保养阈值默认 80")
 	expectEqual(migrated.deviceLowThresholdPercent, 20, "配置迁移：外设低电阈值默认 20")
 	expectEqual(migrated.highDrainThresholdPerHour, 20, "配置迁移：耗电异常阈值默认 20")
-	expect(migrated.collapsedCards.isEmpty, "配置迁移：折叠状态默认空")
+	// v1.10.0：迁移时一次性种子三张图表卡为默认折叠（面板高度治理），此后用户选择优先
+	expectEqual(migrated.collapsedCards,
+		Set([DisplayOption.powerChart.rawValue, DisplayOption.temperatureChart.rawValue, DisplayOption.healthTrend.rawValue]),
+		"配置迁移：默认折叠种子三张图表卡")
+	expect(migrated.defaultCollapseSeedApplied, "配置迁移：折叠种子标记已置位")
 } catch {
 	expect(false, "配置迁移：新一批选项解码不应失败（\(error)）")
 }
@@ -1005,6 +1009,17 @@ do {
 		profiles: [fallbackOrphan], key: orphanKey, name: "酷态科10号 Ultra"
 	)
 	expectEqual(backfilled.first?.name, "酷态科10号 Ultra", "名称回填：兜底名可被真名覆盖")
+
+	// 洞察链 v2：多行收集（变异检验：某条线关闭后集合必须变短）
+	let base = ChargingHabitInsight(message: "a", symbol: "s")
+	let heat = ChargingHabitInsight(message: "b", symbol: "t")
+	let charger = ChargingHabitInsight(message: "c", symbol: "u")
+	let all = UsagePatternAnalyzer.chargingInsights(habitBase: base, careHolding: true, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger)
+	expectEqual(all.count, 4, "洞察收集：四条线全开收 4 条")
+	expectEqual(all.first?.message, "a", "洞察收集：习惯规律优先")
+	let withoutCare = UsagePatternAnalyzer.chargingInsights(habitBase: base, careHolding: false, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger)
+	expectEqual(withoutCare.count, 3, "洞察收集：保养不在线则少一条（变异：恒真必红）")
+	expect(UsagePatternAnalyzer.chargingInsights(habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil).isEmpty, "洞察收集：全空返回空")
 
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)

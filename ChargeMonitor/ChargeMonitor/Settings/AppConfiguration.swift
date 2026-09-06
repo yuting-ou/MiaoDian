@@ -14,8 +14,17 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	// 夜间免打扰时段（小时，可跨零点，如 23 点–次日 8 点）
 	var quietHoursStartHour: Int = 23
 	var quietHoursEndHour: Int = 8
-	// 被用户折叠起来的图表卡片（存 DisplayOption rawValue）
-	var collapsedCards: Set<String> = []
+	// 被用户折叠起来的图表卡片（存 DisplayOption rawValue）。
+	// v1.10.0 起默认折叠三张图表卡（温度/功耗/健康度趋势）——面板高度治理：
+	// 全展开时面板高 1000pt+ 超过屏幕可用高度，底部控制行会被 Dock 遮挡。
+	// 用户展开/折叠的选择自然覆盖默认（一次性种子迁移见 init）
+	var collapsedCards: Set<String> = [
+		DisplayOption.powerChart.rawValue,
+		DisplayOption.temperatureChart.rawValue,
+		DisplayOption.healthTrend.rawValue,
+	]
+	// 默认折叠种子是否已应用：老配置迁移时一次性种子，此后用户的选择优先
+	var defaultCollapseSeedApplied: Bool = true
 	
 	static let `default` = AppConfiguration()
 	
@@ -75,6 +84,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case quietHoursStartHour
 		case quietHoursEndHour
 		case collapsedCards
+		case defaultCollapseSeedApplied
 	}
 
 	init(from decoder: Decoder) throws {
@@ -122,6 +132,23 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		self.collapsedCards = try container.decodeIfPresent(
 			Set<String>.self,
 			forKey: .collapsedCards
-		) ?? []
+		) ?? [
+			DisplayOption.powerChart.rawValue,
+			DisplayOption.temperatureChart.rawValue,
+			DisplayOption.healthTrend.rawValue,
+		]
+		// 老配置迁移：一次性把三张图表卡种进默认折叠（此后用户展开/折叠的选择优先）
+		self.defaultCollapseSeedApplied = try container.decodeIfPresent(
+			Bool.self,
+			forKey: .defaultCollapseSeedApplied
+		) ?? false
+		if !self.defaultCollapseSeedApplied {
+			self.collapsedCards.formUnion([
+				DisplayOption.powerChart.rawValue,
+				DisplayOption.temperatureChart.rawValue,
+				DisplayOption.healthTrend.rawValue,
+			])
+			self.defaultCollapseSeedApplied = true
+		}
 	}
 }

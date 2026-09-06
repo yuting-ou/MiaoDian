@@ -71,28 +71,28 @@ struct HealthTrendChart: View {
 
 // 充电习惯建议：一条本地统计得出的软提示（图标 + 一句话）
 struct HabitInsightSection: View {
-	let insight: ChargingHabitInsight
+	// 洞察链 v2：多条洞察按优先级排列——第一条主行，其余次级行（字号/颜色降一档）
+	let insights: [ChargingHabitInsight]
 	
 	var body: some View {
 		PopoverCard {
-			HStack(spacing: 9) {
-				Image(systemName: insight.symbol)
-					.font(.system(size: 16))
-					.symbolRenderingMode(.hierarchical)
-					.foregroundStyle(Color.accentColor)
-					.frame(width: 22)
-				
-				VStack(alignment: .leading, spacing: 1) {
-					Text("小建议")
-						.font(.system(size: 9))
-						.foregroundStyle(GlassTokens.labelOnGlass)
-					Text(insight.message)
-						.font(.system(size: 11))
-						.foregroundStyle(.primary)
-						.fixedSize(horizontal: false, vertical: true)
+			VStack(alignment: .leading, spacing: 1) {
+				Text(insights.count > 1 ? "洞察" : "小建议")
+					.font(.system(size: 9))
+					.foregroundStyle(GlassTokens.labelOnGlass)
+				ForEach(Array(insights.prefix(3).enumerated()), id: \.offset) { index, insight in
+					HStack(alignment: .top, spacing: 6) {
+						Image(systemName: insight.symbol)
+							.font(.system(size: index == 0 ? 12 : 9))
+							.symbolRenderingMode(.hierarchical)
+							.foregroundStyle(Color.accentColor)
+							.frame(width: 14)
+						Text(insight.message)
+							.font(.system(size: index == 0 ? 11 : 10))
+							.foregroundStyle(index == 0 ? Color.primary : GlassTokens.labelOnGlass)
+							.fixedSize(horizontal: false, vertical: true)
+					}
 				}
-				
-				Spacer(minLength: 0)
 			}
 			.padding(.vertical, 1)
 		}

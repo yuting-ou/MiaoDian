@@ -174,21 +174,27 @@ struct BatteryPopoverView: View {
 	) -> [(id: CardID, height: CGFloat)] {
 		let options = configuration.enabledOptions
 		var result: [(CardID, CGFloat)] = []
+		// 语义分簇排序（v1.10.0）：充电中 → 电池健康 → 用电行为 → 外设与事件。
+		// 同簇相邻，扫读不跳；簇间靠配平算法自然留出间隙。仅调顺序，不动任何出现条件与高度
+		// —— 充电中：协议/档位/功率/充电器 + 这次和历史的充电记录
 		if !powerItems.isEmpty { result.append((.powerInfo, 22 + 26 * CGFloat(powerItems.count))) }
-		if !batteryItems.isEmpty { result.append((.batteryInfo, 22 + 26 * CGFloat(batteryItems.count))) }
-		// 续航换算：只在电池模式且有掉电估算时出现
-		if options.contains(.runtimeScenarios), monitor.snapshot.powerSource == .battery,
-			let estimate = monitor.drainEstimate, estimate.percentPerHour > 0,
-			monitor.snapshot.stateOfChargePercent != nil {
-			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118)))
+		if options.contains(.chargeHistory), !historyRecorder.recentSessions.isEmpty {
+			result.append((.chargeHistory, cardHeight(.chargeHistory, expanded: 50 + 40 * CGFloat(min(3, historyRecorder.recentSessions.count)))))
 		}
+		// —— 电池健康：状态/体检/身份证/保养建议/温度/趋势 ——
+		if !batteryItems.isEmpty { result.append((.batteryInfo, 22 + 26 * CGFloat(batteryItems.count))) }
 		if options.contains(.batteryCheckup), monitor.snapshot.healthPercent != nil { result.append((.checkup, 58)) }
 		// 电池身份证：静态出厂信息，有跳变记录时多留一行状态位
 		if options.contains(.batteryIdentity), let identity = monitor.batteryIdentity, identity.isMeaningful {
 			let jumpExtra: CGFloat = socJumpCount30d > 0 ? 26 : 0
 			result.append((.batteryIdentity, cardHeight(.batteryIdentity, expanded: 104 + jumpExtra)))
 		}
-		if options.contains(.habitInsight), habitInsight != nil { result.append((.habitInsight, 52)) }
+		if options.contains(.habitInsight), !habitInsights.isEmpty {
+			result.append((.habitInsight, cardHeight(.habitInsight, expanded: 40 + 22 * CGFloat(habitInsights.count))))
+		}
+		if options.contains(.temperatureChart), monitor.temperatureSamples.count >= 2 { result.append((.temperatureChart, cardHeight(.temperatureChart, expanded: 96))) }
+		if options.contains(.healthTrend), showsHealthCurve { result.append((.healthTrend, cardHeight(.healthTrend, expanded: 142))) }
+		// —— 用电行为：今日/日历/时段/24h/功耗/续航换算/高耗电 ——
 		if options.contains(.dailySummary), let usage = historyRecorder.todayUsage,
 		   usage.drainedPercent > 0 || usage.chargedPercent > 0 {
 			result.append((.dailySummary, cardHeight(.dailySummary, expanded: historyRecorder.dailyHistory.count >= 2 ? 135 : 92)))
@@ -200,21 +206,23 @@ struct BatteryPopoverView: View {
 			result.append((.hourlyDrain, cardHeight(.hourlyDrainChart, expanded: 96)))
 		}
 		if options.contains(.socChart), historyRecorder.socSamples.count >= 2 { result.append((.socChart, cardHeight(.socChart, expanded: 120))) }
-		if options.contains(.healthTrend), showsHealthCurve { result.append((.healthTrend, cardHeight(.healthTrend, expanded: 142))) }
 		if options.contains(.powerChart), monitor.powerSamples.count >= 2 { result.append((.powerChart, cardHeight(.powerChart, expanded: 102))) }
-		if options.contains(.temperatureChart), monitor.temperatureSamples.count >= 2 { result.append((.temperatureChart, cardHeight(.temperatureChart, expanded: 96))) }
-		if options.contains(.bluetoothDevices), !monitor.bluetoothDevices.isEmpty {
-			result.append((.bluetooth, 40 + 34 * CGFloat(monitor.bluetoothDevices.count)))
-		}
-		if options.contains(.chargeHistory), !historyRecorder.recentSessions.isEmpty {
-			result.append((.chargeHistory, cardHeight(.chargeHistory, expanded: 50 + 40 * CGFloat(min(3, historyRecorder.recentSessions.count)))))
-		}
-		if options.contains(.powerEvents), !historyRecorder.powerEvents.isEmpty {
-			result.append((.powerEvents, cardHeight(.powerEvents, expanded: 44 + 26 * CGFloat(min(6, historyRecorder.powerEvents.count)))))
+		// 续航换算：只在电池模式且有掉电估算时出现
+		if options.contains(.runtimeScenarios), monitor.snapshot.powerSource == .battery,
+			let estimate = monitor.drainEstimate, estimate.percentPerHour > 0,
+			monitor.snapshot.stateOfChargePercent != nil {
+			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118)))
 		}
 		if options.contains(.significantEnergyApps) {
 			let energyExtra = weeklyAppEnergy.isEmpty ? 0 : 22 + 20 * CGFloat(weeklyAppEnergy.count)
 			result.append((.energyApps, 44 + 26 * CGFloat(max(1, min(3, monitor.significantEnergyApps.count))) + energyExtra))
+		}
+		// —— 外设与事件 ——
+		if options.contains(.powerEvents), !historyRecorder.powerEvents.isEmpty {
+			result.append((.powerEvents, cardHeight(.powerEvents, expanded: 44 + 26 * CGFloat(min(6, historyRecorder.powerEvents.count)))))
+		}
+		if options.contains(.bluetoothDevices), !monitor.bluetoothDevices.isEmpty {
+			result.append((.bluetooth, 40 + 34 * CGFloat(monitor.bluetoothDevices.count)))
 		}
 		return result.map { (id: $0.0, height: $0.1) }
 	}
@@ -389,40 +397,37 @@ struct BatteryPopoverView: View {
 	}
 
 	// 充电习惯建议（有可用洞察才显示）；先看习惯规律，再看热叠加，最后看当前充电器是否偏慢
-	private var habitInsight: ChargingHabitInsight? {
-		if let base = ChargingHabitAnalyzer.analyze(
+	// 洞察链 v2：四条洞察线的可用项全收（不再只挑第一条说），按优先级排列
+	private var habitInsights: [ChargingHabitInsight] {
+		let base = ChargingHabitAnalyzer.analyze(
 			events: historyRecorder.powerEvents,
 			dailyHistory: historyRecorder.dailyHistory,
 			snapshot: monitor.snapshot
-		) {
-			return base
-		}
-		// 系统优化充电正在保养线附近反复暂停：和你的保养提醒是同一件事，二选一即可
-		if configurationManager.configuration.enabledOptions.contains(.chargeCareReminder),
-			alertController.isOptimizedChargingHolding {
-			return ChargingHabitInsight(
-				message: "系统优化充电正在 \(configurationManager.configuration.chargeCareThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事，二选一即可（信系统就关掉提醒）",
-				symbol: "gearshape.2.fill"
-			)
-		}
-		// 两个早已在手边的信号拼成一句话：用电高峰叠着电池最热时段
-		if let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(
+		)
+		let careHolding = configurationManager.configuration.enabledOptions.contains(.chargeCareReminder)
+			&& alertController.isOptimizedChargingHolding
+		let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(
 			drain: historyRecorder.hourlyDrainStats,
 			temp: historyRecorder.hourlyTempStats
-		) {
-			return ChargingHabitInsight(message: heat, symbol: "thermometer.sun.fill")
-		}
-		return ChargingHabitAnalyzer.analyzeCharger(
+		).map { ChargingHabitInsight(message: $0, symbol: "thermometer.sun.fill") }
+		let charger = ChargingHabitAnalyzer.analyzeCharger(
 			snapshot: monitor.snapshot,
 			currentCharger: historyRecorder.currentChargerProfile,
 			knownChargers: historyRecorder.chargerProfiles
+		)
+		return UsagePatternAnalyzer.chargingInsights(
+			habitBase: base,
+			careHolding: careHolding,
+			careThresholdPercent: configurationManager.configuration.chargeCareThresholdPercent,
+			heatOverlap: heat,
+			chargerInsight: charger
 		)
 	}
 	
 	@ViewBuilder
 	private func habitInsightCard(_ configuration: AppConfiguration) -> some View {
-		if configuration.enabledOptions.contains(.habitInsight), let insight = habitInsight {
-			HabitInsightSection(insight: insight)
+		if configuration.enabledOptions.contains(.habitInsight), !habitInsights.isEmpty {
+			HabitInsightSection(insights: habitInsights)
 		}
 	}
 	
