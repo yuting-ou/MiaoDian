@@ -30,6 +30,8 @@ struct BatteryPopoverView: View {
 	@State private var frameTable = CardDropResolver.FrameTable()
 	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
 	@State private var previewLayout: PanelLayout? = nil
+	// 悬停中的把手（微放大反馈）
+	@State private var isHandleHovering: String? = nil
 	// "本会话只播一次级联"挂类型上：面板每次打开销毁重建，@State 撑不住跨打开
 	private static var hasPlayedCascade = false
 	
@@ -244,43 +246,31 @@ struct BatteryPopoverView: View {
 		configuration: AppConfiguration,
 		showsHealthCurve: Bool
 	) -> some View {
-		let isDraggingThisColumn = dragState != nil
 		let ids = column == .left ? columns.left : columns.right
 		// 条件不可见的卡片（数据门槛未满足等）跳过渲染，位置保留
 		let visible = ids.filter { available.contains($0) }
 		return VStack(alignment: .leading, spacing: 8) {
 			ForEach(Array(visible.enumerated()), id: \.element) { index, id in
 				let base = cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-				if dragState?.card == id.layoutID {
-					// 正被拖动的卡：浮起跟手（zIndex 置顶、放大+阴影）
-					base
-						.opacity(0.95)
-						.scaleEffect(1.04)
-						.shadow(color: .black.opacity(0.3), radius: 16, y: 6)
-						.zIndex(10)
-				} else if isEditingLayout {
-					base
-						.overlay(alignment: .topTrailing) { cardControls(id) }
-				} else {
-					// 常态：长按 0.35s 激活拖拽；拖动中 offset 跟手，落点实时驱动布局预览
+				if let drag = dragState, drag.card == id.layoutID {
+					// 正被拖动的卡：offset 跟手 + 浮起（弹簧动画让跟随丝滑）
 					base
 						.background(CardFrameProbe(id: id.layoutID, table: $frameTable, column: column))
-						.simultaneousGesture(
-							LongPressGesture(minimumDuration: 0.35)
-								.sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
-								.onChanged { value in
-									guard case .second(true, let drag?) = value else { return }
-									if dragState == nil {
-										dragState = CardDragState(card: id.layoutID, originColumn: column, originRow: index)
-									}
-									dragState?.translation = drag.translation
-									updatePreview()
-								}
-								.onEnded { _ in
-									finishDrag()
-								}
-						)
-						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+						.overlay(alignment: .topTrailing) { dragHandle(id) }
+						.offset(x: drag.translation.width, y: drag.translation.height)
+						.scaleEffect(1.04)
+						.shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+						.zIndex(10)
+						.animation(.spring(response: 0.22, dampingFraction: 0.85), value: drag.translation)
+				} else {
+					ZStack(alignment: .top) {
+						base
+							.background(CardFrameProbe(id: id.layoutID, table: $frameTable, column: column))
+						if isEditingLayout {
+							cardControls(id)
+						}
+					}
+					.animation(.spring(response: 0.32, dampingFraction: 0.82), value: visible)
 				}
 			}
 			// 空列占位（编辑模式全藏光时保持列宽）
@@ -289,12 +279,10 @@ struct BatteryPopoverView: View {
 			}
 		}
 		.frame(maxWidth: .infinity, alignment: .topLeading)
-		.dropDestination(for: String.self) { payload, _ in
-			guard let id = payload.first else { return false }
-			applyLayout(PanelLayoutEditor.move(layoutDraft, card: id, toColumn: column, before: nil))
-			return true
-		}
 	}
+
+	/// 被拖卡片折叠后的占位高度（卡高约 200pt，取 40 即可示意让位槽）
+	private var dragPlaceholderHeight: CGFloat { 40 }
 
 	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（自动补位预览）
 	private func updatePreview() {
@@ -328,6 +316,50 @@ struct BatteryPopoverView: View {
 	}
 
 
+
+	/// 常态拖拽把手：六点把手图标，DragGesture 独占（simultaneous 不需要——它没有兄弟手势竞争）。
+	/// 按住即进入拖拽态，落点实时驱动其他卡片让位，松手落盘
+	private func dragHandle(_ id: CardID) -> some View {
+		Image(systemName: "line.3.horizontal")
+			.font(.system(size: 9, weight: .semibold))
+			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.6))
+			.padding(5)
+			.background(Capsule().fill(.ultraThinMaterial))
+			.padding(3)
+			.contentShape(Circle())
+			.opacity(dragState?.card == id.layoutID ? 0 : 1)
+			.onHover { h in isHandleHovering = h ? id.layoutID : nil }
+			.scaleEffect(isHandleHovering == id.layoutID ? 1.3 : 1.0)
+			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID)
+			.gesture(
+				DragGesture(minimumDistance: 0, coordinateSpace: .global)
+					.onChanged { drag in
+						if dragState == nil {
+							// 拖动开始：以当前生效布局（已存或自动配平）播种工作副本
+							let known = Set(CardID.allCases.map(\.layoutID))
+							layoutDraft = PanelLayoutEditor.normalize(
+								configurationManager.configuration.panelLayout ?? PanelLayoutEditor.seed(
+									left: assignedLeft.map(\.layoutID),
+									right: assignedRight.map(\.layoutID)
+								),
+								known: known
+							)
+							dragState = CardDragState(
+								card: id.layoutID,
+								translation: drag.translation,
+								originColumn: layoutDraft.left.contains(id.layoutID) ? .left : .right,
+								originRow: 0
+							)
+						}
+						dragState?.translation = drag.translation
+						updatePreview()
+					}
+					.onEnded { _ in
+						finishDrag()
+					}
+			)
+			.help("拖动调整这张卡片的位置")
+	}
 
 	/// 编辑模式（隐藏管理）每卡的控制条：只剩隐藏
 	private func cardControls(_ id: CardID) -> some View {
