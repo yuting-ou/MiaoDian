@@ -139,15 +139,16 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		panel.contentView = hosting
 
 		let size = hosting.fittingSize
-		panel.setContentSize(size)
-		// 定位：顶边贴菜单栏图标下缘，右缘与图标右缘对齐；越界时向屏内收
-		let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+		// 宽度防御钳制：内容宽度只会是 292（单列）/584（双列），异常 fitting（布局中捕捉）不采信
+		let width: CGFloat = size.width >= 450 ? 584 : 292
+		panel.setContentSize(NSSize(width: width, height: size.height))
+		// 定位与状态项图标解耦：iBar 会把图标收进隐藏区，其窗口位置随收纳状态漂移
+		// （实测面板曾跟着漂到菜单栏下 50pt/屏幕中部）。锚定屏幕本身：
+		// 顶边=菜单栏下缘（visibleFrame.maxY），右缘=屏幕右缘留 12pt
 		let screen = buttonWindow.screen ?? NSScreen.main
-		var originX = buttonFrame.maxX - size.width
-		if let screen {
-			originX = max(originX, screen.frame.minX + 8)
-		}
-		panel.setFrameTopLeftPoint(NSPoint(x: originX, y: buttonFrame.minY - 4))
+		let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+		let originX = (screen?.frame.maxX ?? visible.maxX) - 12 - width
+		panel.setFrameTopLeftPoint(NSPoint(x: originX, y: visible.maxY - 4))
 		// 先无条件显示再尝试拿 key：调试自动弹出时应用未激活，若直接 makeKeyAndOrderFront
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示
 		panel.orderFrontRegardless()
