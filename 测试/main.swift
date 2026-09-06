@@ -1070,8 +1070,8 @@ do {
 
 	// —— 深色外观 ——
 	let cDarkPrimary = proof.contrast(textLuminance: primaryDark, against: shellDark)
-	print(String(format: "证明表[深·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AA 4.5；AAA 待确认)", cDarkPrimary))
-	expect(cDarkPrimary >= 4.5, "可读性证明：深色壳 primary ≥4.5 (AA)")
+	print(String(format: "证明表[深·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cDarkPrimary))
+	expect(cDarkPrimary >= 7.0, "可读性证明：深色壳 primary/关键数字 ≥7 (AAA)")
 	let cDarkLabel = worstLabel(shellDark, isDark: true)
 	print(String(format: "证明表[深·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cDarkLabel))
 	expect(cDarkLabel >= 4.5, "可读性证明：深色壳标签 ≥4.5 (AA)")

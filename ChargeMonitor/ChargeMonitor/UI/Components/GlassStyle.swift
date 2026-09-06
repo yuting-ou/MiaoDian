@@ -12,9 +12,10 @@ nonisolated enum GlassTokens {
 
 	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
 	/// 参数由可读性证明反推（测试/main.swift 证明表）：浅色 0.4 白（primary 最坏 14.1 AAA）、
-	/// 深色 0.78 黑（primary 最坏 ≥4.5、标签最坏 ≥4.5，白字 AAA 需近不透明已记录待确认）
+	/// 深色 0.81 黑（primary/关键数字最坏 ≥7.0 AAA、标签 ≥4.5——亮壁纸下白字要 AAA
+	/// 必须近不透明，深色外观的面板本就趋近系统原生暗板，已按裁决规则选定）
 	nonisolated static func shellFloorTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
-		isDark ? (luminance: 0.0, alpha: 0.78) : (luminance: 1.0, alpha: 0.4)
+		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.4)
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
