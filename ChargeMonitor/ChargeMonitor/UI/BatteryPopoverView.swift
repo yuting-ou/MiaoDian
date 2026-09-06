@@ -19,11 +19,17 @@ struct BatteryPopoverView: View {
 	@State private var playCascade = false
 	// "复制报告"的行内成功反馈
 	@State private var reportCopied = false
-	// 华容道布局编辑：进入编辑布局模式时把持久布局播种成工作副本，退出时落盘；
-	// 编辑期间渲染走 layoutCards（严格按工作副本），隐藏卡片沉在托盘可捞回
+	// 华容道布局编辑：编辑布局模式瘦身为隐藏管理（眼睛+托盘）。
+	// 常态长按拖拽：拖动中实时预览补位，松手直接落盘（无"完成"按钮）
 	@State private var isEditingLayout = false
 	@State private var layoutDraft = PanelLayout()
 	@State private var trayExpanded = false
+	// 常态拖拽状态机：nil = 未在拖
+	@State private var dragState: CardDragState? = nil
+	// 每列每卡的实时 frame（落点计算用），由卡片背景 GeometryReader 采集
+	@State private var frameTable = CardDropResolver.FrameTable()
+	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
+	@State private var previewLayout: PanelLayout? = nil
 	// "本会话只播一次级联"挂类型上：面板每次打开销毁重建，@State 撑不住跨打开
 	private static var hasPlayedCascade = false
 	
@@ -58,12 +64,14 @@ struct BatteryPopoverView: View {
 		// 华容道：编辑模式按工作副本渲染；自定义布局已存时正常模式也按它渲染；
 		// 都没有走自动配平。布局列里条件不可见的卡片渲染时跳过、位置保留
 		let hasCustomLayout = configuration.panelLayout != nil
-		let usingLayout = twoColumns && (isEditingLayout || hasCustomLayout)
+		let usingLayout = twoColumns && (isEditingLayout || hasCustomLayout || dragState != nil)
 		// 预先算好分列与“控制行”的级联档位（供入场错峰动画与 onAppear 固化共用）
 		let split = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
 		let layoutColumns: (left: [CardID], right: [CardID]) = usingLayout ? {
 			let known = Set(CardID.allCases.map(\.layoutID))
-			let normalized = PanelLayoutEditor.normalize(isEditingLayout ? layoutDraft : (configuration.panelLayout ?? PanelLayout()), known: known)
+			// 优先级：拖动预览 > 编辑工作副本 > 已存布局 > 自动配平
+			let effective: PanelLayout? = previewLayout ?? (isEditingLayout ? layoutDraft : configuration.panelLayout)
+			let normalized = PanelLayoutEditor.normalize(effective ?? PanelLayout(), known: known)
 			return (normalized.left.compactMap { CardID(rawValue: $0) }, normalized.right.compactMap { CardID(rawValue: $0) })
 		}() : (left: split.left, right: split.right)
 		let controlStep = (twoColumns ? max(layoutColumns.left.count, layoutColumns.right.count) : cardIDs.count) + 1
@@ -79,7 +87,7 @@ struct BatteryPopoverView: View {
 
 			if isEditingLayout {
 				HStack(spacing: 8) {
-					Text("拖动或用箭头调整卡片位置，「眼睛」隐藏")
+					Text("点「眼睛」隐藏不想看到的卡片")
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 					Spacer()
@@ -236,17 +244,42 @@ struct BatteryPopoverView: View {
 		configuration: AppConfiguration,
 		showsHealthCurve: Bool
 	) -> some View {
+		let isDraggingThisColumn = dragState != nil
 		let ids = column == .left ? columns.left : columns.right
 		// 条件不可见的卡片（数据门槛未满足等）跳过渲染，位置保留
 		let visible = ids.filter { available.contains($0) }
 		return VStack(alignment: .leading, spacing: 8) {
 			ForEach(Array(visible.enumerated()), id: \.element) { index, id in
 				let base = cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-				if isEditingLayout {
+				if dragState?.card == id.layoutID {
+					// 正被拖动的卡：浮起跟手（zIndex 置顶、放大+阴影）
+					base
+						.opacity(0.95)
+						.scaleEffect(1.04)
+						.shadow(color: .black.opacity(0.3), radius: 16, y: 6)
+						.zIndex(10)
+				} else if isEditingLayout {
 					base
 						.overlay(alignment: .topTrailing) { cardControls(id) }
 				} else {
+					// 常态：长按 0.35s 激活拖拽；拖动中 offset 跟手，落点实时驱动布局预览
 					base
+						.background(CardFrameProbe(id: id.layoutID, table: $frameTable, column: column))
+						.simultaneousGesture(
+							LongPressGesture(minimumDuration: 0.35)
+								.sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+								.onChanged { value in
+									guard case .second(true, let drag?) = value else { return }
+									if dragState == nil {
+										dragState = CardDragState(card: id.layoutID, originColumn: column, originRow: index)
+									}
+									dragState?.translation = drag.translation
+									updatePreview()
+								}
+								.onEnded { _ in
+									finishDrag()
+								}
+						)
 						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
 				}
 			}
@@ -263,13 +296,42 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	/// 编辑模式每卡的控制条：方向移动 ×4、隐藏（拖拽把手即整卡）
+	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（自动补位预览）
+	private func updatePreview() {
+		guard let drag = dragState, drag.isDragging else { return }
+		let start = frameTable.framesFor(drag.card, column: drag.originColumn).first ?? CGRect.zero
+		// frame 表是拖动开始前采集的静态几何（预览布局驱动重排后探针会刷新，
+		// 但为避免反馈振荡，位移始终以起始几何为基准计算落点）
+		let current = CGPoint(x: start.midX + drag.translation.width, y: start.midY + drag.translation.height)
+		guard let (column, before) = CardDropResolver.resolve(point: current, table: frameTable) else { return }
+		let targetLayout = previewLayout ?? configurationManager.configuration.panelLayout ?? PanelLayout()
+		let candidate = PanelLayoutEditor.move(targetLayout, card: drag.card, toColumn: column, before: before)
+		if candidate != targetLayout { previewLayout = candidate }
+	}
+
+	/// 松手：落点在面板内 → 提交预览布局并持久化；面板外 → 丢弃预览回弹
+	private func finishDrag() {
+		defer {
+			dragState = nil
+			previewLayout = nil
+		}
+		guard let drag = dragState, drag.isDragging else { return }
+		// 手指当前点 = 原卡位置 + 位移（窗口坐标）
+		let origin = frameTable.allFrames().first { $0.value.contains(CGPoint(x: 0, y: -99999)) } // 占位，实际用下方落点
+		_ = origin
+		let start = frameTable.framesFor(drag.card, column: drag.originColumn).first ?? CGRect.zero
+		let current = CGPoint(x: start.midX + drag.translation.width, y: start.midY + drag.translation.height)
+		guard let (column, before) = CardDropResolver.resolve(point: current, table: frameTable) else { return }
+		let targetLayout = previewLayout ?? configurationManager.configuration.panelLayout ?? PanelLayout()
+		let moved = PanelLayoutEditor.move(targetLayout, card: drag.card, toColumn: column, before: before)
+		configurationManager.setPanelLayout(moved)
+	}
+
+
+
+	/// 编辑模式（隐藏管理）每卡的控制条：只剩隐藏
 	private func cardControls(_ id: CardID) -> some View {
 		HStack(spacing: 2) {
-			controlButton("arrow.up") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .up)) }
-			controlButton("arrow.down") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .down)) }
-			controlButton("arrow.left.to.line") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .left)) }
-			controlButton("arrow.right.to.line") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .right)) }
 			controlButton("eye.slash") { applyLayout(PanelLayoutEditor.hide(layoutDraft, card: id.layoutID)) }
 		}
 		.padding(.horizontal, 4)
@@ -802,7 +864,7 @@ struct BatteryPopoverView: View {
 			// buttonStyle(.plain) 剥掉 SettingsLink 自带的链接态底色——行观感必须与其他控制行完全一致
 			// 华容道布局：进编辑模式重排/隐藏卡片（仅双列面板提供——当前会话配平出两列即满足）
 			if !assignedLeft.isEmpty || !assignedRight.isEmpty {
-				PopoverActionRow("编辑布局", systemImageName: "square.grid.2x2") {
+				PopoverActionRow("隐藏卡片", systemImageName: "eye.slash") {
 					enterLayoutEdit()
 				}
 			}
