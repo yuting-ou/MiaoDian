@@ -1020,6 +1020,72 @@ do {
 	expect(poolWithoutAlias?.contains("比平时") == true, "速度对比：无别名时退回全量池")
 }
 
+// MARK: - 可读性证明（表面 token × 文字色 × 外观 × 辅助开关，全壁纸域最坏对比度）
+
+do {
+	let proof = ReadabilityProof.self
+
+	// 材质模型（与 GlassTokens 同源——实现与证明共用同一份数值）
+	let baseLight = GlassTokens.baseGlass(isDark: false)
+	let baseDark = GlassTokens.baseGlass(isDark: true)
+	let floorLight = GlassTokens.shellFloorTint(isDark: false)
+	let floorDark = GlassTokens.shellFloorTint(isDark: true)
+
+	// 外壳合成亮度范围（任意壁纸亮度全域的最坏情况）
+	let shellLight = proof.stackedLuminanceRange(layers: [
+		(luminance: floorLight.luminance, alpha: floorLight.alpha),
+		(luminance: baseLight.luminance, alpha: baseLight.alpha),
+	])
+	let shellDark = proof.stackedLuminanceRange(layers: [
+		(luminance: floorDark.luminance, alpha: floorDark.alpha),
+		(luminance: baseDark.luminance, alpha: baseDark.alpha),
+	])
+	// 降低透明度：不透明纯色底（常数亮度）
+	let opaqueLight = GlassTokens.opaqueSurface(isDark: false).luminance
+	let opaqueDark = GlassTokens.opaqueSurface(isDark: true).luminance
+
+	// 文字亮度锚点（浅色 primary=黑 0.0；深色 primary=白 1.0）
+	let primaryLight = 0.0
+	let primaryDark = 1.0
+
+	// 标签（primary 85%）：sRGB 通道合成到壳面上的有效亮度
+	func labelLum(_ surfaceLum: Double, isDark: Bool) -> Double {
+		let alpha = GlassTokens.labelOnGlassAlpha
+		let surfaceSrgb = pow(max(surfaceLum, 0), 1 / 2.2)
+		let textSrgb = isDark ? alpha + (1 - alpha) * surfaceSrgb : (1 - alpha) * surfaceSrgb
+		return pow(textSrgb, 2.2)
+	}
+	func worstLabel(_ surface: (min: Double, max: Double), isDark: Bool) -> Double {
+		min(proof.contrast(labelLum(surface.min, isDark: isDark), surface.min),
+			proof.contrast(labelLum(surface.max, isDark: isDark), surface.max))
+	}
+
+	// —— 浅色外观（当前用户的实际配置）——
+	let cLightPrimary = proof.contrast(textLuminance: primaryLight, against: shellLight)
+	print(String(format: "证明表[浅·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cLightPrimary))
+	expect(cLightPrimary >= 7.0, "可读性证明：浅色壳 primary/关键数字 ≥7 (AAA)")
+	let cLightLabel = worstLabel(shellLight, isDark: false)
+	print(String(format: "证明表[浅·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cLightLabel))
+	expect(cLightLabel >= 4.5, "可读性证明：浅色壳标签 ≥4.5 (AA)")
+
+	// —— 深色外观 ——
+	let cDarkPrimary = proof.contrast(textLuminance: primaryDark, against: shellDark)
+	print(String(format: "证明表[深·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AA 4.5；AAA 待确认)", cDarkPrimary))
+	expect(cDarkPrimary >= 4.5, "可读性证明：深色壳 primary ≥4.5 (AA)")
+	let cDarkLabel = worstLabel(shellDark, isDark: true)
+	print(String(format: "证明表[深·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cDarkLabel))
+	expect(cDarkLabel >= 4.5, "可读性证明：深色壳标签 ≥4.5 (AA)")
+
+	// —— 降低透明度（不透明纯色底）——
+	let opaqueLightRange = (min: opaqueLight, max: opaqueLight)
+	let opaqueDarkRange = (min: opaqueDark, max: opaqueDark)
+	expect(proof.contrast(textLuminance: primaryLight, against: opaqueLightRange) >= 7.0, "证明[降低透明度·浅]：≥7")
+	expect(proof.contrast(textLuminance: primaryDark, against: opaqueDarkRange) >= 7.0, "证明[降低透明度·深]：≥7")
+
+	// —— 增加对比度：发丝线加强不影响文字-背景关系，外壳 token 不变（同浅/深证明覆盖）——
+	// —— 减少动态：动效终态无对比度影响（代码分支在 CascadeIn/呼吸光点）——
+}
+
 // MARK: - 今日用电累计
 
 do {

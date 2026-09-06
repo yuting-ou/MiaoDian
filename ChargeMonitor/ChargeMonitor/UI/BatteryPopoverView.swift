@@ -620,7 +620,7 @@ struct BatteryPopoverView: View {
 					HStack(spacing: 6) {
 						Image(systemName: "gear")
 							.font(.system(size: 11, weight: .medium))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 							.frame(width: 16)
 						Text("设置")
 							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))

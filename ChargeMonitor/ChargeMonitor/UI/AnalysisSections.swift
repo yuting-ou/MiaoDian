@@ -19,10 +19,10 @@ struct SignificantEnergySection: View {
 					HStack(spacing: 6) {
 						Image(systemName: "hourglass")
 							.font(.system(size: 12))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 						Text("正在积累样本（约 2 分钟）…")
 							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 							.lineLimit(1)
 					}
 					.frame(maxWidth: .infinity, alignment: .leading)
@@ -35,7 +35,7 @@ struct SignificantEnergySection: View {
 							.foregroundStyle(Color.green)
 						Text("没有明显的耗电大户")
 							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 							.lineLimit(1)
 					}
 					.frame(maxWidth: .infinity, alignment: .leading)
@@ -79,7 +79,7 @@ struct SignificantEnergySection: View {
 
 						Text(DurationFormatter.chinese(minutes: Int(entry.seconds / 60)))
 							.font(.system(size: 10).monospacedDigit())
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 					.padding(.vertical, 2)
 				}
@@ -105,7 +105,7 @@ struct HourlyDrainSection: View {
 				} else if isCollapsed {
 					Text("统计中")
 						.font(.system(size: 10))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -180,7 +180,7 @@ struct RuntimeScenarioSection: View {
 				if isCollapsed, let first = scenarioRows.first {
 					Text("轻度可用 \(DurationFormatter.chinese(minutes: first.minutes))")
 						.font(.system(size: 10).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -199,7 +199,7 @@ struct RuntimeScenarioSection: View {
 							.frame(width: 14)
 						Text(row.scenario.title)
 							.font(.system(size: 10.5))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 						Spacer()
 						Text("约 \(DurationFormatter.chinese(minutes: row.minutes))")
 							.font(.system(size: 10.5, weight: .medium).monospacedDigit())
@@ -239,7 +239,7 @@ struct BatteryIdentitySection: View {
 				if isCollapsed, let vendor = identity.cellVendorName {
 					Text(vendor)
 						.font(.system(size: 10))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -315,7 +315,7 @@ struct BatteryIdentitySection: View {
 		HStack(alignment: .firstTextBaseline) {
 			Text(label)
 				.font(.system(size: 10))
-				.foregroundStyle(.secondary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 				.frame(width: 50, alignment: .leading)
 			Text(value)
 				.font(monospaced ? .system(size: 10, weight: .medium).monospaced() : .system(size: 10.5))

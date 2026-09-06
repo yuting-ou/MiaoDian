@@ -15,7 +15,7 @@ struct DailySummarySection: View {
 				if isCollapsed {
 					Text("用电 \(usage.drainedPercent)% · 充入 \(usage.chargedPercent)%")
 						.font(.system(size: 10).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -143,7 +143,7 @@ struct DailySummarySection: View {
 					.font(.system(size: PopoverLayout.bodyFontSize, weight: .semibold).monospacedDigit())
 				Text(label)
 					.font(.system(size: 9))
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 			}
 		}
 		.frame(maxWidth: .infinity, alignment: .leading)

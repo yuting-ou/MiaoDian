@@ -14,7 +14,7 @@ struct PowerEventTimelineSection: View {
 				if isCollapsed, let last = events.last {
 					Text("\(Self.style(last.kind).title) \(Self.timeText(last.date))")
 						.font(.system(size: 10).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -36,7 +36,7 @@ struct PowerEventTimelineSection: View {
 						
 						Text(Self.timeText(event.date))
 							.font(.system(size: 10).monospacedDigit())
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 					.padding(.vertical, 2)
 				}
@@ -98,7 +98,7 @@ struct BluetoothDevicesSection: View {
 						
 						Text(Self.kindTitle(device.kind))
 							.font(.system(size: 9))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 					
 					Spacer(minLength: 8)
@@ -185,7 +185,7 @@ struct ChargeHistorySection: View {
 				if isCollapsed, let last = sessions.last {
 					Text("上次 \(last.startPercent)% → \(last.endPercent)%")
 						.font(.system(size: 10).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			.padding(.bottom, isCollapsed ? 0 : 2)
@@ -208,7 +208,7 @@ struct ChargeHistorySection: View {
 									.lineLimit(1)
 								Text(Self.detail(session, chargerName: session.chargerKey.flatMap { chargerNames[$0] }))
 									.font(.system(size: 9))
-									.foregroundStyle(.secondary)
+									.foregroundStyle(GlassTokens.labelOnGlass)
 									.lineLimit(1)
 							}
 

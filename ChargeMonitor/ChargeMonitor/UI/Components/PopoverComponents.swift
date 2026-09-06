@@ -48,7 +48,7 @@ struct PopoverInfoLine: View {
 	var body: some View {
 		Text(text)
 			.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
-			.foregroundStyle(.secondary)
+			.foregroundStyle(GlassTokens.labelOnGlass)
 			.frame(maxWidth: .infinity, alignment: .leading)
 			.padding(.vertical, PopoverLayout.rowVerticalPadding)
 	}
@@ -65,7 +65,7 @@ struct PopoverSectionHeader: View {
 	var body: some View {
 		Text(title)
 			.font(.system(size: 11, weight: .semibold))
-			.foregroundStyle(.secondary)
+			.foregroundStyle(GlassTokens.labelOnGlass)
 			.padding(.top, 2)
 	}
 }
@@ -130,7 +130,7 @@ struct PopoverInfoRow: View {
 			
 			Text(item.label)
 				.font(.system(size: PopoverLayout.bodyFontSize))
-				.foregroundStyle(.secondary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 			
 			Spacer(minLength: 12)
 			
@@ -178,7 +178,7 @@ struct PopoverActionRow: View {
 					} else if let systemImageName {
 						Image(systemName: systemImageName)
 							.font(.system(size: 11, weight: .medium))
-							.foregroundStyle(.secondary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 							.frame(width: 16)
 					}
 					Text(title)

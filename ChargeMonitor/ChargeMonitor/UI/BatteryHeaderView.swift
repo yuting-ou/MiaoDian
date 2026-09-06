@@ -22,7 +22,7 @@ struct BatteryHeaderView: View {
 						.animation(.easeInOut(duration: 0.3), value: percentDisplay)
 					Text("%")
 						.font(.system(size: 15, weight: .semibold, design: .rounded))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 				
 				statusView
@@ -31,7 +31,7 @@ struct BatteryHeaderView: View {
 				if let subtitleText {
 					Text(subtitleText)
 						.font(.system(size: 10))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 						.lineLimit(1)
 						.minimumScaleFactor(0.8)
 				}
@@ -81,7 +81,7 @@ struct BatteryHeaderView: View {
 			VStack(alignment: .leading, spacing: 1) {
 				Text("电池体检")
 					.font(.system(size: 9))
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 				Text(checkup.verdict)
 					.font(.system(size: 10.5, weight: .medium))
 					.foregroundStyle(.primary)
@@ -203,7 +203,7 @@ struct BatteryHeaderView: View {
 		} else {
 			Text(plainStatusText)
 				.font(.system(size: 11))
-				.foregroundStyle(.secondary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 		}
 	}
 	

@@ -18,7 +18,7 @@ struct PowerChartSection: View {
 					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
 					.font(.system(size: 10).monospacedDigit())
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 			}
 			
 			if !isCollapsed {
@@ -79,7 +79,7 @@ struct TemperatureChartSection: View {
 					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
 					.font(.system(size: 10).monospacedDigit())
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 			}
 			
 			if !isCollapsed {
@@ -146,7 +146,7 @@ struct BatteryCheckupSection: View {
 				VStack(alignment: .leading, spacing: 1) {
 					Text("电池体检")
 						.font(.system(size: 11, weight: .semibold))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 					Text(checkup.verdict)
 						.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
 					// 冷启动如实标注：这个分数里有几成是数据读不到时的中性估计
@@ -202,7 +202,7 @@ struct SOCChartSection: View {
 				} else if let last = samples.last {
 					Text("现在 \(last.percent)%")
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			

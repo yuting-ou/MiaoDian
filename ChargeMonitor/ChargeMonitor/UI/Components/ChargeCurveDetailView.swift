@@ -47,7 +47,7 @@ struct ChargeCurveEmptyView: View {
 				.foregroundStyle(.tertiary)
 			Text("这条充电记录已被清理")
 				.font(.system(size: 12))
-				.foregroundStyle(.secondary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 			Button("关闭") { dismiss() }
 				.buttonStyle(CloseButtonStyle())
 				.keyboardShortcut(.cancelAction)
@@ -95,7 +95,7 @@ struct ChargeCurveDetailView: View {
 			if let comparison {
 				Text(comparison)
 					.font(.system(size: 11))
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 					.padding(.top, 8)
 			}
 		}
@@ -116,7 +116,7 @@ struct ChargeCurveDetailView: View {
 					.font(.system(size: 13, weight: .semibold))
 				Text(summaryText)
 					.font(.system(size: 11))
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 			}
 
 			Spacer()
@@ -124,7 +124,7 @@ struct ChargeCurveDetailView: View {
 			Button(action: { dismiss() }) {
 				Image(systemName: "xmark")
 					.font(.system(size: 11, weight: .semibold))
-					.foregroundStyle(.secondary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 					.frame(width: 24, height: 24)
 					.controlGlass(in: .circle)
 			}

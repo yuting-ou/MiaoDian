@@ -85,7 +85,7 @@ struct HabitInsightSection: View {
 				VStack(alignment: .leading, spacing: 1) {
 					Text("小建议")
 						.font(.system(size: 9))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 					Text(insight.message)
 						.font(.system(size: 11))
 						.foregroundStyle(.primary)
@@ -117,7 +117,7 @@ struct UsageCalendarSection: View {
 				if let peak = history.map(\.drainedPercent).max(), peak > 0 {
 					Text("峰值 \(peak)%")
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
 			
@@ -271,7 +271,7 @@ struct HealthTrendSection: View {
 				if let lifespanText, let projection {
 					Text(lifespanText)
 						.font(.system(size: 9))
-						.foregroundStyle(.secondary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 						.padding(.top, 3)
 						.help(UsagePatternAnalyzer.projectionCaveat(spanDays: projection.spanDays))
 				}

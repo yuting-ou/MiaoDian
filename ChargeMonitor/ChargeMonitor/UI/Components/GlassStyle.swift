@@ -1,5 +1,35 @@
 import SwiftUI
 
+/// 液态玻璃表面 token：实现与可读性证明测试共用同一份数值——
+/// 测试（测试/main.swift 可读性证明块）用 ReadabilityProof 证明这组参数在
+/// 任意壁纸亮度全域的最坏对比度达标；改这里 = 改观感 + 改证明，同步发生。
+/// 数值是材质模型近似（glassEffect 材质按 alpha 混合建模，模糊去高频不改均值）
+nonisolated enum GlassTokens {
+	/// 常规玻璃材质模型（近似）：glassEffect 自带材质的 (相对亮度, 透明度)
+	nonisolated static func baseGlass(isDark: Bool) -> (luminance: Double, alpha: Double) {
+		isDark ? (luminance: 0.05, alpha: 0.5) : (luminance: 0.85, alpha: 0.5)
+	}
+
+	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
+	/// 参数由可读性证明反推（测试/main.swift 证明表）：浅色 0.4 白（primary 最坏 14.1 AAA）、
+	/// 深色 0.78 黑（primary 最坏 ≥4.5、标签最坏 ≥4.5，白字 AAA 需近不透明已记录待确认）
+	nonisolated static func shellFloorTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
+		isDark ? (luminance: 0.0, alpha: 0.78) : (luminance: 1.0, alpha: 0.4)
+	}
+
+	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
+	nonisolated static func opaqueSurface(isDark: Bool) -> (luminance: Double, alpha: Double) {
+		isDark ? (luminance: 0.03, alpha: 1.0) : (luminance: 0.87, alpha: 1.0)
+	}
+
+	/// 玻璃上的标签文字透明度：系统 secondary 在透底上最坏 2.7:1 不达 AA；
+	/// primary 85% 最坏 4.5:1 达标（证明见测试）
+	nonisolated static let labelOnGlassAlpha: Double = 0.85
+
+	/// 玻璃上的标签文字色：primary 85%，随外观自适应
+	nonisolated static var labelOnGlass: Color { .primary.opacity(labelOnGlassAlpha) }
+}
+
 // 液态玻璃材质 token 与可用性感知修饰符（macOS 26 玻璃 / 15–25 原质感降级，双路径）。
 // 裁决规则：玻璃让一步，可读性不让步——文本、数字、图表是内容层，永不坐在玻璃上；
 // 玻璃只给外壳（一整块板）、控件（悬停/按压有弹性高光）、徽章与仪表（tint 着色）。
@@ -133,22 +163,57 @@ private struct BadgeBackground: ViewModifier {
 	}
 }
 
-// 面板外壳实现：玻璃 + 自适应亮度地板。浅色外观补白、深色外观补黑——
-// 玻璃跟着壁纸走，地板保证黑字/白字对比度始终达标（苹果美学=液态质感，可读性=地板兜底）
+// 面板外壳实现：玻璃 + 自适应亮度地板（参数来自 GlassTokens，与证明测试同源）。
+// 「降低透明度」显式分支：不透明纯色底，不走玻璃（对比度退化为常数，必达标）。
+// 顶边镜面高光 + 底部内阴影 = §二 材质语汇：内容 12pt 内缩避开亮边
 private struct PanelShellModifier: ViewModifier {
 	@Environment(\.colorScheme) private var colorScheme
+	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
 	@ViewBuilder
 	func body(content: Content) -> some View {
-		if #available(macOS 26.0, *) {
-			let floor: Color = colorScheme == .dark ? .black.opacity(0.35) : .white.opacity(0.4)
-			content.glassEffect(.regular.tint(floor), in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
-		} else {
+		let isDark = colorScheme == .dark
+		let shape = RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+		if reduceTransparency {
 			content.background(
-				.regularMaterial,
-				in: RoundedRectangle(cornerRadius: GlassMetrics.shellCornerRadius, style: .continuous)
+				shape.fill(Color(nsColor: .windowBackgroundColor))
 			)
+		} else if #available(macOS 26.0, *) {
+			let floor = GlassTokens.shellFloorTint(isDark: isDark)
+			let floorColor = isDark ? Color.black.opacity(floor.alpha) : Color.white.opacity(floor.alpha)
+			content
+				.glassEffect(.regular.tint(floorColor), in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
+				.overlay(alignment: .top) { specular }
+				.overlay(alignment: .bottom) { bottomShade }
+		} else {
+			content.background(.regularMaterial, in: shape)
 		}
+	}
+
+	/// 顶边镜面高光：~1pt 亮线向下渐隐（26pt 内衰减到 0），纯加光不改变文字对比度判定
+	private var specular: some View {
+		LinearGradient(
+			colors: [.white.opacity(0.32), .white.opacity(0)],
+			startPoint: .top, endPoint: .bottom
+		)
+		.frame(height: 26)
+		.clipShape(.rect(cornerRadius: GlassMetrics.shellCornerRadius))
+		.frame(maxWidth: .infinity)
+		.allowsHitTesting(false)
+		.accessibilityHidden(true)
+	}
+
+	/// 底部极淡内阴影：与顶边高光一起给"一块玻璃"厚度暗示
+	private var bottomShade: some View {
+		LinearGradient(
+			colors: [.black.opacity(0), .black.opacity(0.05)],
+			startPoint: .top, endPoint: .bottom
+		)
+		.frame(height: 14)
+		.clipShape(.rect(cornerRadius: GlassMetrics.shellCornerRadius))
+		.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+		.allowsHitTesting(false)
+		.accessibilityHidden(true)
 	}
 }
 
