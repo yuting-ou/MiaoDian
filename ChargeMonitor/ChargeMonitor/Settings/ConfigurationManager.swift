@@ -38,6 +38,11 @@ final class ConfigurationManager: ObservableObject {
         update { $0[keyPath: keyPath] = value }
     }
 
+    // 华容道布局：编辑模式里的任何变更都落盘
+    func setPanelLayout(_ layout: PanelLayout) {
+        update { $0.panelLayout = layout }
+    }
+
     // 图表卡片折叠/展开，状态随配置持久化
     func toggleCardCollapsed(_ option: DisplayOption) {
         update { config in

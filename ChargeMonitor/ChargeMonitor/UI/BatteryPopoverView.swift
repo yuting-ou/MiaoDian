@@ -19,6 +19,11 @@ struct BatteryPopoverView: View {
 	@State private var playCascade = false
 	// "复制报告"的行内成功反馈
 	@State private var reportCopied = false
+	// 华容道布局编辑：进入编辑布局模式时把持久布局播种成工作副本，退出时落盘；
+	// 编辑期间渲染走 layoutCards（严格按工作副本），隐藏卡片沉在托盘可捞回
+	@State private var isEditingLayout = false
+	@State private var layoutDraft = PanelLayout()
+	@State private var trayExpanded = false
 	// "本会话只播一次级联"挂类型上：面板每次打开销毁重建，@State 撑不住跨打开
 	private static var hasPlayedCascade = false
 	
@@ -50,9 +55,18 @@ struct BatteryPopoverView: View {
 		) : nil
 		let displayCards = twoColumns ? cards.filter { $0.id != .checkup } : cards
 		let cardIDs = displayCards.map(\.id)
+		// 华容道：编辑模式按工作副本渲染；自定义布局已存时正常模式也按它渲染；
+		// 都没有走自动配平。布局列里条件不可见的卡片渲染时跳过、位置保留
+		let hasCustomLayout = configuration.panelLayout != nil
+		let usingLayout = twoColumns && (isEditingLayout || hasCustomLayout)
 		// 预先算好分列与“控制行”的级联档位（供入场错峰动画与 onAppear 固化共用）
 		let split = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
-		let controlStep = (twoColumns ? max(split.left.count, split.right.count) : cardIDs.count) + 1
+		let layoutColumns: (left: [CardID], right: [CardID]) = usingLayout ? {
+			let known = Set(CardID.allCases.map(\.layoutID))
+			let normalized = PanelLayoutEditor.normalize(isEditingLayout ? layoutDraft : (configuration.panelLayout ?? PanelLayout()), known: known)
+			return (normalized.left.compactMap { CardID(rawValue: $0) }, normalized.right.compactMap { CardID(rawValue: $0) })
+		}() : (left: split.left, right: split.right)
+		let controlStep = (twoColumns ? max(layoutColumns.left.count, layoutColumns.right.count) : cardIDs.count) + 1
 		
 		VStack(alignment: .leading, spacing: 8) {
 			BatteryHeaderView(
@@ -63,31 +77,49 @@ struct BatteryPopoverView: View {
 			)
 			.modifier(CascadeIn(step: 0, active: didAppear))
 
+			if isEditingLayout {
+				HStack(spacing: 8) {
+					Text("拖动或用箭头调整卡片位置，「眼睛」隐藏")
+						.font(.system(size: 9))
+						.foregroundStyle(GlassTokens.labelOnGlass)
+					Spacer()
+					Button {
+						exitLayoutEdit(save: false)
+					} label: {
+						Text("取消")
+							.font(.system(size: 11))
+							.foregroundStyle(GlassTokens.labelOnGlass)
+					}
+					.buttonStyle(.plain)
+					Button {
+						exitLayoutEdit(save: true)
+					} label: {
+						Text("完成")
+							.font(.system(size: 11, weight: .semibold))
+							.foregroundStyle(Color.accentColor)
+					}
+					.buttonStyle(.plain)
+				}
+				.padding(.horizontal, 4)
+			}
+
 			if twoColumns {
 				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
 				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
 				HStack(alignment: .top, spacing: 10) {
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(Array(split.left.enumerated()), id: \.element) { index, id in
-							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-						}
-					}
-					.frame(maxWidth: .infinity, alignment: .topLeading)
-
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(Array(split.right.enumerated()), id: \.element) { index, id in
-							cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-								.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-						}
-					}
-					.frame(maxWidth: .infinity, alignment: .topLeading)
+					cardColumn(.left, columns: layoutColumns, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					cardColumn(.right, columns: layoutColumns, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
 				}
 			} else {
 				ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
 					cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
 						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
 				}
+			}
+
+			// 编辑模式的隐藏托盘：被藏起的卡片在这里，点 + 放回右列
+			if isEditingLayout, !layoutDraft.hidden.isEmpty {
+				hiddenTray
 			}
 
 			Divider()
@@ -147,6 +179,8 @@ struct BatteryPopoverView: View {
 			assignedRight = split.right
 		}
 		.onDisappear {
+			// 编辑中直接关面板：按取消处理（不落盘半成品布局）
+			if isEditingLayout { exitLayoutEdit(save: false) }
 			monitor.stopPolling()
 			// 下次打开时重新配平，避免上一次的历史分配越积越歪
 			assignedLeft = []
@@ -158,14 +192,160 @@ struct BatteryPopoverView: View {
 	
 	// MARK: - 卡片枚举与自适应分列
 	
-	private enum CardID: Hashable {
+	private enum CardID: String, Hashable, CaseIterable {
 		case powerInfo, batteryInfo, checkup, dailySummary, socChart, healthTrend
 		case powerChart, temperatureChart, bluetooth, chargeHistory, powerEvents, energyApps
 		case usageCalendar, habitInsight, hourlyDrain
 		case runtimeScenarios, batteryIdentity
+
+		// 华容道布局的持久化 id（case 名）；编辑模式的中文标题
+		var layoutID: String { rawValue }
+		var title: String {
+			switch self {
+			case .powerInfo: return "充电协议与功率"
+			case .batteryInfo: return "电池状态"
+			case .checkup: return "电池体检"
+			case .dailySummary: return "今日用电"
+			case .socChart: return "24小时电量"
+			case .healthTrend: return "健康度趋势"
+			case .powerChart: return "功耗曲线"
+			case .temperatureChart: return "温度曲线"
+			case .bluetooth: return "蓝牙外设"
+			case .chargeHistory: return "充电记录"
+			case .powerEvents: return "电源事件"
+			case .energyApps: return "高耗电应用"
+			case .usageCalendar: return "用电日历"
+			case .habitInsight: return "洞察"
+			case .hourlyDrain: return "时段用电"
+			case .runtimeScenarios: return "续航换算"
+			case .batteryIdentity: return "电池身份证"
+			}
+		}
 	}
 	
 	// 当前能显示出来的卡片及其预估高度（按自然阅读顺序）；高度用于两列配平
+	// MARK: - 华容道布局编辑
+
+	/// 单列渲染：编辑模式走工作副本并带每卡控制条；正常模式按已存布局（或自动配平）只渲染
+	private func cardColumn(
+		_ column: PanelLayoutEditor.Column,
+		columns: (left: [CardID], right: [CardID]),
+		available: Set<CardID>,
+		powerItems: [BatteryInfoItem],
+		batteryItems: [BatteryInfoItem],
+		configuration: AppConfiguration,
+		showsHealthCurve: Bool
+	) -> some View {
+		let ids = column == .left ? columns.left : columns.right
+		// 条件不可见的卡片（数据门槛未满足等）跳过渲染，位置保留
+		let visible = ids.filter { available.contains($0) }
+		return VStack(alignment: .leading, spacing: 8) {
+			ForEach(Array(visible.enumerated()), id: \.element) { index, id in
+				let base = cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+				if isEditingLayout {
+					base
+						.overlay(alignment: .topTrailing) { cardControls(id) }
+				} else {
+					base
+						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+				}
+			}
+			// 空列占位（编辑模式全藏光时保持列宽）
+			if visible.isEmpty, isEditingLayout {
+				Spacer(minLength: 40)
+			}
+		}
+		.frame(maxWidth: .infinity, alignment: .topLeading)
+		.dropDestination(for: String.self) { payload, _ in
+			guard let id = payload.first else { return false }
+			applyLayout(PanelLayoutEditor.move(layoutDraft, card: id, toColumn: column, before: nil))
+			return true
+		}
+	}
+
+	/// 编辑模式每卡的控制条：方向移动 ×4、隐藏（拖拽把手即整卡）
+	private func cardControls(_ id: CardID) -> some View {
+		HStack(spacing: 2) {
+			controlButton("arrow.up") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .up)) }
+			controlButton("arrow.down") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .down)) }
+			controlButton("arrow.left.to.line") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .left)) }
+			controlButton("arrow.right.to.line") { applyLayout(PanelLayoutEditor.shift(layoutDraft, card: id.layoutID, direction: .right)) }
+			controlButton("eye.slash") { applyLayout(PanelLayoutEditor.hide(layoutDraft, card: id.layoutID)) }
+		}
+		.padding(.horizontal, 4)
+		.padding(.vertical, 2)
+		.background(Capsule().fill(.ultraThinMaterial))
+		.padding(4)
+	}
+
+	private func controlButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+		Button(action: action) {
+			Image(systemName: symbol)
+				.font(.system(size: 8, weight: .bold))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+				.frame(width: 16, height: 16)
+				.contentShape(Rectangle())
+		}
+		.buttonStyle(.plain)
+	}
+
+	/// 隐藏托盘：点 + 按顺序放回右列
+	private var hiddenTray: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			Text("已隐藏的卡片（点 + 放回）")
+				.font(.system(size: 9))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+			ForEach(Array(layoutDraft.hidden.enumerated()), id: \.element) { _, id in
+				HStack {
+					Text(CardID(rawValue: id)?.title ?? id)
+						.font(.system(size: 11))
+						.foregroundStyle(.primary)
+					Spacer()
+					Button {
+						applyLayout(PanelLayoutEditor.unhide(layoutDraft, card: id, to: .right))
+					} label: {
+						Image(systemName: "plus.circle.fill")
+							.font(.system(size: 12))
+							.foregroundStyle(Color.accentColor)
+					}
+					.buttonStyle(.plain)
+				}
+				.padding(.vertical, 2)
+			}
+		}
+		.padding(8)
+		.frame(maxWidth: .infinity, alignment: .leading)
+		.glassSection()
+	}
+
+	/// 应用布局变更到工作副本
+	private func applyLayout(_ layout: PanelLayout) {
+		layoutDraft = layout
+	}
+
+	/// 进入编辑布局：以当前生效布局（自定义或自动配平）播种工作副本
+	private func enterLayoutEdit() {
+		let known = Set(CardID.allCases.map(\.layoutID))
+		if let saved = configurationManager.configuration.panelLayout {
+			layoutDraft = PanelLayoutEditor.normalize(saved, known: known)
+		} else {
+			layoutDraft = PanelLayoutEditor.seed(
+				left: assignedLeft.map(\.layoutID),
+				right: assignedRight.map(\.layoutID)
+			)
+		}
+		isEditingLayout = true
+	}
+
+	/// 退出编辑：落盘（面板关闭时 onDisappear 兜底）
+	private func exitLayoutEdit(save: Bool) {
+		if save {
+			configurationManager.setPanelLayout(PanelLayoutEditor.normalize(layoutDraft, known: Set(CardID.allCases.map(\.layoutID))))
+		}
+		isEditingLayout = false
+		trayExpanded = false
+	}
+
 	private func visibleCards(
 		_ configuration: AppConfiguration,
 		showsHealthCurve: Bool,
@@ -620,6 +800,13 @@ struct BatteryPopoverView: View {
 			// 拒绝（运行时 Fault "Please use SettingsLink"，实测在案）；simultaneousGesture 补激活——
 			// LSUIElement 应用不抢前台，不激活的话设置窗口会埋在其他 App 后面。
 			// buttonStyle(.plain) 剥掉 SettingsLink 自带的链接态底色——行观感必须与其他控制行完全一致
+			// 华容道布局：进编辑模式重排/隐藏卡片（仅双列面板提供——当前会话配平出两列即满足）
+			if !assignedLeft.isEmpty || !assignedRight.isEmpty {
+				PopoverActionRow("编辑布局", systemImageName: "square.grid.2x2") {
+					enterLayoutEdit()
+				}
+			}
+
 			SettingsLink {
 				GlassRow {
 					HStack(spacing: 6) {

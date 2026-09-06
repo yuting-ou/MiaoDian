@@ -1021,6 +1021,54 @@ do {
 	expectEqual(withoutCare.count, 3, "洞察收集：保养不在线则少一条（变异：恒真必红）")
 	expect(UsagePatternAnalyzer.chargingInsights(habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil).isEmpty, "洞察收集：全空返回空")
 
+	// —— 华容道布局编辑器（纯函数）——
+	let seed = PanelLayoutEditor.seed(left: ["a", "b", "c"], right: ["d", "e"])
+	expectEqual(seed.left, ["a", "b", "c"], "布局种子：左列保序")
+	expectEqual(seed.right, ["d", "e"], "布局种子：右列保序")
+	expectEqual(seed.hidden, [] as [String], "布局种子：初始无隐藏")
+
+	// 移动到右列锚点之前
+	let moved = PanelLayoutEditor.move(seed, card: "a", toColumn: .right, before: "e")
+	expectEqual(moved.left, ["b", "c"], "跨列移动：源列摘除")
+	expectEqual(moved.right, ["d", "a", "e"], "跨列移动：锚点之前插入")
+
+	// 锚点不存在 → 追加末尾
+	let appended = PanelLayoutEditor.move(seed, card: "a", toColumn: .right, before: "不存在的锚")
+	expectEqual(appended.right, ["d", "e", "a"], "跨列移动：锚点缺失追加末尾")
+
+	// 上移/下移与边界
+	let up = PanelLayoutEditor.shift(seed, card: "b", direction: .up)
+	expectEqual(up.left, ["b", "a", "c"], "上移：列内换位")
+	let upTop = PanelLayoutEditor.shift(up, card: "b", direction: .up)
+	expectEqual(upTop.left, ["b", "a", "c"], "上移：到顶原样返回")
+	let down = PanelLayoutEditor.shift(up, card: "a", direction: .down)
+	expectEqual(down.left, ["b", "c", "a"], "下移：列内换位")
+	let downBottom = PanelLayoutEditor.shift(down, card: "a", direction: .down)
+	expectEqual(downBottom.left, ["b", "c", "a"], "下移：到底原样返回")
+
+	// 左右换列：保持同序位置
+	let toRight = PanelLayoutEditor.shift(seed, card: "a", direction: .right)
+	expectEqual(toRight.left, ["b", "c"], "换列：源列移除")
+	expectEqual(toRight.right, ["a", "d", "e"], "换列：同序插入右列")
+
+	// 隐藏与捞回
+	let hid = PanelLayoutEditor.hide(seed, card: "b")
+	expectEqual(hid.left, ["a", "c"], "隐藏：源列移除")
+	expectEqual(hid.hidden, ["b"], "隐藏：进托盘")
+	let back = PanelLayoutEditor.unhide(hid, card: "b", to: .left)
+	expectEqual(back.hidden, [] as [String], "捞回：托盘清空")
+	expectEqual(back.left, ["a", "c", "b"], "捞回：追加左列末尾（不插队）")
+
+	// 归一：未知 id 丢弃、去重、缺失的已知卡追加左列
+	let messy = PanelLayout(left: ["a", "x", "a", "新卡"], right: ["c", "x"], hidden: ["y"])
+	let clean = PanelLayoutEditor.normalize(messy, known: ["a", "b", "c", "d", "e", "新卡"])
+	expectEqual(clean.left, ["a", "新卡", "b", "d", "e"], "归一：左列过滤+缺失已知卡按序追加")
+	expectEqual(clean.right, ["c"], "归一：右列过滤")
+	expectEqual(clean.hidden, [] as [String], "归一：未知隐藏丢弃")
+	// 幂等：归一两次结果一致
+	let twice = PanelLayoutEditor.normalize(clean, known: ["a", "b", "c", "d", "e", "新卡"])
+	expectEqual(twice, clean, "归一：幂等")
+
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
 	let motherPast = ChargeSession(startDate: t0.addingTimeInterval(-7200), endDate: t0.addingTimeInterval(-7200 + 3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)

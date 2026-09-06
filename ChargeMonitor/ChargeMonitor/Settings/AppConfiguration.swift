@@ -25,6 +25,8 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	]
 	// 默认折叠种子是否已应用：老配置迁移时一次性种子，此后用户的选择优先
 	var defaultCollapseSeedApplied: Bool = true
+	// 用户自定义卡片布局（华容道）：nil = 未自定义（走自动配平）；进入过编辑布局模式即落值
+	var panelLayout: PanelLayout? = nil
 	
 	static let `default` = AppConfiguration()
 	
@@ -85,6 +87,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case quietHoursEndHour
 		case collapsedCards
 		case defaultCollapseSeedApplied
+		case panelLayout
 	}
 
 	init(from decoder: Decoder) throws {
@@ -150,5 +153,10 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 			])
 			self.defaultCollapseSeedApplied = true
 		}
+		// v1.11.0：用户自定义卡片布局（旧档 nil = 未自定义）
+		self.panelLayout = try container.decodeIfPresent(
+			PanelLayout.self,
+			forKey: .panelLayout
+		)
 	}
 }
