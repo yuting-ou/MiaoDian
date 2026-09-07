@@ -1126,6 +1126,99 @@ do {
 	// 宽块只作为用户显式选择（宽窄键），系统不为可读性自动付高度税
 	expect(!PanelLayout(rows: [["a", "b"]]).effectiveRows.isEmpty, "行存储：基础读取通路")
 
+	// —— 卡片资格与预设（目标模式 v1.15.0，CardEligibility.swift 纯函数）——
+	// 回归断言「默认布局==今日顺序」：全开关+全数据在场时，资格序必须等于
+	// 面板 visibleCards 的语义阅读序（充电中→电池健康→用电行为→外设与事件）。
+	// 面板改顺序不改这里 → 此断言红，逼两边同步
+	var allOnConfig = AppConfiguration.default
+	allOnConfig.enabledOptions = Set(DisplayOption.allCases)
+	let todayOrder = CardEligibility.eligibleCards(configuration: allOnConfig, facts: .allPresent)
+	expectEqual(todayOrder, [
+		.powerInfo, .chargeHistory, .batteryInfo, .checkup, .batteryIdentity, .habitInsight,
+		.temperatureChart, .healthTrend, .dailySummary, .usageCalendar, .hourlyDrain,
+		.socChart, .powerChart, .runtimeScenarios, .energyApps, .powerEvents, .bluetooth,
+	], "资格序==今日面板阅读序（默认布局回归）")
+
+	// 开关门与数据门缺一不可（eligibility 判定，不改语义）
+	var noBT = allOnConfig
+	noBT.enabledOptions.remove(.bluetoothDevices)
+	expect(!CardEligibility.eligibleCards(configuration: noBT, facts: .allPresent).contains(.bluetooth),
+		"资格：开关关掉就不在场")
+	var noBTData = CardEligibilityFacts.allPresent
+	noBTData.hasBluetoothDevices = false
+	expect(!CardEligibility.eligibleCards(configuration: allOnConfig, facts: noBTData).contains(.bluetooth),
+		"资格：没数据就不在场（绝不强行显示空卡）")
+	let emptyFacts = CardEligibilityFacts()
+	expectEqual(CardEligibility.eligibleCards(configuration: allOnConfig, facts: emptyFacts), [.energyApps],
+		"资格：全空数据只剩高耗电应用（无数据门）")
+
+	// 预设只在资格集内生效：极简白名单外的在场卡进 hidden，缺席卡根本不进布局
+	let smallEligible: [LayoutCard] = [.powerInfo, .batteryInfo, .socChart, .bluetooth]
+	let minimal = PanelPresets.apply(.minimal, eligible: smallEligible, base: nil)
+	expectEqual(minimal?.rows ?? [], [["powerInfo", "batteryInfo"], ["socChart"]],
+		"预设·极简：白名单∩资格集按资格序成对落行")
+	expectEqual(minimal?.hidden ?? [], ["bluetooth"], "预设·极简：资格集内白名单外进 hidden")
+	// 变异守门：若预设直接用白名单不过资格集，未在场卡会被写进 rows → 此断言红
+	expect(Set(minimal?.rows?.flatMap { $0 } ?? []).isSubset(of: Set(smallEligible.map(\.rawValue))),
+		"预设不越资格集（未在场的卡绝不落行）")
+	// 默认预设 = 回自动（nil）；变异守门：若返回了显式布局此断言红
+	expect(PanelPresets.apply(.standard, eligible: smallEligible, base: minimal) == nil,
+		"预设·默认：返回 nil 即回自动配平")
+	// 数据控：资格集全显示，之前藏着的在场卡捞回，不在场的藏卡保持原状
+	let nerd = PanelPresets.apply(.dataNerd, eligible: smallEligible,
+		base: PanelLayout(rows: [["powerInfo"]], hidden: ["bluetooth", "ghostCard"]))
+	expectEqual(nerd?.hidden ?? [], ["ghostCard"], "预设·数据控：在场藏卡捞回，资格集外保持原状")
+	expectEqual(nerd?.rows?.flatMap { $0 }.sorted() ?? [], smallEligible.map(\.rawValue).sorted(),
+		"预设·数据控：资格集全落行")
+
+	// 播种与配对：奇数张落单成宽行
+	expectEqual(PanelPresets.paired([.powerInfo, .batteryInfo, .checkup]),
+		[["powerInfo", "batteryInfo"], ["checkup"]], "配对：两张一行，落单成宽行")
+
+	// 上下移：与阅读序相邻卡原地换位（行形态不变）
+	let moveBase = PanelLayout(rows: [["a", "b"], ["c"]])
+	expectEqual(PanelFlow.move(moveBase, card: "c", up: true).rows ?? [], [["a", "c"], ["b"]],
+		"上移：与阅读序前一张换位（b 掉到下行）")
+	expectEqual(PanelFlow.move(moveBase, card: "b", up: false).rows ?? [], [["a", "c"], ["b"]],
+		"下移：与阅读序后一张换位")
+	// 变异守门：上移写成下移 → 首卡上移不再是 no-op 而是换到第二位，此断言红
+	expectEqual(PanelFlow.move(moveBase, card: "a", up: true), moveBase, "上移：首卡 no-op")
+	expectEqual(PanelFlow.move(moveBase, card: "c", up: false), moveBase, "下移：末卡 no-op")
+	expectEqual(PanelFlow.move(moveBase, card: "不存在", up: true), moveBase, "移动：不在板上的卡 no-op")
+	// 旧档（left/right）上移动 → 升级为行存储，旧字段清零
+	// 对齐后阅读序 a,c,b：c 上移与 a 换位
+	let legacyMove = PanelFlow.move(PanelLayout(left: ["a", "b"], right: ["c"]), card: "c", up: true)
+	expectEqual(legacyMove.rows ?? [], [["c", "a"], ["b"]], "移动：旧档回退读取后升级行存储")
+	expect(legacyMove.left.isEmpty && legacyMove.right.isEmpty, "移动：旧字段退役清零")
+
+	// 折叠映射：与面板 isCardCollapsed 的 11 张一致；hourlyDrain 卡挂 hourlyDrainChart 开关
+	expectEqual(LayoutCard.hourlyDrain.collapseOption, .hourlyDrainChart, "折叠映射：时段用电卡")
+	expect(LayoutCard.powerInfo.collapseOption == nil, "折叠映射：信息行卡不支持折叠")
+	let collapsibleCount = LayoutCard.allCases.filter { $0.collapseOption != nil }.count
+	expectEqual(collapsibleCount, 11, "折叠映射：支持折叠的卡恰为面板在案的 11 张")
+
+	// 洞察资格包装：与面板同一分析器组合——空数据无洞察，保养挂线即有
+	expect(!CardEligibility.hasHabitInsight(
+		events: [], dailyHistory: [], snapshot: BatterySnapshot(), careHolding: false,
+		careThresholdPercent: 80, drain: HourlyDrainStats(), temp: HourlyTempStats(),
+		currentCharger: nil, knownChargers: []
+	), "洞察资格：空数据无洞察")
+	expect(CardEligibility.hasHabitInsight(
+		events: [], dailyHistory: [], snapshot: BatterySnapshot(), careHolding: true,
+		careThresholdPercent: 80, drain: HourlyDrainStats(), temp: HourlyTempStats(),
+		currentCharger: nil, knownChargers: []
+	), "洞察资格：优化充电挂线即在场")
+
+	// 旧配置 decode 兼容：无 panelLayout 字段 → nil（自动模式），升级不丢状态
+	let legacyConfigJSON = #"{"enabledOptions":["batteryHealth"],"menuBarContent":"percent"}"#
+	let legacyConfig = try! JSONDecoder().decode(AppConfiguration.self, from: legacyConfigJSON.data(using: .utf8)!)
+	expect(legacyConfig.panelLayout == nil, "旧配置兼容：无 panelLayout 字段解码为 nil（自动模式）")
+	// v1.13 三表旧档经 AppConfiguration 通路回退读取
+	let v113ConfigJSON = #"{"panelLayout":{"left":["a","b"],"right":["c"],"hidden":[]}}"#
+	let v113Config = try! JSONDecoder().decode(AppConfiguration.self, from: v113ConfigJSON.data(using: .utf8)!)
+	expectEqual(v113Config.panelLayout?.effectiveRows ?? [], [["a", "c"], ["b"]],
+		"旧配置兼容：v1.13 三表经 AppConfiguration 解码后按索引对齐")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()

@@ -54,6 +54,8 @@ struct SettingsView: View {
 			}
 		}
 
+		cardManagementSection
+
 		Section {
 			Button("导出历史存档…") { exportArchive() }
 			Button("导入历史存档…") { importArchive() }
@@ -107,6 +109,224 @@ struct SettingsView: View {
 					.foregroundStyle(.secondary)
 			}
 		}
+	}
+
+	// MARK: - 卡片管理（自定义布局编辑器：与面板编辑模式写同一份 PanelLayout 契约）
+
+	// 主干编辑器放稳定窗口：原生无障碍、只在窗口打开时算资格（body 即打开）。
+	// 三层可见性在此落地：资格集（有数据）∩ 用户可见（hidden 之外）→ 列表；
+	// 排序读行表阅读序。拖拽微调仍在面板「隐藏卡片」编辑模式，两边同一模型。
+	@ViewBuilder
+	private var cardManagementSection: some View {
+		let configuration = configurationManager.configuration
+		let eligible = CardEligibility.eligibleCards(configuration: configuration, facts: eligibilityFacts(configuration: configuration))
+		let eligibleIDs = Set(eligible.map(\.rawValue))
+		// 自定义布局归一到面板渲染同款（normalize 保证隐藏卡不残留行表）；自动模式按资格序
+		let effective = configuration.panelLayout.map { PanelFlow.normalize($0, known: Set(LayoutCard.allCases.map(\.rawValue))) }
+		let visibleOrder: [String] = effective.map { layout in
+			layout.effectiveRows.flatMap { $0 }.filter { eligibleIDs.contains($0) }
+		} ?? eligible.map(\.rawValue)
+		let hiddenOrder = (effective?.hidden ?? []).filter { eligibleIDs.contains($0) }
+
+		Section {
+			HStack {
+				Text("显示/隐藏、排序与默认折叠面板卡片；拖拽微调在面板的「隐藏卡片」编辑模式。")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+			HStack(spacing: 10) {
+				Menu {
+					ForEach(LayoutPreset.allCases) { preset in
+						Button { applyPreset(preset, eligible: eligible) } label: {
+							VStack(alignment: .leading, spacing: 1) {
+								Text(preset.title)
+								Text(preset.detail)
+									.font(.system(size: 11))
+									.foregroundStyle(.secondary)
+							}
+						}
+					}
+				} label: {
+					Text("应用预设")
+				}
+				Spacer()
+				if configuration.panelLayout != nil {
+					Button("恢复默认排序") { configurationManager.clearPanelLayout() }
+				}
+			}
+			ForEach(Array(visibleOrder.enumerated()), id: \.element) { index, id in
+				if let card = LayoutCard(rawValue: id) {
+					cardRow(card, index: index, count: visibleOrder.count, eligible: eligible)
+				}
+			}
+			if !hiddenOrder.isEmpty {
+				Divider()
+				Text("已隐藏（当前有数据）")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+				ForEach(hiddenOrder, id: \.self) { id in
+					if let card = LayoutCard(rawValue: id) {
+						hiddenCardRow(card, eligible: eligible)
+					}
+				}
+			}
+		} header: {
+			Label("卡片管理", systemImage: "rectangle.3.group")
+		}
+	}
+
+	private func cardRow(_ card: LayoutCard, index: Int, count: Int, eligible: [LayoutCard]) -> some View {
+		HStack(spacing: 10) {
+			VStack(alignment: .leading, spacing: 2) {
+				Text(card.title)
+				Text(card.detail)
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+			}
+			Spacer()
+			if let option = card.collapseOption {
+				Toggle("默认折叠", isOn: collapseBinding(option))
+					.toggleStyle(.checkbox)
+					.font(.system(size: 11))
+			}
+			Button { moveCard(card, up: true, eligible: eligible) } label: {
+				Image(systemName: "arrow.up")
+			}
+			.accessibilityLabel("上移「\(card.title)」")
+			.disabled(index == 0)
+			Button { moveCard(card, up: false, eligible: eligible) } label: {
+				Image(systemName: "arrow.down")
+			}
+			.accessibilityLabel("下移「\(card.title)」")
+			.disabled(index >= count - 1)
+			Toggle(isOn: visibleBinding(card, eligible: eligible)) {
+				Text("显示")
+			}
+			.labelsHidden()
+		}
+		.padding(.vertical, 2)
+	}
+
+	private func hiddenCardRow(_ card: LayoutCard, eligible: [LayoutCard]) -> some View {
+		HStack(spacing: 10) {
+			VStack(alignment: .leading, spacing: 2) {
+				Text(card.title)
+					.foregroundStyle(.secondary)
+				Text(card.detail)
+					.font(.system(size: 11))
+					.foregroundStyle(.tertiary)
+			}
+			Spacer()
+			Button("显示") {
+				persistLayout(PanelFlow.unhide(layoutForEditing(eligible: eligible), card: card.rawValue))
+			}
+			.accessibilityLabel("显示「\(card.title)」")
+		}
+		.padding(.vertical, 2)
+	}
+
+	// MARK: - 卡片管理写路径（全部走 CardEligibility/PanelFlow 纯函数，与面板同源）
+
+	/// 自动模式下第一次改动先按资格阅读序播种行存储（语义对齐面板编辑入口的播种）
+	private func layoutForEditing(eligible: [LayoutCard]) -> PanelLayout {
+		configurationManager.configuration.panelLayout ?? PanelPresets.seed(eligible: eligible)
+	}
+
+	private func persistLayout(_ layout: PanelLayout) {
+		configurationManager.setPanelLayout(PanelFlow.normalize(layout, known: Set(LayoutCard.allCases.map(\.rawValue))))
+	}
+
+	private func moveCard(_ card: LayoutCard, up: Bool, eligible: [LayoutCard]) {
+		persistLayout(PanelFlow.move(layoutForEditing(eligible: eligible), card: card.rawValue, up: up))
+	}
+
+	private func visibleBinding(_ card: LayoutCard, eligible: [LayoutCard]) -> Binding<Bool> {
+		Binding(
+			get: { !(configurationManager.configuration.panelLayout?.hidden.contains(card.rawValue) ?? false) },
+			set: { visible in
+				let base = layoutForEditing(eligible: eligible)
+				persistLayout(visible
+					? PanelFlow.unhide(base, card: card.rawValue)
+					: PanelFlow.hide(base, card: card.rawValue))
+			}
+		)
+	}
+
+	private func collapseBinding(_ option: DisplayOption) -> Binding<Bool> {
+		Binding(
+			get: { configurationManager.configuration.collapsedCards.contains(option.rawValue) },
+			set: { desired in
+				guard configurationManager.configuration.collapsedCards.contains(option.rawValue) != desired else { return }
+				configurationManager.toggleCardCollapsed(option)
+			}
+		)
+	}
+
+	/// 预设覆盖当前自定义布局前确认一次；默认预设 = 清回自动
+	private func applyPreset(_ preset: LayoutPreset, eligible: [LayoutCard]) {
+		if configurationManager.configuration.panelLayout != nil {
+			let alert = NSAlert()
+			alert.messageText = "应用「\(preset.title)」预设？"
+			alert.informativeText = "将覆盖当前的自定义卡片布局（之后可用「恢复默认排序」回到自动配平）。"
+			alert.addButton(withTitle: "应用")
+			alert.addButton(withTitle: "取消")
+			guard alert.runModal() == .alertFirstButtonReturn else { return }
+		}
+		let next = PanelPresets.apply(preset, eligible: eligible, base: configurationManager.configuration.panelLayout)
+		if let next {
+			persistLayout(next)
+		} else {
+			configurationManager.clearPanelLayout()
+		}
+	}
+
+	/// 资格事实快照：与面板 visibleCards 同源的数据在场判定（设置窗口打开时才计算）
+	private func eligibilityFacts(configuration: AppConfiguration) -> CardEligibilityFacts {
+		let services = AppServices.shared
+		let monitor = services.monitor
+		let showsHealthCurve = configuration.enabledOptions.contains(.healthTrend) && historyRecorder.healthSamples.count >= 2
+		let formatter = BatteryInfoFormatter(
+			snapshot: monitor.snapshot,
+			configuration: configuration,
+			drainEstimate: monitor.drainEstimate,
+			healthTrend: showsHealthCurve ? nil : historyRecorder.healthTrend,
+			sleepDrain: historyRecorder.lastSleepDrain,
+			chargerProfile: historyRecorder.currentChargerProfile,
+			chargerStats: historyRecorder.currentChargerPowerStats,
+			omitsTimeEstimates: true
+		)
+		var facts = CardEligibilityFacts()
+		facts.hasPowerItems = !formatter.makeItems(in: .power).isEmpty
+		facts.hasBatteryItems = !formatter.makeItems(in: .battery).isEmpty
+		facts.hasChargeHistory = !historyRecorder.recentSessions.isEmpty
+		facts.hasCheckup = monitor.snapshot.healthPercent != nil
+		facts.hasBatteryIdentity = monitor.batteryIdentity?.isMeaningful ?? false
+		facts.hasHabitInsight = CardEligibility.hasHabitInsight(
+			events: historyRecorder.powerEvents,
+			dailyHistory: historyRecorder.dailyHistory,
+			snapshot: monitor.snapshot,
+			careHolding: configuration.enabledOptions.contains(.chargeCareReminder)
+				&& services.alertController.isOptimizedChargingHolding,
+			careThresholdPercent: configuration.chargeCareThresholdPercent,
+			drain: historyRecorder.hourlyDrainStats,
+			temp: historyRecorder.hourlyTempStats,
+			currentCharger: historyRecorder.currentChargerProfile,
+			knownChargers: historyRecorder.chargerProfiles
+		)
+		facts.hasTemperatureSamples = monitor.temperatureSamples.count >= 2
+		facts.showsHealthCurve = showsHealthCurve
+		facts.hasDailySummary = historyRecorder.todayUsage.map { $0.drainedPercent > 0 || $0.chargedPercent > 0 } ?? false
+		facts.hasUsageCalendar = historyRecorder.dailyHistory.count >= 3
+		facts.hasHourlyDrain = historyRecorder.hourlyDrainStats.accumulatedDays >= 3
+		facts.hasSOCSamples = historyRecorder.socSamples.count >= 2
+		facts.hasPowerSamples = monitor.powerSamples.count >= 2
+		facts.hasRuntimeScenarios = monitor.snapshot.powerSource == .battery
+			&& (monitor.drainEstimate?.percentPerHour ?? 0) > 0
+			&& monitor.snapshot.stateOfChargePercent != nil
+		facts.hasPowerEvents = !historyRecorder.powerEvents.isEmpty
+		facts.hasBluetoothDevices = !monitor.bluetoothDevices.isEmpty
+		return facts
 	}
 
 	// 关于区：图标 + 名称 + 版本，比单行 LabeledContent 更有质感
