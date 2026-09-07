@@ -375,6 +375,17 @@ nonisolated enum CardList {
 	}
 }
 
+extension AppConfiguration {
+	/// 宽面板头部体检角标是否显示（v1.18.0）：体检卡在宽面板搬进头部不占行（既有设计），
+	/// 但「面板显示」开关此前对它完全无效果——用户在设置里关掉角标纹丝不动（静默失败）。
+	/// 判定 = 开关门 ∧ 未被隐藏；panelLayout == nil（自动模式/旧档）视为未隐藏。
+	nonisolated func showsHeaderCheckup(hasHealth: Bool) -> Bool {
+		guard enabledOptions.contains(.batteryCheckup), hasHealth else { return false }
+		guard let hidden = panelLayout?.hidden else { return true }
+		return !hidden.contains(LayoutCard.checkup.rawValue)
+	}
+}
+
 // MARK: - 上下移（设置列表用；面板拖拽走 insert，互不干扰）
 
 extension PanelFlow {

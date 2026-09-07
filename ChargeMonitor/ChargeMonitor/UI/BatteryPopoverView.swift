@@ -64,8 +64,9 @@ struct BatteryPopoverView: View {
 		// 按语义顺序枚举当前可见卡片；≥ 5 张就拉宽面板双列，否则窄单列
 		let cards = visibleCards(configuration, showsHealthCurve: showsHealthCurve, powerItems: powerItems, batteryItems: batteryItems)
 		let twoColumns = cards.count >= 5
-		// 宽面板时体检评分搬进头部右侧的空白区，不再占卡片位
-		let checkup = configuration.enabledOptions.contains(.batteryCheckup) ? BatteryCheckup.evaluate(
+		// 宽面板时体检评分搬进头部右侧的空白区，不再占卡片位。
+		// v1.18.0：显示判定走 showsHeaderCheckup——「面板显示」开关此前对角标无效果（静默失败）
+		let checkup = configuration.showsHeaderCheckup(hasHealth: monitor.snapshot.healthPercent != nil) ? BatteryCheckup.evaluate(
 			healthPercent: monitor.snapshot.healthPercent,
 			cycleCount: monitor.snapshot.cycleCount,
 			temperatureC: monitor.snapshot.temperatureC,
@@ -546,6 +547,8 @@ struct BatteryPopoverView: View {
 
 	/// 松手：落点有效 → 提交预览布局并持久化；面板外 → 丢弃预览回弹。
 	/// id 参数 = 发起松手的把手所属卡：与本卡拖拽无关的松手（幽灵事件）不得提交别人的拖拽。
+	/// v1.18.0：拖拽落盘纳入后悔药——破坏前先快照当前状态，设置窗口「撤销上次布局改动」
+	/// 一键找回（此前撤销只覆盖预设/恢复默认，拖乱了几下只能手动拖回来）。
 	private func finishDrag(from id: CardID? = nil) {
 		defer {
 			if id == nil || dragState?.card == id?.layoutID {
@@ -558,6 +561,7 @@ struct BatteryPopoverView: View {
 			  let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
 		let moved = PanelFlow.insertLayout(previewLayout ?? layoutDraft, card: drag.card, target: target)
 		layoutDraft = moved
+		configurationManager.snapshotLayoutForUndo()
 		configurationManager.setPanelLayout(PanelFlow.normalize(moved, known: Set(CardID.allCases.map(\.layoutID))))
 	}
 

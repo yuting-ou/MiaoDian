@@ -1364,6 +1364,21 @@ do {
 	let planFlipped = PanelFlow.masonryPlan([.pair(left: "c", right: "d")])
 	expectEqual(planFlipped.map(\.card), ["c", "d"], "masonryPlan：pair 拆格保左右序")
 
+	// —— 头部体检角标 v1.18.0：面板显示开关对 checkup 生效 ——
+	var chkOn = AppConfiguration.default
+	chkOn.enabledOptions.insert(.batteryCheckup)
+	expect(chkOn.showsHeaderCheckup(hasHealth: true), "头部角标：开关开+有健康度+自动模式 → 显示（旧档兼容）")
+	expect(!chkOn.showsHeaderCheckup(hasHealth: false), "头部角标：无健康度不显示（数据门仍在）")
+	var chkHidden = chkOn
+	chkHidden.panelLayout = PanelLayout(rows: [["powerInfo"]], hidden: ["checkup"])
+	expect(!chkHidden.showsHeaderCheckup(hasHealth: true), "头部角标：checkup 被隐藏 → 角标消失（v1.17 及此前无效果）")
+	var chkSwitchOff = chkOn
+	chkSwitchOff.enabledOptions.remove(.batteryCheckup)
+	expect(!chkSwitchOff.showsHeaderCheckup(hasHealth: true), "头部角标：开关关 → 不显示")
+	var chkAutoNoLayout = chkOn
+	chkAutoNoLayout.panelLayout = PanelLayout(rows: [["powerInfo"], ["batteryInfo"]], hidden: [])
+	expect(chkAutoNoLayout.showsHeaderCheckup(hasHealth: true), "头部角标：自定义布局但未隐藏 → 显示")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()
