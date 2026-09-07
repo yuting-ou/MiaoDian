@@ -512,10 +512,15 @@ struct BatteryPopoverView: View {
 					if let frame = frameTable.frames[cardID], let card = CardID(rawValue: cardID) {
 						dragHandle(card)
 							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
+							.animation(.spring(response: 0.32, dampingFraction: 0.82), value: frameTable.frames[cardID])
 					}
 				}
 			}
 		}
+		// 编辑模式隐藏把手浮层：控制条（眼睛/宽窄）也在卡顶居中，旧版把手被控制条盖住
+		// 看不见；浮层化后若不跟着藏，≡ 会叠画在控制条上（v1.17.2 视觉修正）。
+		// 交互层早已禁用（allowsHitTesting），这里补齐视觉一致。
+		.opacity(isEditingLayout ? 0 : 1)
 		.allowsHitTesting(!isEditingLayout)
 	}
 
@@ -543,7 +548,13 @@ struct BatteryPopoverView: View {
 				y: isDragged ? (dragState?.translation.height ?? 0) : 0)
 		.zIndex(isDragged ? 10 : 0)
 		.animation(.spring(response: 0.32, dampingFraction: 0.82), value: layoutValue)
-		.animation(.spring(response: 0.22, dampingFraction: 0.85), value: dragState?.translation ?? .zero)
+		// 抓起/放下动效（v1.17.2）：scale/shadow 随 isDragged 翻转平滑过渡——
+		// 旧版没有值驱动动画，提起是瞬跳、放下是瞬落，没有"拿起一张卡"的实体感
+		.animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
+		// 跟手/落位分相（v1.17.2）：拖动中 offset 直跟指针（1:1，无弹簧滞后——
+		// 指针走到哪卡在哪，拖拽才有"捏在手里"的确定感）；松手后 offset 归零走弹簧，
+		// 与 layoutValue 的让位弹簧合成"从手指位置飞回槽位"的落定动画
+		.animation(dragState == nil ? .spring(response: 0.3, dampingFraction: 0.85) : nil, value: dragState?.translation ?? .zero)
 	}
 
 	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（行插入点预览）。

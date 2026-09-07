@@ -289,6 +289,15 @@ nonisolated enum CardListStatus: Equatable, Sendable {
 	case shown
 	case hidden
 	case unavailable(reason: String)
+
+	/// 人话原因（设置行无障碍朗读/文案用）：显示中/已隐藏没有原因，给中性描述
+	nonisolated var reasonText: String {
+		switch self {
+		case .shown: return "显示中"
+		case .hidden: return "已隐藏"
+		case .unavailable(let reason): return reason
+		}
+	}
 }
 
 nonisolated enum CardList {
@@ -356,15 +365,6 @@ nonisolated enum CardList {
 				return (card, .unavailable(reason: "功能开关未开（在上方开关区打开「\(gate.title)」）"))
 			}
 			return (card, .unavailable(reason: dataHint(for: card, facts: facts)))
-		}
-	}
-
-	/// 面板显示开关的可交互性：隐藏态永远可开（恢复通道）；显示态永远可关。
-	/// 只有「显示中但缺资格」不存在（shown 即有资格），所以唯一禁用态 = 暂不可用且未隐藏。
-	nonisolated static func isToggleEnabled(_ status: CardListStatus) -> Bool {
-		switch status {
-		case .shown, .hidden: return true
-		case .unavailable: return false
 		}
 	}
 

@@ -286,6 +286,9 @@ struct SettingsView: View {
 	// 缺数据→说还差什么。面板显示开关按 isToggleEnabled 禁用（暂不可用=唯一禁用态），
 	// 开关本身通常已开（未隐藏），卡不在场是数据/功能门的事，开关此刻无操作语义。
 	private func unavailableCardRow(_ card: LayoutCard, status: CardListStatus) -> some View {
+		// v1.17.2：去掉恒灰的假开关——「面板显示」在暂不可用态恒为开+禁用，用户去点
+		// 没反应（假可供性），VoiceOver 还读"面板显示，1"；缺席原因本身已说明一切，
+		// 行里只留卡名 + 缺什么。恢复开关是 isToggleEnabled 唯一 UI 用途，随之删除（防死代码）。
 		HStack(spacing: 10) {
 			VStack(alignment: .leading, spacing: 2) {
 				Text(card.title)
@@ -298,14 +301,10 @@ struct SettingsView: View {
 				}
 			}
 			Spacer()
-			// 暂不可用 = 未隐藏（hidden 优先级更高，在已隐藏区），开关态恒为开；禁用态下绑定不给写路径
-			Toggle(isOn: .constant(true)) {
-				Text("面板显示")
-					.font(.system(size: 11))
-			}
-			.disabled(!CardList.isToggleEnabled(status))
 		}
 		.padding(.vertical, 2)
+		.accessibilityElement(children: .combine)
+		.accessibilityLabel("\(card.title)，暂不可用：\(status.reasonText)")
 	}
 
 	// MARK: - 卡片管理写路径（全部走 CardEligibility/PanelFlow 纯函数，与面板同源）

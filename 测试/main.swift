@@ -1311,10 +1311,14 @@ do {
 	let hiddenEmptyList = CardList.stableList(configuration: hiddenEmpty, facts: CardEligibilityFacts())
 	let usageStatus = hiddenEmptyList.first(where: { $0.card == .usageCalendar })?.status
 	expect(usageStatus == .hidden, "稳定清单：隐藏+缺数据的卡保持隐藏态（不降级为暂无数据）")
-	// 开关可交互性：只有暂不可用且未隐藏禁用
-	expect(!CardList.isToggleEnabled(.unavailable(reason: "x")), "开关交互：暂不可用禁用")
-	expect(CardList.isToggleEnabled(.hidden), "开关交互：隐藏态可开（恢复通道）")
-	expect(CardList.isToggleEnabled(.shown), "开关交互：显示态可关")
+	// 人话原因（设置行无障碍朗读用）：暂不可用=缺什么，其余给中性描述
+	if case .unavailable(let r) = emptyList.first(where: { $0.card == .usageCalendar })?.status {
+		expect(r.contains("3 天"), "reasonText：暂不可用带数据门槛说明")
+	} else {
+		expect(false, "reasonText：空数据下用电日历应为暂不可用")
+	}
+	expectEqual(CardListStatus.shown.reasonText, "显示中", "reasonText：显示中中性描述")
+	expectEqual(CardListStatus.hidden.reasonText, "已隐藏", "reasonText：已隐藏中性描述")
 	// shownCount：预设弹窗文案用
 	expectEqual(CardList.shownCount(eligible: smallEligible, hidden: ["socChart"]), 3, "shownCount：显示中=资格集-隐藏")
 
