@@ -351,7 +351,10 @@ struct SettingsView: View {
 	}
 
 	private func persistLayout(_ layout: PanelLayout) {
-		configurationManager.setPanelLayout(PanelFlow.normalize(layout, known: Set(LayoutCard.allCases.map(\.rawValue))))
+		// 镜像列表的重排（隐藏/显示/阅读序）走弹簧——设置里改布局行也滑行让位，不再硬切（v1.18.6）
+		withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+			configurationManager.setPanelLayout(PanelFlow.normalize(layout, known: Set(LayoutCard.allCases.map(\.rawValue))))
+		}
 	}
 
 	private func moveCard(_ card: LayoutCard, up: Bool, eligible: [LayoutCard]) {

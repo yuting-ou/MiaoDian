@@ -110,6 +110,8 @@ struct BatteryPopoverView: View {
 			)
 			.modifier(CascadeIn(step: 0, active: didAppear))
 
+			// 编辑模式 chrome 过渡（v1.18.6）：提示条+按钮组淡入淡出+上缘滑入滑出，
+			// 取代 if 硬切——进出编辑模式不再"啪一下"。「减少动态效果」直给终态。
 			if isEditingLayout {
 				HStack(spacing: 8) {
 					// v1.18.2 文案对齐现实：编辑模式 v1.17.2 起不再显示把手（与控制条叠影），
@@ -146,6 +148,7 @@ struct BatteryPopoverView: View {
 					.buttonStyle(.plain)
 				}
 				.padding(.horizontal, 4)
+				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
 			}
 
 			if twoColumns {
@@ -481,6 +484,8 @@ struct BatteryPopoverView: View {
 					.buttonStyle(.plain)
 				}
 				.padding(.vertical, 2)
+				// 行插拔转场（v1.18.6）：隐藏入托/放回出托走淡变，配合 applyLayout 的 withAnimation
+				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
 			}
 		}
 		.padding(8)
@@ -490,7 +495,10 @@ struct BatteryPopoverView: View {
 
 	/// 应用布局变更到工作副本
 	private func applyLayout(_ layout: PanelLayout) {
-		layoutDraft = layout
+		// 编辑模式内的布局改动（隐藏/宽窄）走弹簧——卡片滑出让位、托盘插行不再硬切（v1.18.6）
+		withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.82)) {
+			layoutDraft = layout
+		}
 	}
 
 	// MARK: - 华容网格：格子渲染与拖拽
@@ -551,6 +559,9 @@ struct BatteryPopoverView: View {
 		// 指针走到哪卡在哪，拖拽才有"捏在手里"的确定感）；松手后 offset 归零走弹簧，
 		// 与 layoutValue 的让位弹簧合成"从手指位置飞回槽位"的落定动画
 		.animation(dragState == nil ? .spring(response: 0.3, dampingFraction: 0.85) : nil, value: dragState?.translation ?? .zero)
+		// 折叠/展开动效（v1.18.6）：点"∨"收合/展开图表卡走弹簧——旧版无值驱动动画，
+		// 高度与内容瞬跳
+		.animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: configuration.collapsedCards)
 	}
 
 	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（行插入点预览）。
@@ -596,6 +607,8 @@ struct BatteryPopoverView: View {
 			.padding(3)
 			.contentShape(Circle())
 			.opacity(dragState?.card == id.layoutID ? 0 : 1)
+			// 把手浮现/隐没过渡（v1.18.6）：抓起隐没、松手浮现走快速淡变——旧版无动画瞬跳
+			.animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: dragState?.card == id.layoutID)
 			// v1.18.3：拖动中禁止沿途把手 hover 亮起（指针拖卡划过谁谁就放大 1.3，视觉噪音），
 			// 且拖动开始后不再写入新 hover 态（松手后旧卡不带着 1.3 复活）
 			.onHover { h in
@@ -673,7 +686,10 @@ struct BatteryPopoverView: View {
 			known: known
 		)
 		layoutDraft = layoutSeed ?? PanelLayout()
-		isEditingLayout = true
+		// chrome/卡片控制条随弹簧过渡（v1.18.6，取代 if 硬切）
+		withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+			isEditingLayout = true
+		}
 	}
 
 	/// 退出编辑：改动过才落盘（面板关闭时 onDisappear 兜底按取消处理）
@@ -685,7 +701,9 @@ struct BatteryPopoverView: View {
 				configurationManager.setPanelLayout(normalized)
 			}
 		}
-		isEditingLayout = false
+		withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+			isEditingLayout = false
+		}
 		trayExpanded = false
 		layoutSeed = nil
 	}
