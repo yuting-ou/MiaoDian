@@ -23,12 +23,23 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	// 面板打开期间的全局鼠标监视器：点击我进程之外的任何位置即关面板（气泡语义硬保证）
 	private var outsideClickMonitor: Any?
 
+	// 点通知本体打开面板的路由名（v1.18.9）：提醒控制器发、这里听。
+	// 经进程内 NotificationCenter 解耦，不引入控制器间直接依赖（AppServices 不持有面板控制器）
+	static let openPanelRequestNotification = Notification.Name("miaodian.openPanelRequested")
+
 	func install() {
 		let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 		statusItem.button?.target = self
 		statusItem.button?.action = #selector(togglePanel)
 		statusItem.button?.sendAction(on: NSEvent.EventTypeMask.leftMouseDown)
 		self.statusItem = statusItem
+
+		// 点通知本体打开面板（v1.18.9）：提醒的默认动作此前是"什么都不做"——
+		// 用户点充满/低电通知想看详情，通知只是消失（信任链断在"通知→查看"）
+		NotificationCenter.default.addObserver(
+			self, selector: #selector(handleOpenPanelRequest),
+			name: Self.openPanelRequestNotification, object: nil
+		)
 
 		let panel = GlassPopoverPanel(
 			contentRect: NSRect(x: 0, y: 0, width: 292, height: 400),
@@ -86,6 +97,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		} else {
 			// 失焦关闭与按钮动作在同一次点击里先后到达：刚关掉的不要立刻弹回
 			guard Date().timeIntervalSince(lastClosedAt) > 0.25 else { return }
+			showPanel()
+		}
+	}
+
+	// 点通知本体（v1.18.9）：面板不可见才打开；已可见保持不动（用户可能正在看）
+	@objc private func handleOpenPanelRequest() {
+		if PanelOpenPolicy.shouldOpen(isVisible: panel?.isVisible == true) {
 			showPanel()
 		}
 	}

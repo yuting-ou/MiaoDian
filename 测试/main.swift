@@ -2693,6 +2693,10 @@ do {
 		[DailyUsage(dayKey: "2026-09-02"), DailyUsage(dayKey: "2026-09-03")], dayKey: "2026-09-01", maxDays: 90)
 	expectEqual(under.map(\.dayKey), ["2026-09-01", "2026-09-02", "2026-09-03"], "封顶护今：未超限只排序不裁剪")
 
+	// —— 通知点按开面板 v1.18.9：决策纯函数 ——
+	expect(PanelOpenPolicy.shouldOpen(isVisible: false), "通知开面板：面板不可见 → 打开（点通知=看详情）")
+	expect(!PanelOpenPolicy.shouldOpen(isVisible: true), "通知开面板：面板已可见 → 不动（不闪烁不重播入场）")
+
 	// 周报标记在未来（发通知时时钟被调快）→ 视为失效，不永久静默
 	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(48 * 3600), due: t0.addingTimeInterval(-2 * 3600), now: t0), "时钟异常：未来标记不静默周报")
 	// 本期已发（lastSent 晚于 due）不重发
