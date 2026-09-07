@@ -11,11 +11,19 @@ nonisolated enum GlassTokens {
 	}
 
 	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
-	/// 参数由可读性证明反推（测试/main.swift 证明表）：浅色 0.4 白（primary 最坏 14.1 AAA）、
+	/// 参数由可读性证明反推（测试/main.swift 证明表）：浅色 0.68 白（primary 最坏 13+ AAA，
+	/// 且卡片内容区背景穿透摆幅 ≤0.12——v1.18.7 抗透底：白底黑字窗口贴面板后文字幽灵不可辨）、
 	/// 深色 0.81 黑（primary/关键数字最坏 ≥7.0 AAA、标签 ≥4.5——亮壁纸下白字要 AAA
 	/// 必须近不透明，深色外观的面板本就趋近系统原生暗板，已按裁决规则选定）
 	nonisolated static func shellFloorTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
-		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.4)
+		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.68)
+	}
+
+	/// 卡片分区填充：primary 不透明度（浅色是抗透底第二道衰减，v1.18.7 与地板同证；
+	/// 「增加对比度」加倍。深色壳地板已 0.81 黑，摆幅本就达标，填充保持极淡）
+	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool) -> Double {
+		guard isDark else { return increased ? 0.36 : 0.26 }
+		return increased ? 0.09 : 0.045
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
@@ -222,18 +230,24 @@ private struct PanelShellModifier: ViewModifier {
 // 「增加对比度」开启时发丝线与淡填充加倍（Apple 的可读性安全网必须接住）
 private struct CardSectionModifier: ViewModifier {
 	@Environment(\.colorSchemeContrast) private var contrast
+	@Environment(\.colorScheme) private var colorScheme
 
 	func body(content: Content) -> some View {
 		let increased = contrast == .increased
+		let isDark = colorScheme == .dark
+		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill）——v1.18.7 浅色 0.26
+		// 是抗透底第二道衰减（白底黑字窗口贴面板，卡片内容区穿透摆幅 ≤0.12）
+		let fill = GlassTokens.cardSectionFill(increased: increased, isDark: isDark)
+		let stroke = isDark ? (increased ? 0.22 : 0.09) : (increased ? 0.22 : 0.09)
 		if #available(macOS 26.0, *) {
 			content
 				.background(
 					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-						.fill(Color.primary.opacity(increased ? 0.10 : 0.045))
+						.fill(Color.primary.opacity(fill))
 				)
 				.overlay(
 					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-						.strokeBorder(Color.primary.opacity(increased ? 0.22 : 0.09), lineWidth: 1)
+						.strokeBorder(Color.primary.opacity(stroke), lineWidth: 1)
 				)
 		} else {
 			content
