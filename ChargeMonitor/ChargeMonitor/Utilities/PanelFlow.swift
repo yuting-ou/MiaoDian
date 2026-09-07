@@ -61,6 +61,14 @@ nonisolated enum PanelFlow {
 		}
 	}
 
+	/// 「面板显示」隐藏过滤（v1.18.1）：从候选卡序里剔除已隐藏的卡。
+	/// 宽面板路径靠 normalize 把隐藏卡移出行表，窄面板两列配平路径此前没有
+	/// 任何 hidden 过滤——隐藏的卡在窄面板复活。所有渲染路径统一从这里过。
+	nonisolated static func removingHidden<T>(_ items: [T], hidden: [String], cardID: (T) -> String) -> [T] {
+		let h = Set(hidden)
+		return items.filter { !h.contains(cardID($0)) }
+	}
+
 	/// 密铺几何计划（v1.17.3 丝滑重排）：段落 → 每卡的格子位置。
 	/// 行号 r、行内序 c（0=左/1=右）、行宽 w（1=整行 2=半宽）。消费方（自定义 Layout）
 	/// 据此给每张卡稳定坐标——配合以卡自身为身份的平铺子视图，重排 = 坐标重算 + 弹簧滑行，

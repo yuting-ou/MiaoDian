@@ -72,7 +72,15 @@ struct BatteryPopoverView: View {
 			temperatureC: monitor.snapshot.temperatureC,
 			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
 		) : nil
-		let displayCards = twoColumns ? cards.filter { $0.id != .checkup } : cards
+		// 「面板显示」隐藏过滤（v1.18.1）：宽面板行路径靠 normalize 剔除隐藏卡，
+		// 窄面板两列配平路径此前没有任何 hidden 过滤——隐藏的卡在窄面板复活。
+		// 在渲染入口单点过滤（visibleCards 保持纯"开关∧数据"语义，不掺布局维度；
+		// twoColumns 阈值保持旧口径，避免隐藏卡触发宽窄模式翻转）。
+		let hiddenIDs = configuration.panelLayout?.hidden ?? []
+		let displayCards = PanelFlow.removingHidden(
+			twoColumns ? cards.filter { $0.id != .checkup } : cards,
+			hidden: hiddenIDs
+		) { $0.id.layoutID }
 		let cardIDs = displayCards.map(\.id)
 		let availableIDs = Set(cardIDs.map(\.layoutID))
 		// 预先算好分列与"控制行"的级联档位（供入场错峰动画与 onAppear 固化共用）
@@ -234,7 +242,10 @@ struct BatteryPopoverView: View {
 				let configuration = configurationManager.configuration
 				let showsHealthCurve = configuration.enabledOptions.contains(.healthTrend) && historyRecorder.healthSamples.count >= 2
 				let cards = visibleCards(configuration, showsHealthCurve: showsHealthCurve, powerItems: powerItems, batteryItems: batteryItems)
-				let display = cards.count >= 5 ? cards.filter { $0.id != .checkup } : cards
+				let display = PanelFlow.removingHidden(
+					cards.count >= 5 ? cards.filter { $0.id != .checkup } : cards,
+					hidden: configuration.panelLayout?.hidden ?? []
+				) { $0.id.layoutID }
 				let split = mergedColumns(display, left: assignedLeft, right: assignedRight)
 				assignedLeft = split.left
 				assignedRight = split.right

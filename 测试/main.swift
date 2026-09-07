@@ -1379,6 +1379,15 @@ do {
 	chkAutoNoLayout.panelLayout = PanelLayout(rows: [["powerInfo"], ["batteryInfo"]], hidden: [])
 	expect(chkAutoNoLayout.showsHeaderCheckup(hasHealth: true), "头部角标：自定义布局但未隐藏 → 显示")
 
+	// —— 窄面板隐藏卡复活 v1.18.1：removingHidden 统一过滤 ——
+	expectEqual(PanelFlow.removingHidden(["a", "b", "c"], hidden: ["b"]) { $0 }, ["a", "c"],
+		"隐藏过滤：被隐藏的卡从渲染候选中剔除（窄面板复活修复）")
+	expectEqual(PanelFlow.removingHidden(["a", "b"], hidden: []) { $0 }, ["a", "b"],
+		"隐藏过滤：空 hidden 原样返回")
+	struct FilterProbe { let id: String }
+	expectEqual(PanelFlow.removingHidden([FilterProbe(id: "x"), FilterProbe(id: "y")], hidden: ["y"]) { $0.id }.count, 1,
+		"隐藏过滤：泛型载体（卡+高度元组）同样生效")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()
