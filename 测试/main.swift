@@ -1398,6 +1398,14 @@ do {
 	expectEqual(PanelFlow.dragTopmost(["a", "b", "c"], dragging: "z"), ["a", "b", "c"],
 		"拖动置顶：拖动卡不在板上（防御）原样返回")
 
+	// —— 设置搜索覆盖卡片 v1.18.4：命中判定纯函数 ——
+	expect(CardList.matches(query: "日历", title: "用电日历", detail: "按天展示用电强度"),
+		"搜索命中：卡名命中")
+	expect(CardList.matches(query: "abc", title: "ABC卡", detail: "说明"),
+		"搜索命中：大小写折叠（localizedStandardContains 语义）")
+	expect(!CardList.matches(query: "不存在", title: "用电日历", detail: "按天展示用电强度"),
+		"搜索命中：无词条不误报")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()

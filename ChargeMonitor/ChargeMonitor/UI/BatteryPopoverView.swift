@@ -462,7 +462,7 @@ struct BatteryPopoverView: View {
 	/// 隐藏托盘：点 + 放回（追加阅读序末尾，位置可再拖微调）
 	private var hiddenTray: some View {
 		VStack(alignment: .leading, spacing: 6) {
-			Text("已隐藏的卡片（点 + 放回）")
+			Text("已隐藏的卡片（点 + 放回阅读序末尾）")
 				.font(.system(size: 9))
 				.foregroundStyle(GlassTokens.labelOnGlass)
 			ForEach(Array(layoutDraft.hidden.enumerated()), id: \.element) { _, id in

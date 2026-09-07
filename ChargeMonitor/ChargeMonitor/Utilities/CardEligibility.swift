@@ -373,6 +373,12 @@ nonisolated enum CardList {
 		let h = Set(hidden)
 		return eligible.filter { !h.contains($0.rawValue) }.count
 	}
+
+	/// 设置搜索的卡命中判定（v1.18.4）：卡名或说明含查询词（与设置开关的
+	/// localizedStandardContains 同语义，大小写/变音不敏感）。
+	nonisolated static func matches(query: String, title: String, detail: String) -> Bool {
+		title.localizedStandardContains(query) || detail.localizedStandardContains(query)
+	}
 }
 
 extension AppConfiguration {

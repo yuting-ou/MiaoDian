@@ -92,9 +92,45 @@ struct SettingsView: View {
 		let matches = DisplayOption.allCases.filter {
 			$0.title.localizedStandardContains(query) || $0.detail.localizedStandardContains(query)
 		}
-		Section(matches.isEmpty ? "没有匹配的设置项" : "搜索结果（\(matches.count)）") {
+		// v1.18.4：搜索覆盖卡片——卡名/说明命中的卡按稳定清单状态列出：
+		// 显示/隐藏 → 面板显示开关直达（隐藏卡可在此一键恢复=恢复通道的发现性）；
+		// 暂不可用 → 只列原因不给假开关（与管理区同语义）。
+		let configuration = configurationManager.configuration
+		let facts = eligibilityFacts(configuration: configuration)
+		let stable = CardList.stableList(configuration: configuration, facts: facts)
+		let cardMatches = stable.filter {
+			CardList.matches(query: query, title: $0.card.title, detail: $0.card.detail)
+		}
+		let toggleable = cardMatches.filter { $0.status == .shown || $0.status == .hidden }
+		let inert = cardMatches.filter {
+			if case .unavailable = $0.status { return true }
+			return false
+		}
+		Section(matches.isEmpty && cardMatches.isEmpty ? "没有匹配的设置项" : "搜索结果（\(matches.count + cardMatches.count)）") {
 			ForEach(matches) { option in
 				toggleRow(option)
+			}
+			ForEach(toggleable, id: \.card) { entry in
+				Toggle(isOn: visibleBinding(entry.card, eligible: CardEligibility.eligibleCards(configuration: configuration, facts: facts))) {
+					VStack(alignment: .leading, spacing: 2) {
+						Text(entry.card.title)
+						Text(entry.status == .hidden ? "已隐藏 · \(entry.card.detail)" : entry.card.detail)
+							.font(.system(size: 11))
+							.foregroundStyle(.secondary)
+					}
+				}
+			}
+			ForEach(inert, id: \.card) { entry in
+				VStack(alignment: .leading, spacing: 2) {
+					Text(entry.card.title)
+						.foregroundStyle(.secondary)
+					if case .unavailable(let reason) = entry.status {
+						Text("暂不可用：\(reason)")
+							.font(.system(size: 11))
+							.foregroundStyle(.tertiary)
+					}
+				}
+				.accessibilityElement(children: .combine)
 			}
 		}
 	}
