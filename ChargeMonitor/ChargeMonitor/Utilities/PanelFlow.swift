@@ -61,6 +61,34 @@ nonisolated enum PanelFlow {
 		}
 	}
 
+	/// 密铺几何计划（v1.17.3 丝滑重排）：段落 → 每卡的格子位置。
+	/// 行号 r、行内序 c（0=左/1=右）、行宽 w（1=整行 2=半宽）。消费方（自定义 Layout）
+	/// 据此给每张卡稳定坐标——配合以卡自身为身份的平铺子视图，重排 = 坐标重算 + 弹簧滑行，
+	/// 不再有"段落身份重建→新视图凭空出现"的跳格子卡顿。纯函数，测试可锁。
+	nonisolated struct MasonryCell: Equatable, Sendable {
+		let card: String
+		let row: Int
+		let column: Int
+		let rowWidth: Int
+	}
+
+	nonisolated static func masonryPlan(_ segments: [Segment]) -> [MasonryCell] {
+		var cells: [MasonryCell] = []
+		var row = -1
+		for segment in segments {
+			switch segment {
+			case .full(let id):
+				row += 1
+				cells.append(MasonryCell(card: id, row: row, column: 0, rowWidth: 1))
+			case .pair(let left, let right):
+				row += 1
+				cells.append(MasonryCell(card: left, row: row, column: 0, rowWidth: 2))
+				cells.append(MasonryCell(card: right, row: row, column: 1, rowWidth: 2))
+			}
+		}
+		return cells
+	}
+
 	/// 落点语义：插到某张卡之前，或追加末尾（由 CardDropResolver 产出）
 	nonisolated enum DropTarget: Equatable {
 		case before(String)

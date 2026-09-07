@@ -1350,6 +1350,20 @@ do {
 	let endMoved = PanelFlow.insertLayout(PanelLayout(rows: invariantBase), card: "a", target: .end)
 	expectEqual(endMoved.effectiveRows.last ?? [], ["a"], "插入·末尾：追加为末尾单行（身份仍=卡自身）")
 
+	// —— 丝滑重排 v1.17.3：masonryPlan 密铺几何 ——
+	// full=1 行 1 格宽 1；pair=1 行 2 格宽 2；行号连续、保序
+	let planSample = PanelFlow.masonryPlan([.full("a"), .pair(left: "b", right: "c"), .full("d")])
+	expectEqual(planSample.map(\.card), ["a", "b", "c", "d"], "masonryPlan：卡序=段落阅读序")
+	expectEqual(planSample.map(\.row), [0, 1, 1, 2], "masonryPlan：行号连续递增（full/pair 各占一行）")
+	expectEqual(planSample.map(\.rowWidth), [1, 2, 2, 1], "masonryPlan：full 宽 1、pair 宽 2")
+	expectEqual(planSample.first { $0.card == "c" }?.column, 1, "masonryPlan：pair 右卡列位 1")
+	// 行分组：pair 两格同组、相邻行不串组
+	let grouped = planSample.groupedByRow()
+	expectEqual(grouped.map { $0.map(\.card) }, [["a"], ["b", "c"], ["d"]], "masonryPlan：行分组保序不串组")
+	// 恒等律：段落序列翻转后 plan 反转仍逐格对应（几何与段落一一双射）
+	let planFlipped = PanelFlow.masonryPlan([.pair(left: "c", right: "d")])
+	expectEqual(planFlipped.map(\.card), ["c", "d"], "masonryPlan：pair 拆格保左右序")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()

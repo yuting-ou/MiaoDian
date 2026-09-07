@@ -141,26 +141,28 @@ struct BatteryPopoverView: View {
 				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
 				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
 				if usingRows {
-					// 华容网格：显式行渲染——宽卡独行、半宽成对，所见即存储。
-					// v1.17.1 拖拽不死手：拖拽把手不在这里面，单独平铺浮层（handleLayer）——
-					// 行/段身份在预览重排中必然重组，把手若随行走，进行中的 DragGesture
-					// 会在第一次重排时随子树销毁而中断，卡片悬停半空。
-					VStack(alignment: .leading, spacing: 8) {
-						ForEach(segments, id: \.self) { segment in
-							segmentView(
-								segment,
-								layoutValue: rowSource,
-								powerItems: powerItems,
-								batteryItems: batteryItems,
-								configuration: configuration,
-								showsHealthCurve: showsHealthCurve
-							)
-						}
-						// 编辑模式全藏光时保持板面高度
-						if isEditingLayout, segments.isEmpty {
-							Spacer(minLength: 40)
+					// 华容网格 v5（v1.17.3 丝滑重排）：卡片以自身为身份平铺进自定义密铺
+					// Layout——预览重排 = 坐标重算 + 容器弹簧全员滑行。此前行栈以段落内容
+					// 为身份，重排一改行形态，段内卡片连树销毁、新视图在终点凭空出现
+					// （无位移动画），用户看到的就是跳格子卡顿。
+					// 把手仍走独立浮层（handleLayer，v1.17.1 不死手结构）。
+					PanelMasonryLayout(segments: segments, emptyHeight: isEditingLayout ? 40 : 0) {
+						ForEach(PanelFlow.flatCardIDs(segments), id: \.self) { cardID in
+							if let card = CardID(rawValue: cardID) {
+								cardSlot(
+									card,
+									layoutValue: rowSource,
+									powerItems: powerItems,
+									batteryItems: batteryItems,
+									configuration: configuration,
+									showsHealthCurve: showsHealthCurve
+								)
+								.frame(maxWidth: .infinity, alignment: .leading)
+								.masonryCard(cardID)
+							}
 						}
 					}
+					.animation(.spring(response: 0.32, dampingFraction: 0.82), value: rowSource)
 					.overlay { handleLayer(segments) }
 				} else {
 					HStack(alignment: .top, spacing: 10) {
@@ -472,32 +474,6 @@ struct BatteryPopoverView: View {
 	}
 
 	// MARK: - 华容网格：格子渲染与拖拽
-
-	/// 一段密铺结果：宽卡（或拉通卡）独占整行；两张半宽卡并排。
-	/// v1.17.1 起本函数不含把手——把手在 handleLayer 浮层（身份恒定，重排不死手）。
-	@ViewBuilder
-	private func segmentView(
-		_ segment: PanelFlow.Segment,
-		layoutValue: PanelLayout,
-		powerItems: [BatteryInfoItem],
-		batteryItems: [BatteryInfoItem],
-		configuration: AppConfiguration,
-		showsHealthCurve: Bool
-	) -> some View {
-		switch segment {
-		case .full(let id):
-			if let card = CardID(rawValue: id) {
-				cardSlot(card, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-			}
-		case .pair(let leftID, let rightID):
-			if let left = CardID(rawValue: leftID), let right = CardID(rawValue: rightID) {
-				HStack(alignment: .top, spacing: 10) {
-					cardSlot(left, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-					cardSlot(right, layoutValue: layoutValue, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-				}
-			}
-		}
-	}
 
 	/// 拖拽把手浮层（v1.17.1 拖拽不死手）：平铺一层把手浮在卡片上，身份恒等于卡自身，
 	/// 位置由 frameTable 探针实时驱动——预览重排只改坐标、永不销毁视图，挂在把手上的
