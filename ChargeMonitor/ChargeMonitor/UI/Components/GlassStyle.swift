@@ -19,11 +19,18 @@ nonisolated enum GlassTokens {
 		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.68)
 	}
 
-	/// 卡片分区填充：primary 不透明度（浅色是抗透底第二道衰减，v1.18.7 与地板同证；
-	/// 「增加对比度」加倍。深色壳地板已 0.81 黑，摆幅本就达标，填充保持极淡）
-	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool) -> Double {
-		guard isDark else { return increased ? 0.36 : 0.26 }
-		return increased ? 0.09 : 0.045
+	/// 卡片分区填充（v1.18.8 修正）：浅色=白纱——v1.18.7 抗透底误用黑 tint（primary），
+	/// 26% 黑纱让浅色卡片表面亮度 0.85→0.70 明显发暗；白纱同等穿透衰减（摆幅 0.118）
+	/// 且卡片保持透亮。「增加对比度」浓度上调。深色=极淡 primary 白（定义感，壳已 0.81 黑）。
+	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool) -> Color {
+		if isDark { return Color.primary.opacity(increased ? 0.09 : 0.045) }
+		return Color.white.opacity(increased ? 0.36 : 0.26)
+	}
+
+	/// 卡片填充的证明模型（与上面颜色同源：浅色白纱 lum 1.0；深色 primary 白 lum 1.0）
+	nonisolated static func cardSectionFillModel(increased: Bool, isDark: Bool) -> (luminance: Double, alpha: Double) {
+		if isDark { return (luminance: 1.0, alpha: increased ? 0.09 : 0.045) }
+		return (luminance: 1.0, alpha: increased ? 0.36 : 0.26)
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
@@ -235,15 +242,15 @@ private struct CardSectionModifier: ViewModifier {
 	func body(content: Content) -> some View {
 		let increased = contrast == .increased
 		let isDark = colorScheme == .dark
-		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill）——v1.18.7 浅色 0.26
-		// 是抗透底第二道衰减（白底黑字窗口贴面板，卡片内容区穿透摆幅 ≤0.12）
+		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill——v1.18.8 浅色白纱：
+		// 抗透底第二道衰减且卡片不发暗）
 		let fill = GlassTokens.cardSectionFill(increased: increased, isDark: isDark)
-		let stroke = isDark ? (increased ? 0.22 : 0.09) : (increased ? 0.22 : 0.09)
+		let stroke = increased ? 0.22 : 0.09
 		if #available(macOS 26.0, *) {
 			content
 				.background(
 					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-						.fill(Color.primary.opacity(fill))
+						.fill(fill)
 				)
 				.overlay(
 					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)

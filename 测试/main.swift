@@ -1499,20 +1499,23 @@ do {
 	// —— 抗透底 v1.18.7（干扰度证明）：背景细节穿透量 ——
 	// 玻璃地板只保证文字对表面的对比度，不管背景高亮细节（白底黑字窗口）穿透进来
 	// 干扰图表区。卡片内容区堆栈（玻璃→地板→卡填充）对背景黑→白摆幅的剩余穿透
-	// 必须 ≤0.12（穿透文字对比约 1.28:1，低于人眼可辨读的下限）。实现与证明同源。
-	let cardFillLight = GlassTokens.cardSectionFill(increased: false, isDark: false)
+	// 必须 ≤0.12。v1.18.8 修正：填充用白纱（lum 1.0）不用黑 tint——同等穿透衰减
+	// 且卡片不变暗（v1.18.7 黑纱让浅色卡片表面 0.85→0.70，用户实测"变暗了"）。
+	let cardFillModelLight = GlassTokens.cardSectionFillModel(increased: false, isDark: false)
 	let cardStackLight = proof.stackedLuminanceRange(layers: [
-		(luminance: 0.0, alpha: cardFillLight),
+		(luminance: cardFillModelLight.luminance, alpha: cardFillModelLight.alpha),
 		(luminance: floorLight.luminance, alpha: floorLight.alpha),
 		(luminance: baseLight.luminance, alpha: baseLight.alpha),
 	])
 	let interferenceLight = cardStackLight.max - cardStackLight.min
 	print(String(format: "证明表[浅·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.12)", interferenceLight))
 	expect(interferenceLight <= 0.12, "可读性证明：浅色卡片内容区背景穿透摆幅 ≤0.12（温度曲线不被背后文字幽灵干扰）")
+	// 卡片不发暗不变式（v1.18.8）：白纱只会提亮表面——卡片表面最暗处仍 ≥0.85（与 v1.17 观感持平）
+	expect(cardStackLight.min >= 0.85, "可读性证明：浅色卡片表面不发暗（白纱修正，黑纱曾让表面掉到 0.70）")
 
-	let cardFillDark = GlassTokens.cardSectionFill(increased: false, isDark: true)
+	let cardFillModelDark = GlassTokens.cardSectionFillModel(increased: false, isDark: true)
 	let cardStackDark = proof.stackedLuminanceRange(layers: [
-		(luminance: 1.0, alpha: cardFillDark),
+		(luminance: cardFillModelDark.luminance, alpha: cardFillModelDark.alpha),
 		(luminance: floorDark.luminance, alpha: floorDark.alpha),
 		(luminance: baseDark.luminance, alpha: baseDark.alpha),
 	])
