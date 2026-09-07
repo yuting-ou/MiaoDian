@@ -48,6 +48,19 @@ nonisolated enum PanelFlow {
 		}
 	}
 
+	/// 拖拽把手浮层用的平铺卡序（v1.17.1 拖拽不死手）：段落 → 卡 id 阅读序。
+	/// 把手不随卡片进网格/行栈——行结构在预览重排中换主键、换行会连树销毁被拖卡
+	/// 子树，挂在把手上的进行中 DragGesture 随之中断、onEnded 不再回调，卡片悬停
+	/// 半空（用户视角："拖到某个位置卡住"）。浮层身份恒等于卡自身，重排只改坐标。
+	nonisolated static func flatCardIDs(_ segments: [Segment]) -> [String] {
+		segments.flatMap { segment -> [String] in
+			switch segment {
+			case .full(let id): return [id]
+			case .pair(let left, let right): return [left, right]
+			}
+		}
+	}
+
 	/// 落点语义：插到某张卡之前，或追加末尾（由 CardDropResolver 产出）
 	nonisolated enum DropTarget: Equatable {
 		case before(String)

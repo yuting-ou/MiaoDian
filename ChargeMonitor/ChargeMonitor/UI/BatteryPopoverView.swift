@@ -141,7 +141,10 @@ struct BatteryPopoverView: View {
 				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
 				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
 				if usingRows {
-					// 华容网格：显式行渲染——宽卡独行、半宽成对，所见即存储
+					// 华容网格：显式行渲染——宽卡独行、半宽成对，所见即存储。
+					// v1.17.1 拖拽不死手：拖拽把手不在这里面，单独平铺浮层（handleLayer）——
+					// 行/段身份在预览重排中必然重组，把手若随行走，进行中的 DragGesture
+					// 会在第一次重排时随子树销毁而中断，卡片悬停半空。
 					VStack(alignment: .leading, spacing: 8) {
 						ForEach(segments, id: \.self) { segment in
 							segmentView(
@@ -158,6 +161,7 @@ struct BatteryPopoverView: View {
 							Spacer(minLength: 40)
 						}
 					}
+					.overlay { handleLayer(segments) }
 				} else {
 					HStack(alignment: .top, spacing: 10) {
 						cardColumn(true, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
@@ -235,6 +239,9 @@ struct BatteryPopoverView: View {
 			.onDisappear {
 				// 编辑中直接关面板：按取消处理（不落盘半成品布局）
 				if isEditingLayout { exitLayoutEdit(save: false) }
+				// 拖拽中直接关面板：丢弃半成品预览与拖拽态（卡死兜底恢复通道，v1.17.1）
+				dragState = nil
+				previewLayout = nil
 				monitor.stopPolling()
 				// 下次打开时重新配平，避免上一次的历史分配越积越歪
 				assignedLeft = []
@@ -464,9 +471,10 @@ struct BatteryPopoverView: View {
 		layoutDraft = layout
 	}
 
-	// MARK: - 华容网格：段落渲染与拖拽
+	// MARK: - 华容网格：格子渲染与拖拽
 
-	/// 一段密铺结果：宽卡（或拉通卡）独占整行；两张半宽卡并排
+	/// 一段密铺结果：宽卡（或拉通卡）独占整行；两张半宽卡并排。
+	/// v1.17.1 起本函数不含把手——把手在 handleLayer 浮层（身份恒定，重排不死手）。
 	@ViewBuilder
 	private func segmentView(
 		_ segment: PanelFlow.Segment,
@@ -491,8 +499,28 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	/// 单卡槽位：内容 + frame 探针 + 常驻把手（按住即拖）+ 编辑模式眼睛。
-	/// 正被拖动的卡 offset 跟手 + 浮起；其余卡在布局变化时弹簧让位
+	/// 拖拽把手浮层（v1.17.1 拖拽不死手）：平铺一层把手浮在卡片上，身份恒等于卡自身，
+	/// 位置由 frameTable 探针实时驱动——预览重排只改坐标、永不销毁视图，挂在把手上的
+	/// 进行中 DragGesture 全程存活（此前把手随卡片进行结构，行/段身份一翻手势即死）。
+	/// 卡 frame 是 .global 坐标，减去浮层容器原点换算成层内坐标；y+14 = 把手胶囊中心
+	/// 与卡顶的视觉间距（对齐旧版 ZStack(.top) + padding(3) 的落点）。
+	private func handleLayer(_ segments: [PanelFlow.Segment]) -> some View {
+		GeometryReader { geo in
+			let origin = geo.frame(in: .global).origin
+			ZStack(alignment: .topLeading) {
+				ForEach(PanelFlow.flatCardIDs(segments), id: \.self) { cardID in
+					if let frame = frameTable.frames[cardID], let card = CardID(rawValue: cardID) {
+						dragHandle(card)
+							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
+					}
+				}
+			}
+		}
+		.allowsHitTesting(!isEditingLayout)
+	}
+
+	/// 单卡槽位：内容 + frame 探针 + 编辑模式眼睛。正被拖动的卡 offset 跟手 + 浮起；
+	/// 其余卡在布局变化时弹簧让位。把手不在槽内（见 handleLayer）。
 	private func cardSlot(
 		_ id: CardID,
 		layoutValue: PanelLayout,
@@ -505,7 +533,6 @@ struct BatteryPopoverView: View {
 		return ZStack(alignment: .top) {
 			cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
 				.background(CardFrameProbe(id: id.layoutID, table: $frameTable))
-			dragHandle(id)
 			if isEditingLayout {
 				cardControls(id)
 			}
@@ -530,13 +557,17 @@ struct BatteryPopoverView: View {
 		if candidate != base { previewLayout = candidate }
 	}
 
-	/// 松手：落点有效 → 提交预览布局并持久化；面板外 → 丢弃预览回弹
-	private func finishDrag() {
+	/// 松手：落点有效 → 提交预览布局并持久化；面板外 → 丢弃预览回弹。
+	/// id 参数 = 发起松手的把手所属卡：与本卡拖拽无关的松手（幽灵事件）不得提交别人的拖拽。
+	private func finishDrag(from id: CardID? = nil) {
 		defer {
-			dragState = nil
-			previewLayout = nil
+			if id == nil || dragState?.card == id?.layoutID {
+				dragState = nil
+				previewLayout = nil
+			}
 		}
 		guard let drag = dragState, drag.isDragging,
+			  id.map({ drag.card == $0.layoutID }) ?? true,
 			  let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
 		let moved = PanelFlow.insertLayout(previewLayout ?? layoutDraft, card: drag.card, target: target)
 		layoutDraft = moved
@@ -576,12 +607,16 @@ struct BatteryPopoverView: View {
 								translation: drag.translation,
 								originFrame: frameTable.frames[id.layoutID] ?? .zero
 							)
+						} else if dragState?.card != id.layoutID {
+							// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖（如卡死残留态），本把手的
+							// 手势不得改写它的 translation——否则一按到处乱跳、雪上加霜
+							return
 						}
 						dragState?.translation = drag.translation
 						updatePreview()
 					}
 					.onEnded { _ in
-						finishDrag()
+						finishDrag(from: id)
 					}
 			)
 			.help("拖动调整这张卡片的位置")

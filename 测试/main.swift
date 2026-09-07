@@ -1318,6 +1318,34 @@ do {
 	// shownCount：预设弹窗文案用
 	expectEqual(CardList.shownCount(eligible: smallEligible, hidden: ["socChart"]), 3, "shownCount：显示中=资格集-隐藏")
 
+	// —— 拖拽不死手 v1.17.1：把手浮层平铺卡序 ——
+	// full → 单卡；pair → 左右两卡；次序 = 阅读序。浮层身份恒等于卡自身，
+	// 重排只改坐标不销毁视图（挂把手上的进行中 DragGesture 全程存活）
+	let segSample: [PanelFlow.Segment] = [.full("a"), .pair(left: "b", right: "c")]
+	expectEqual(PanelFlow.flatCardIDs(segSample), ["a", "b", "c"], "flatCardIDs：平铺次序=段落阅读序")
+	// 形态翻转不换身份：同一批卡在 full/pair 形态互变前后，卡序集合不变
+	// （拖拽不死手的根基——被拖卡视图跨预览重排恒定，手势不被销毁）
+	let flipped: [PanelFlow.Segment] = [.pair(left: "a", right: "b"), .full("c")]
+	expectEqual(Set(PanelFlow.flatCardIDs(flipped)), Set(["a", "b", "c"]), "flatCardIDs：形态翻转不改变卡身份集合")
+	// 插入恒行首不变式：被拖卡在任意落点的预览里，要么独占一行，要么是行内左卡——
+	// 这保证预览重排永远局部、可预测，被拖卡的位置语义在浮层坐标系里恒定
+	let invariantBase: [[String]] = [["a", "b"], ["c"], ["d", "e"]]
+	let invariantCards = ["a", "b", "c", "d", "e"]
+	var insertAlwaysLeads = true
+	for moving in invariantCards {
+		for anchor in invariantCards where anchor != moving {
+			let moved = PanelFlow.insertLayout(PanelLayout(rows: invariantBase), card: moving, target: .before(anchor))
+			for row in moved.effectiveRows where row.contains(moving) {
+				if row.count > 1 && row.first != moving { insertAlwaysLeads = false }
+				if row.count > 2 { insertAlwaysLeads = false }
+			}
+		}
+	}
+	expect(insertAlwaysLeads, "插入恒行首：被拖卡在任意预览中都是行首/独占（25 组合全查）")
+	// .end 追加 = 末尾单行
+	let endMoved = PanelFlow.insertLayout(PanelLayout(rows: invariantBase), card: "a", target: .end)
+	expectEqual(endMoved.effectiveRows.last ?? [], ["a"], "插入·末尾：追加为末尾单行（身份仍=卡自身）")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()
