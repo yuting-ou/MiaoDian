@@ -114,8 +114,8 @@ struct SettingsView: View {
 	// MARK: - 卡片管理（自定义布局编辑器：与面板编辑模式写同一份 PanelLayout 契约）
 
 	// 主干编辑器放稳定窗口：原生无障碍、只在窗口打开时算资格（body 即打开）。
-	// 三层可见性在此落地：资格集（有数据）∩ 用户可见（hidden 之外）→ 列表；
-	// 排序读行表阅读序。拖拽微调仍在面板「隐藏卡片」编辑模式，两边同一模型。
+	// v1.16.0 人性化返工：列表是面板的文字影子——复用 renderSegments 镜像面板行结构
+	// （并排两张卡同行呈现），排卡片的空间任务只属于面板拖拽把手，这里管总览+批量开关+预设+后悔药。
 	@ViewBuilder
 	private var cardManagementSection: some View {
 		let configuration = configurationManager.configuration
@@ -123,14 +123,13 @@ struct SettingsView: View {
 		let eligibleIDs = Set(eligible.map(\.rawValue))
 		// 自定义布局归一到面板渲染同款（normalize 保证隐藏卡不残留行表）；自动模式按资格序
 		let effective = configuration.panelLayout.map { PanelFlow.normalize($0, known: Set(LayoutCard.allCases.map(\.rawValue))) }
-		let visibleOrder: [String] = effective.map { layout in
-			layout.effectiveRows.flatMap { $0 }.filter { eligibleIDs.contains($0) }
-		} ?? eligible.map(\.rawValue)
+		// 面板同款渲染预备：行表 → 段落（条件不可见的卡跳过、双行剩一卡自动拉通），渲染顺序=行序=阅读序
+		let segments = PanelFlow.renderSegments(effective?.effectiveRows ?? PanelPresets.paired(eligible), available: eligibleIDs)
 		let hiddenOrder = (effective?.hidden ?? []).filter { eligibleIDs.contains($0) }
 
 		Section {
 			HStack {
-				Text("显示/隐藏、排序与默认折叠面板卡片；拖拽微调在面板的「隐藏卡片」编辑模式。")
+				Text("调位置在面板拖卡片把手，这里管批量开关与预设。下面的行就是面板里的行，并排的两张卡显示在同一行。")
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
@@ -152,12 +151,34 @@ struct SettingsView: View {
 				}
 				Spacer()
 				if configuration.panelLayout != nil {
-					Button("恢复默认排序") { configurationManager.clearPanelLayout() }
+					Button("恢复默认排序") { confirmResetLayout() }
+				}
+				if configuration.lastCustomLayout != nil {
+					Button {
+						configurationManager.undoLastLayoutChange()
+					} label: {
+						Label("撤销上次布局改动", systemImage: "arrow.uturn.backward")
+					}
+					.help("回到本次预设/恢复默认之前你自己的布局")
 				}
 			}
-			ForEach(Array(visibleOrder.enumerated()), id: \.element) { index, id in
-				if let card = LayoutCard(rawValue: id) {
-					cardRow(card, index: index, count: visibleOrder.count, eligible: eligible)
+			// Segment 全板唯一（卡不重复），以内容为身份：行形态变化时 SwiftUI 逐行 diff 而非整体错位
+			ForEach(segments, id: \.self) { segment in
+				switch segment {
+				case .full(let id):
+					if let card = LayoutCard(rawValue: id) {
+						cardRow(card, eligible: eligible)
+					}
+				case .pair(let leftID, let rightID):
+					if let left = LayoutCard(rawValue: leftID), let right = LayoutCard(rawValue: rightID) {
+						HStack(alignment: .top, spacing: 12) {
+							cardRow(left, eligible: eligible)
+								.frame(maxWidth: .infinity, alignment: .leading)
+							Divider()
+							cardRow(right, eligible: eligible)
+								.frame(maxWidth: .infinity, alignment: .leading)
+						}
+					}
 				}
 			}
 			if !hiddenOrder.isEmpty {
@@ -176,36 +197,55 @@ struct SettingsView: View {
 		}
 	}
 
-	private func cardRow(_ card: LayoutCard, index: Int, count: Int, eligible: [LayoutCard]) -> some View {
-		HStack(spacing: 10) {
+	// 一行 = 面板里的一张卡。宽卡独占整行；并排两卡各占半行（中间分隔线对应面板的半宽分界）。
+	// 每张卡的控件跟着自己的卡走：默认折叠勾选 / 阅读序菜单（键盘·VoiceOver 兜底）/ 面板显示开关。
+	// 排位置仍以面板拖拽把手为准，这里只做总览与批量开关。
+	private func cardRow(_ card: LayoutCard, eligible: [LayoutCard]) -> some View {
+		HStack(spacing: 6) {
 			VStack(alignment: .leading, spacing: 2) {
 				Text(card.title)
 				Text(card.detail)
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
+					.lineLimit(2)
 			}
-			Spacer()
+			Spacer(minLength: 4)
 			if let option = card.collapseOption {
 				Toggle("默认折叠", isOn: collapseBinding(option))
 					.toggleStyle(.checkbox)
 					.font(.system(size: 11))
+					.labelsHidden()
+					.help("默认折叠「\(card.title)」")
 			}
-			Button { moveCard(card, up: true, eligible: eligible) } label: {
-				Image(systemName: "arrow.up")
+			Menu {
+				Button("上移一位") { moveCard(card, up: true, eligible: eligible) }
+					.disabled(readingOrderPosition(card, in: eligible)?.index == 0)
+				Button("下移一位") { moveCard(card, up: false, eligible: eligible) }
+					.disabled(readingOrderPosition(card, in: eligible).map { $0.index == $0.count - 1 } ?? true)
+			} label: {
+				Image(systemName: "arrow.up.arrow.down")
+					.font(.system(size: 11))
 			}
-			.accessibilityLabel("上移「\(card.title)」")
-			.disabled(index == 0)
-			Button { moveCard(card, up: false, eligible: eligible) } label: {
-				Image(systemName: "arrow.down")
-			}
-			.accessibilityLabel("下移「\(card.title)」")
-			.disabled(index >= count - 1)
+			.menuIndicator(.hidden)
+			.fixedSize()
+			.accessibilityLabel("调整「\(card.title)」阅读序")
+			.help("阅读序兜底微调（排位置在面板拖卡片把手）")
 			Toggle(isOn: visibleBinding(card, eligible: eligible)) {
-				Text("显示")
+				Text("面板显示")
+					.font(.system(size: 11))
 			}
-			.labelsHidden()
 		}
 		.padding(.vertical, 2)
+	}
+
+	// 阅读序位置（no-op 判定用）：index/count 同源——自定义布局的行表可能含数据暂时
+	// 消失的卡（面板同样保留其位置），禁用判定必须与 move 纯函数走同一份全序。
+	private func readingOrderPosition(_ card: LayoutCard, in eligible: [LayoutCard]) -> (index: Int, count: Int)? {
+		let layout = configurationManager.configuration.panelLayout
+		let order = layout.map { PanelFlow.normalize($0, known: Set(LayoutCard.allCases.map(\.rawValue))).effectiveRows.flatMap { $0 } }
+			?? eligible.map(\.rawValue)
+		guard let index = order.firstIndex(of: card.rawValue) else { return nil }
+		return (index, order.count)
 	}
 
 	private func hiddenCardRow(_ card: LayoutCard, eligible: [LayoutCard]) -> some View {
@@ -263,22 +303,36 @@ struct SettingsView: View {
 		)
 	}
 
-	/// 预设覆盖当前自定义布局前确认一次；默认预设 = 清回自动
+	/// 预设覆盖当前自定义布局前确认一次；默认预设 = 清回自动。
+	/// 覆盖前自动快照当前布局进 lastCustomLayout（后悔药），确认弹窗与「恢复默认排序」对称。
 	private func applyPreset(_ preset: LayoutPreset, eligible: [LayoutCard]) {
 		if configurationManager.configuration.panelLayout != nil {
 			let alert = NSAlert()
 			alert.messageText = "应用「\(preset.title)」预设？"
-			alert.informativeText = "将覆盖当前的自定义卡片布局（之后可用「恢复默认排序」回到自动配平）。"
+			alert.informativeText = "将覆盖当前的自定义卡片布局（之前的布局已自动留存，可点「撤销上次布局改动」找回）。"
 			alert.addButton(withTitle: "应用")
 			alert.addButton(withTitle: "取消")
 			guard alert.runModal() == .alertFirstButtonReturn else { return }
 		}
+		configurationManager.snapshotLayoutForUndo()
 		let next = PanelPresets.apply(preset, eligible: eligible, base: configurationManager.configuration.panelLayout)
 		if let next {
 			persistLayout(next)
 		} else {
 			configurationManager.clearPanelLayout()
 		}
+	}
+
+	/// 恢复默认排序 = 清回自动配平（nil）；覆盖前确认一次并快照，与预设弹窗对称。
+	private func confirmResetLayout() {
+		let alert = NSAlert()
+		alert.messageText = "恢复默认排序？"
+		alert.informativeText = "卡片将回到自动配平的阅读序（之前的自定义布局已自动留存，可点「撤销上次布局改动」找回）。"
+		alert.addButton(withTitle: "恢复默认")
+		alert.addButton(withTitle: "取消")
+		guard alert.runModal() == .alertFirstButtonReturn else { return }
+		configurationManager.snapshotLayoutForUndo()
+		configurationManager.clearPanelLayout()
 	}
 
 	/// 资格事实快照：与面板 visibleCards 同源的数据在场判定（设置窗口打开时才计算）
