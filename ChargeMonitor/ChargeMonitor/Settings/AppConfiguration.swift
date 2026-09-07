@@ -27,7 +27,10 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	var defaultCollapseSeedApplied: Bool = true
 	// 用户自定义卡片布局（华容道）：nil = 未自定义（走自动配平）；进入过编辑布局模式即落值
 	var panelLayout: PanelLayout? = nil
-	
+	// 后悔药（v1.16.0）：应用预设/恢复默认排序等破坏性布局操作前自动留存的上一版布局。
+	// nil = 没有可撤销的上一版；撤销 = 写回 panelLayout 并清空本字段（纯函数语义见 CardEligibility.swift）
+	var lastCustomLayout: PanelLayout? = nil
+
 	static let `default` = AppConfiguration()
 	
 	private static var defaultEnabledOptions: Set<DisplayOption> {
@@ -88,6 +91,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case collapsedCards
 		case defaultCollapseSeedApplied
 		case panelLayout
+		case lastCustomLayout
 	}
 
 	init(from decoder: Decoder) throws {
@@ -157,6 +161,11 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		self.panelLayout = try container.decodeIfPresent(
 			PanelLayout.self,
 			forKey: .panelLayout
+		)
+		// v1.16.0：后悔药快照（旧档/无快照 nil = 没有可撤销的上一版）
+		self.lastCustomLayout = try container.decodeIfPresent(
+			PanelLayout.self,
+			forKey: .lastCustomLayout
 		)
 	}
 }

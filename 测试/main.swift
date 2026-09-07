@@ -1219,6 +1219,39 @@ do {
 	expectEqual(v113Config.panelLayout?.effectiveRows ?? [], [["a", "c"], ["b"]],
 		"旧配置兼容：v1.13 三表经 AppConfiguration 解码后按索引对齐")
 
+	// —— 后悔药 lastCustomLayout（目标模式 v1.16.0，快照/撤销纯函数）——
+	// 快照：自定义布局在场时原样留存，panelLayout 本身不动
+	let undoBase = PanelLayout(rows: [["a", "b"], ["c"]], hidden: ["d"])
+	var undoConfig = AppConfiguration.default
+	undoConfig.panelLayout = undoBase
+	let snapshotted = undoConfig.snapshotLayoutForUndo()
+	expectEqual(snapshotted.lastCustomLayout, undoBase, "后悔药：快照留存当前自定义布局")
+	expectEqual(snapshotted.panelLayout, undoBase, "后悔药：快照不动当前布局")
+	// 快照幂等：对快照结果再快照不再变化
+	expectEqual(snapshotted.snapshotLayoutForUndo(), snapshotted, "后悔药：快照幂等")
+	// 自动模式无上一版可存：快照后仍是 nil
+	expect(AppConfiguration.default.snapshotLayoutForUndo().lastCustomLayout == nil,
+		"后悔药：自动模式无上一版可存")
+	// 撤销：上一版写回 panelLayout 且快照清空
+	let undone = snapshotted.undoLastLayoutChange()
+	expectEqual(undone.panelLayout, undoBase, "后悔药：撤销写回上一版布局")
+	expect(undone.lastCustomLayout == nil, "后悔药：撤销后快照清空")
+	// 撤销幂等：快照已清空，再撤销原样返回
+	expectEqual(undone.undoLastLayoutChange(), undone, "后悔药：撤销幂等")
+	// 完整链路：自定义布局 → 快照 → 应用预设覆盖 → 撤销 → 回到用户原布局
+	let presetOverridden = PanelPresets.apply(.minimal,
+		eligible: [.powerInfo, .batteryInfo, .socChart, .bluetooth], base: undoBase)
+	var afterPreset = undoConfig.snapshotLayoutForUndo()
+	afterPreset.panelLayout = presetOverridden
+	expectEqual(afterPreset.undoLastLayoutChange().panelLayout, undoBase,
+		"后悔药：应用预设后撤销回到用户原布局")
+	// 旧配置 decode 兼容：无 lastCustomLayout 字段 → nil（无上一版可撤销）
+	expect(legacyConfig.lastCustomLayout == nil, "旧配置兼容：无 lastCustomLayout 字段解码为 nil")
+	// 往返编码：panelLayout 与 lastCustomLayout 两个布局槽位经 JSON 编码解码后各自一致
+	let undoRoundtrip = try! JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(afterPreset))
+	expectEqual(undoRoundtrip.panelLayout, presetOverridden, "旧配置兼容：panelLayout 往返编码一致")
+	expectEqual(undoRoundtrip.lastCustomLayout, undoBase, "旧配置兼容：lastCustomLayout 往返编码一致")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()

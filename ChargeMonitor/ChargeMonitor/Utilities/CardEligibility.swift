@@ -240,6 +240,29 @@ nonisolated enum PanelPresets {
 	}
 }
 
+// MARK: - 后悔药（目标模式 v1.16.0：破坏性布局操作必须可逆）
+
+extension AppConfiguration {
+	/// 破坏性布局操作（应用预设/恢复默认排序）前的快照：当前自定义布局原样存进
+	/// lastCustomLayout；自动模式（panelLayout == nil）无上一版可存 → 保持 nil。
+	/// 纯函数不改原值；同态重复调用结果相同（幂等）。
+	nonisolated func snapshotLayoutForUndo() -> AppConfiguration {
+		var copy = self
+		copy.lastCustomLayout = panelLayout
+		return copy
+	}
+
+	/// 撤销上次布局改动：上一版写回 panelLayout 并清空快照。
+	/// 无上一版时原样返回（幂等）；设置窗口的撤销按钮也只在有上一版时出现。
+	nonisolated func undoLastLayoutChange() -> AppConfiguration {
+		guard let previous = lastCustomLayout else { return self }
+		var copy = self
+		copy.panelLayout = previous
+		copy.lastCustomLayout = nil
+		return copy
+	}
+}
+
 // MARK: - 上下移（设置列表用；面板拖拽走 insert，互不干扰）
 
 extension PanelFlow {

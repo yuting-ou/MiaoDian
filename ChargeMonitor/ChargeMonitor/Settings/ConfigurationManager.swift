@@ -48,6 +48,15 @@ final class ConfigurationManager: ObservableObject {
         update { $0.panelLayout = nil }
     }
 
+    // 后悔药（v1.16.0）：破坏性布局操作前留存上一版；一键撤销写回并清空（纯函数语义在 CardEligibility.swift）
+    func snapshotLayoutForUndo() {
+        update { $0 = $0.snapshotLayoutForUndo() }
+    }
+
+    func undoLastLayoutChange() {
+        update { $0 = $0.undoLastLayoutChange() }
+    }
+
     // 图表卡片折叠/展开，状态随配置持久化
     func toggleCardCollapsed(_ option: DisplayOption) {
         update { config in
