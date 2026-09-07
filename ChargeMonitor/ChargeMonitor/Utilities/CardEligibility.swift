@@ -240,26 +240,138 @@ nonisolated enum PanelPresets {
 	}
 }
 
-// MARK: - 后悔药（目标模式 v1.16.0：破坏性布局操作必须可逆）
+// MARK: - 后悔药（目标模式 v1.16/v1.17：破坏性布局操作必须可逆）
 
 extension AppConfiguration {
-	/// 破坏性布局操作（应用预设/恢复默认排序）前的快照：当前自定义布局原样存进
-	/// lastCustomLayout；自动模式（panelLayout == nil）无上一版可存 → 保持 nil。
-	/// 纯函数不改原值；同态重复调用结果相同（幂等）。
+	/// 破坏性布局操作（应用预设/恢复默认布局）前的快照：当前状态（自动模式或某布局）
+	/// 原样记进 lastCustomLayout/undoWasAuto。纯函数不改原值；重复调用幂等。
 	nonisolated func snapshotLayoutForUndo() -> AppConfiguration {
 		var copy = self
 		copy.lastCustomLayout = panelLayout
+		copy.undoWasAuto = (panelLayout == nil)
 		return copy
 	}
 
-	/// 撤销上次布局改动：上一版写回 panelLayout 并清空快照。
-	/// 无上一版时原样返回（幂等）；设置窗口的撤销按钮也只在有上一版时出现。
+	/// 是否有可撤销的上一状态（布局或自动模式）
+	nonisolated var canUndoLayout: Bool {
+		lastCustomLayout != nil || undoWasAuto
+	}
+
+	/// 撤销上次布局改动：回到上一状态（自动模式或快照的布局）并清空快照。
+	/// 无上一状态时原样返回（幂等）；撤销按钮只在 canUndoLayout 时出现。
 	nonisolated func undoLastLayoutChange() -> AppConfiguration {
-		guard let previous = lastCustomLayout else { return self }
+		guard canUndoLayout else { return self }
 		var copy = self
-		copy.panelLayout = previous
+		copy.panelLayout = lastCustomLayout
 		copy.lastCustomLayout = nil
+		copy.undoWasAuto = false
 		return copy
+	}
+
+	/// 恢复默认布局（原「恢复默认排序」语义拆分后的正身）：先快照再清回自动配平。
+	/// 组合子=快照∘清空，保证任何破坏路径都先留后悔药；重复调用幂等（清空后再快照仍是 nil/true）。
+	nonisolated func snapshotThenClearLayout() -> AppConfiguration {
+		snapshotLayoutForUndo().clearingPanelLayout()
+	}
+
+	/// 清回自动配平（panelLayout 置 nil），不动快照字段
+	nonisolated func clearingPanelLayout() -> AppConfiguration {
+		var copy = self
+		copy.panelLayout = nil
+		return copy
+	}
+}
+
+// MARK: - 稳定清单（目标模式 v1.17.0：卡片恒列，状态分层，库存不随数据搬家）
+
+/// 清单行的三态：显示中 / 已隐藏 / 暂不可用（附人话原因）
+nonisolated enum CardListStatus: Equatable, Sendable {
+	case shown
+	case hidden
+	case unavailable(reason: String)
+}
+
+nonisolated enum CardList {
+	/// 功能开关门：这张卡的「面板显示」受哪个 DisplayOption 管控（nil = 无开关门，纯数据门）。
+	/// 与 eligibleCards 的 options.contains 逐条同步——改判定必须两处一起改。
+	nonisolated static func switchGate(for card: LayoutCard) -> DisplayOption? {
+		switch card {
+		case .powerInfo: return nil
+		case .chargeHistory: return .chargeHistory
+		case .batteryInfo: return nil
+		case .checkup: return .batteryCheckup
+		case .batteryIdentity: return .batteryIdentity
+		case .habitInsight: return .habitInsight
+		case .temperatureChart: return .temperatureChart
+		case .healthTrend: return .healthTrend
+		case .dailySummary: return .dailySummary
+		case .usageCalendar: return .usageCalendar
+		case .hourlyDrain: return .hourlyDrainChart
+		case .socChart: return .socChart
+		case .powerChart: return .powerChart
+		case .runtimeScenarios: return .runtimeScenarios
+		case .energyApps: return .significantEnergyApps
+		case .powerEvents: return .powerEvents
+		case .bluetooth: return .bluetoothDevices
+		}
+	}
+
+	/// 数据门的人话：缺什么、还差多少（与 eligibleFacts 的判定条件逐条同步）
+	nonisolated static func dataHint(for card: LayoutCard, facts: CardEligibilityFacts) -> String {
+		switch card {
+		case .chargeHistory: return "还没有充电记录，插上电源充一次就会出现"
+		case .checkup: return "读不到电池健康度（非原装电池或数据未上报）"
+		case .batteryIdentity: return "读不到电池出厂信息"
+		case .habitInsight: return "还没有可总结的用电习惯，积累几天数据后出现"
+		case .temperatureChart: return "温度采样不足（需要两分钟以上的采样）"
+		case .healthTrend: return "健康度采样不足（每天一个点，需要两天以上）"
+		case .dailySummary: return "今天还没有用电/充入记录"
+		case .usageCalendar: return "用电日历需要 3 天以上的历史"
+		case .hourlyDrain: return "时段用电需要 3 天以上的积累"
+		case .socChart: return "电量曲线采样不足（需要两分钟以上的采样）"
+		case .powerChart: return "功耗采样不足（需要两分钟以上的采样）"
+		case .runtimeScenarios: return "只在用电池放电时可以估算续航"
+		case .powerEvents: return "还没有电源事件（插拔电、睡眠唤醒）"
+		case .bluetooth: return "还没有连接过蓝牙外设"
+		case .energyApps: return "暂无高耗电应用样本"
+		case .powerInfo: return "读不到充电协议信息"
+		case .batteryInfo: return "读不到电池状态"
+		}
+	}
+
+	/// 稳定清单：全部卡片按语义阅读序排列，每张卡一个确定状态。
+	/// 归因顺序：开关关 → "功能开关未开"；有开关门但缺数据 → 数据提示；无门但缺数据 → 数据提示；
+	/// hidden 在案 → 已隐藏（隐藏的卡永远显示，绝不因缺数据消失——那是唯一的恢复通道）。
+	nonisolated static func stableList(
+		configuration: AppConfiguration,
+		facts: CardEligibilityFacts,
+		order: [LayoutCard] = LayoutCard.allCases
+	) -> [(card: LayoutCard, status: CardListStatus)] {
+		let hidden = Set((configuration.panelLayout?.hidden ?? []))
+		let eligible = Set(CardEligibility.eligibleCards(configuration: configuration, facts: facts))
+		return order.map { card in
+			if hidden.contains(card.rawValue) { return (card, .hidden) }
+			if eligible.contains(card) { return (card, .shown) }
+			if let gate = switchGate(for: card), !configuration.enabledOptions.contains(gate) {
+				return (card, .unavailable(reason: "功能开关未开（在上方开关区打开「\(gate.title)」）"))
+			}
+			return (card, .unavailable(reason: dataHint(for: card, facts: facts)))
+		}
+	}
+
+	/// 面板显示开关的可交互性：隐藏态永远可开（恢复通道）；显示态永远可关。
+	/// 只有「显示中但缺资格」不存在（shown 即有资格），所以唯一禁用态 = 暂不可用且未隐藏。
+	nonisolated static func isToggleEnabled(_ status: CardListStatus) -> Bool {
+		switch status {
+		case .shown, .hidden: return true
+		case .unavailable: return false
+		}
+	}
+
+	/// 当前显示中的卡数（预设弹窗文案用）
+	nonisolated static func shownCount(eligible: [LayoutCard], hidden: [String]) -> Int {
+		let h = Set(hidden)
+		return eligible.filter { !h.contains($0.rawValue) }.count
 	}
 }
 

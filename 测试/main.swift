@@ -1252,6 +1252,72 @@ do {
 	expectEqual(undoRoundtrip.panelLayout, presetOverridden, "旧配置兼容：panelLayout 往返编码一致")
 	expectEqual(undoRoundtrip.lastCustomLayout, undoBase, "旧配置兼容：lastCustomLayout 往返编码一致")
 
+	// —— 后悔药 v1.17.0：undoWasAuto 修复「自动模式应用预设无后悔药」——
+	// v1.16 缺陷复现断言：自动模式（panelLayout=nil）下应用预设，必须能撤销回自动
+	let autoConfig = AppConfiguration.default
+	expect(autoConfig.panelLayout == nil, "v1.17 后悔药前置：默认即自动模式")
+	let autoSnapped = autoConfig.snapshotLayoutForUndo()
+	expect(autoSnapped.undoWasAuto, "v1.17 后悔药：快照自动模式时 undoWasAuto=true")
+	expect(autoSnapped.canUndoLayout, "v1.17 后悔药：自动模式快照后可撤销（v1.16 此处断言红）")
+	let autoUndone = autoSnapped.undoLastLayoutChange()
+	expect(autoUndone.panelLayout == nil, "v1.17 后悔药：撤销回自动模式（panelLayout 保持 nil）")
+	expect(!autoUndone.canUndoLayout, "v1.17 后悔药：撤销后无上一状态")
+	// 自定义→快照：undoWasAuto=false，撤销仍走布局写回
+	let customSnapped = undoConfig.snapshotLayoutForUndo()
+	expect(!customSnapped.undoWasAuto, "v1.17 后悔药：快照自定义布局时 undoWasAuto=false")
+	expectEqual(customSnapped.undoLastLayoutChange().panelLayout, undoBase, "v1.17 后悔药：自定义快照撤销写回布局")
+	// 旧档兼容：无 undoWasAuto 字段解码为 false
+	expect(!legacyConfig.undoWasAuto, "旧配置兼容：无 undoWasAuto 字段解码为 false")
+	// snapshotThenClearLayout 组合子：任何状态先留后悔药再清空
+	let cleared = undoConfig.snapshotThenClearLayout()
+	expect(cleared.panelLayout == nil, "v1.17 恢复默认：清回自动配平")
+	expectEqual(cleared.lastCustomLayout, undoBase, "v1.17 恢复默认：清空前留存布局")
+	expect(!cleared.undoWasAuto, "v1.17 恢复默认：上一状态是布局非自动")
+	let clearedFromAuto = autoConfig.snapshotThenClearLayout()
+	expect(clearedFromAuto.undoWasAuto, "v1.17 恢复默认：自动模式下清空也留undoWasAuto")
+
+	// —— 稳定清单 v1.17.0：卡片恒列、状态分层、归因正确 ——
+	// 全开+全数据：全部 shown，顺序=语义阅读序
+	let fullList = CardList.stableList(configuration: allOnConfig, facts: .allPresent)
+	expectEqual(fullList.count, LayoutCard.allCases.count, "稳定清单：17 卡恒列（全数据）")
+	expect(fullList.allSatisfy { $0.status == .shown }, "稳定清单：全开+全数据全部显示中")
+	expectEqual(fullList.map(\.card), LayoutCard.allCases.map { $0 }, "稳定清单：顺序=语义阅读序（恒定不随数据搬家）")
+	// 空数据：卡不消失，逐张给原因
+	let emptyList = CardList.stableList(configuration: allOnConfig, facts: CardEligibilityFacts())
+	expectEqual(emptyList.count, LayoutCard.allCases.count, "稳定清单：空数据卡也不消失")
+	let unavailableCards = emptyList.compactMap { $0.status == .shown ? nil : $0.card }
+	expect(unavailableCards.contains(.usageCalendar) && unavailableCards.contains(.bluetooth),
+		"稳定清单：缺数据的卡标暂不可用")
+	// 归因：开关关→说开关；开关开但缺数据→说数据
+	var btOff = allOnConfig
+	btOff.enabledOptions.remove(.bluetoothDevices)
+	let btOffList = CardList.stableList(configuration: btOff, facts: .allPresent)
+	if case .unavailable(let btReason) = btOffList.first(where: { $0.card == .bluetooth })?.status {
+		expect(btReason.contains("功能开关未开"), "稳定清单归因：开关关→说开关（不说暂无数据）")
+	} else {
+		expect(false, "稳定清单归因：蓝牙开关关时应有原因")
+	}
+	var noBTDataOnly = CardEligibilityFacts.allPresent
+	noBTDataOnly.hasBluetoothDevices = false
+	let btDataList = CardList.stableList(configuration: allOnConfig, facts: noBTDataOnly)
+	if case .unavailable(let btDataReason) = btDataList.first(where: { $0.card == .bluetooth })?.status {
+		expect(btDataReason.contains("蓝牙外设"), "稳定清单归因：缺数据→说数据（提示差什么）")
+	} else {
+		expect(false, "稳定清单归因：蓝牙缺数据时应有原因")
+	}
+	// 隐藏态：隐藏的卡即使缺数据也保持 hidden（恢复通道永不失效）
+	var hiddenEmpty = allOnConfig
+	hiddenEmpty.panelLayout = PanelLayout(rows: [["powerInfo"]], hidden: ["usageCalendar", "bluetooth"])
+	let hiddenEmptyList = CardList.stableList(configuration: hiddenEmpty, facts: CardEligibilityFacts())
+	let usageStatus = hiddenEmptyList.first(where: { $0.card == .usageCalendar })?.status
+	expect(usageStatus == .hidden, "稳定清单：隐藏+缺数据的卡保持隐藏态（不降级为暂无数据）")
+	// 开关可交互性：只有暂不可用且未隐藏禁用
+	expect(!CardList.isToggleEnabled(.unavailable(reason: "x")), "开关交互：暂不可用禁用")
+	expect(CardList.isToggleEnabled(.hidden), "开关交互：隐藏态可开（恢复通道）")
+	expect(CardList.isToggleEnabled(.shown), "开关交互：显示态可关")
+	// shownCount：预设弹窗文案用
+	expectEqual(CardList.shownCount(eligible: smallEligible, hidden: ["socChart"]), 3, "shownCount：显示中=资格集-隐藏")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()

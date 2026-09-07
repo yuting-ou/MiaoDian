@@ -116,16 +116,24 @@ struct SettingsView: View {
 	// 主干编辑器放稳定窗口：原生无障碍、只在窗口打开时算资格（body 即打开）。
 	// v1.16.0 人性化返工：列表是面板的文字影子——复用 renderSegments 镜像面板行结构
 	// （并排两张卡同行呈现），排卡片的空间任务只属于面板拖拽把手，这里管总览+批量开关+预设+后悔药。
+	// v1.17.0 稳定清单：镜像行之下恒列已隐藏与暂不可用的卡（库存不随数据搬家），缺席也给原因。
 	@ViewBuilder
 	private var cardManagementSection: some View {
 		let configuration = configurationManager.configuration
-		let eligible = CardEligibility.eligibleCards(configuration: configuration, facts: eligibilityFacts(configuration: configuration))
+		let facts = eligibilityFacts(configuration: configuration)
+		let eligible = CardEligibility.eligibleCards(configuration: configuration, facts: facts)
 		let eligibleIDs = Set(eligible.map(\.rawValue))
 		// 自定义布局归一到面板渲染同款（normalize 保证隐藏卡不残留行表）；自动模式按资格序
 		let effective = configuration.panelLayout.map { PanelFlow.normalize($0, known: Set(LayoutCard.allCases.map(\.rawValue))) }
 		// 面板同款渲染预备：行表 → 段落（条件不可见的卡跳过、双行剩一卡自动拉通），渲染顺序=行序=阅读序
 		let segments = PanelFlow.renderSegments(effective?.effectiveRows ?? PanelPresets.paired(eligible), available: eligibleIDs)
-		let hiddenOrder = (effective?.hidden ?? []).filter { eligibleIDs.contains($0) }
+		// 稳定清单（v1.17.0）：库存恒列——已隐藏/暂不可用的卡不因缺数据从设置里消失，各占一行并说明原因
+		let stable = CardList.stableList(configuration: configuration, facts: facts)
+		let hiddenCards = stable.compactMap { $0.status == .hidden ? $0.card : nil }
+		let unavailableEntries = stable.filter { entry in
+			if case .unavailable = entry.status { return true }
+			return false
+		}
 
 		Section {
 			HStack {
@@ -151,15 +159,16 @@ struct SettingsView: View {
 				}
 				Spacer()
 				if configuration.panelLayout != nil {
-					Button("恢复默认排序") { confirmResetLayout() }
+					Button("恢复默认布局") { confirmResetLayout() }
+						.help("行序回出厂，隐藏的卡全部回来")
 				}
-				if configuration.lastCustomLayout != nil {
+				if configuration.canUndoLayout {
 					Button {
 						configurationManager.undoLastLayoutChange()
 					} label: {
 						Label("撤销上次布局改动", systemImage: "arrow.uturn.backward")
 					}
-					.help("回到本次预设/恢复默认之前你自己的布局")
+					.help(configuration.undoWasAuto ? "回到本次预设/恢复默认之前的自动模式" : "回到本次预设/恢复默认之前你自己的布局")
 				}
 			}
 			// Segment 全板唯一（卡不重复），以内容为身份：行形态变化时 SwiftUI 逐行 diff 而非整体错位
@@ -181,15 +190,22 @@ struct SettingsView: View {
 					}
 				}
 			}
-			if !hiddenOrder.isEmpty {
+			if !hiddenCards.isEmpty {
 				Divider()
-				Text("已隐藏（当前有数据）")
+				Text("已隐藏")
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
-				ForEach(hiddenOrder, id: \.self) { id in
-					if let card = LayoutCard(rawValue: id) {
-						hiddenCardRow(card, eligible: eligible)
-					}
+				ForEach(hiddenCards, id: \.id) { card in
+					hiddenCardRow(card, eligible: eligible)
+				}
+			}
+			if !unavailableEntries.isEmpty {
+				Divider()
+				Text("暂不可用（数据够了会自动出现）")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+				ForEach(unavailableEntries.indices, id: \.self) { index in
+					unavailableCardRow(unavailableEntries[index].card, status: unavailableEntries[index].status)
 				}
 			}
 		} header: {
@@ -266,6 +282,32 @@ struct SettingsView: View {
 		.padding(.vertical, 2)
 	}
 
+	// 暂不可用行（v1.17.0 稳定清单的缺位库存）：缺席的原因说给用户听——开关关→说开关，
+	// 缺数据→说还差什么。面板显示开关按 isToggleEnabled 禁用（暂不可用=唯一禁用态），
+	// 开关本身通常已开（未隐藏），卡不在场是数据/功能门的事，开关此刻无操作语义。
+	private func unavailableCardRow(_ card: LayoutCard, status: CardListStatus) -> some View {
+		HStack(spacing: 10) {
+			VStack(alignment: .leading, spacing: 2) {
+				Text(card.title)
+					.foregroundStyle(.tertiary)
+				if case .unavailable(let reason) = status {
+					Text(reason)
+						.font(.system(size: 11))
+						.foregroundStyle(.tertiary)
+						.lineLimit(2)
+				}
+			}
+			Spacer()
+			// 暂不可用 = 未隐藏（hidden 优先级更高，在已隐藏区），开关态恒为开；禁用态下绑定不给写路径
+			Toggle(isOn: .constant(true)) {
+				Text("面板显示")
+					.font(.system(size: 11))
+			}
+			.disabled(!CardList.isToggleEnabled(status))
+		}
+		.padding(.vertical, 2)
+	}
+
 	// MARK: - 卡片管理写路径（全部走 CardEligibility/PanelFlow 纯函数，与面板同源）
 
 	/// 自动模式下第一次改动先按资格阅读序播种行存储（语义对齐面板编辑入口的播种）
@@ -304,12 +346,12 @@ struct SettingsView: View {
 	}
 
 	/// 预设覆盖当前自定义布局前确认一次；默认预设 = 清回自动。
-	/// 覆盖前自动快照当前布局进 lastCustomLayout（后悔药），确认弹窗与「恢复默认排序」对称。
+	/// 覆盖前自动快照当前布局进 lastCustomLayout/undoWasAuto（后悔药），确认弹窗与「恢复默认布局」对称。
 	private func applyPreset(_ preset: LayoutPreset, eligible: [LayoutCard]) {
 		if configurationManager.configuration.panelLayout != nil {
 			let alert = NSAlert()
 			alert.messageText = "应用「\(preset.title)」预设？"
-			alert.informativeText = "将覆盖当前的自定义卡片布局（之前的布局已自动留存，可点「撤销上次布局改动」找回）。"
+			alert.informativeText = "将覆盖当前的自定义卡片布局（当前显示 \(CardList.shownCount(eligible: eligible, hidden: configurationManager.configuration.panelLayout?.hidden ?? [])) 张卡；之前的布局已自动留存，可点「撤销上次布局改动」找回）。"
 			alert.addButton(withTitle: "应用")
 			alert.addButton(withTitle: "取消")
 			guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -323,16 +365,16 @@ struct SettingsView: View {
 		}
 	}
 
-	/// 恢复默认排序 = 清回自动配平（nil）；覆盖前确认一次并快照，与预设弹窗对称。
+	/// 恢复默认布局（v1.17.0 名副其实化）：行序回出厂，且已隐藏的卡全部回来。
+	/// 覆盖前确认一次；快照+清空走 restoreDefaultLayout 原子组合子（先留后悔药再破坏），与预设弹窗对称。
 	private func confirmResetLayout() {
 		let alert = NSAlert()
-		alert.messageText = "恢复默认排序？"
-		alert.informativeText = "卡片将回到自动配平的阅读序（之前的自定义布局已自动留存，可点「撤销上次布局改动」找回）。"
+		alert.messageText = "恢复默认布局？"
+		alert.informativeText = "卡片将回到自动配平的阅读序，已隐藏的卡也会全部回来（之前的布局已自动留存，可点「撤销上次布局改动」找回）。"
 		alert.addButton(withTitle: "恢复默认")
 		alert.addButton(withTitle: "取消")
 		guard alert.runModal() == .alertFirstButtonReturn else { return }
-		configurationManager.snapshotLayoutForUndo()
-		configurationManager.clearPanelLayout()
+		configurationManager.restoreDefaultLayout()
 	}
 
 	/// 资格事实快照：与面板 visibleCards 同源的数据在场判定（设置窗口打开时才计算）

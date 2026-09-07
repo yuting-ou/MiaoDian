@@ -28,8 +28,13 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	// 用户自定义卡片布局（华容道）：nil = 未自定义（走自动配平）；进入过编辑布局模式即落值
 	var panelLayout: PanelLayout? = nil
 	// 后悔药（v1.16.0）：应用预设/恢复默认排序等破坏性布局操作前自动留存的上一版布局。
-	// nil = 没有可撤销的上一版；撤销 = 写回 panelLayout 并清空本字段（纯函数语义见 CardEligibility.swift）
+	// nil = 没有可撤销的上一版布局（但 undoWasAuto=true 时仍可撤销回自动模式）；
+	// 撤销 = 写回 panelLayout 并清空快照（纯函数语义见 CardEligibility.swift）
 	var lastCustomLayout: PanelLayout? = nil
+	// 后悔药 v1.17.0：上一状态是否为自动模式（panelLayout == nil）。
+	// 修复 v1.16.0 缺陷——自动模式下应用预设时快照到 nil，无法区分"没快照"和"快照的是自动"，
+	// 导致撤销按钮不出现、一键隐藏无后悔药。canUndo = lastCustomLayout != nil || undoWasAuto
+	var undoWasAuto: Bool = false
 
 	static let `default` = AppConfiguration()
 	
@@ -92,6 +97,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case defaultCollapseSeedApplied
 		case panelLayout
 		case lastCustomLayout
+		case undoWasAuto
 	}
 
 	init(from decoder: Decoder) throws {
@@ -167,5 +173,10 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 			PanelLayout.self,
 			forKey: .lastCustomLayout
 		)
+		// v1.17.0：上一状态是否为自动模式（旧档缺字段 = false，与 v1.16 语义兼容）
+		self.undoWasAuto = try container.decodeIfPresent(
+			Bool.self,
+			forKey: .undoWasAuto
+		) ?? false
 	}
 }

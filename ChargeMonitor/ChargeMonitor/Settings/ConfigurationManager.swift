@@ -48,13 +48,19 @@ final class ConfigurationManager: ObservableObject {
         update { $0.panelLayout = nil }
     }
 
-    // 后悔药（v1.16.0）：破坏性布局操作前留存上一版；一键撤销写回并清空（纯函数语义在 CardEligibility.swift）
+    // 后悔药（v1.16/v1.17）：破坏性布局操作前留存上一状态；一键撤销写回并清空（纯函数语义在 CardEligibility.swift）
     func snapshotLayoutForUndo() {
         update { $0 = $0.snapshotLayoutForUndo() }
     }
 
     func undoLastLayoutChange() {
         update { $0 = $0.undoLastLayoutChange() }
+    }
+
+    // v1.17.0 语义拆分：恢复默认布局 = 行序回出厂且隐藏的卡全部回来（原「恢复默认排序」，
+    // 名副其实化）；组合子先快照后清空，任何破坏路径都先留后悔药
+    func restoreDefaultLayout() {
+        update { $0 = $0.snapshotThenClearLayout() }
     }
 
     // 图表卡片折叠/展开，状态随配置持久化
