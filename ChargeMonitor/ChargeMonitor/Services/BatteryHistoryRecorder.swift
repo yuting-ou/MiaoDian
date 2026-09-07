@@ -538,13 +538,23 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated private static let usageAttributionGapSeconds: TimeInterval = 3 * 60
 
 	// 插入新的一天并保持 dayKey 升序：时区西行/时钟回拨会让"今天"的键比已存键更早，
-	// 不排序则封顶 removeFirst 会错删较新的天，报告与柱图的窗口起点也会错乱
+	// 不排序则封顶 removeFirst 会错删较新的天，报告与柱图的窗口起点也会错乱。
+	// v1.18.5 封顶护今（状态机边界）：排序后若封顶会裁掉"今天"（西行跨日界线后今天
+	// 就是全表最旧键），改为跳过今天、从今天的后继起裁掉 excess 个最老的旧天——
+	// 今日小结不能因为时区旅行当天永久缺失（旧实现裁掉今天后 firstIndex 找不到键，
+	// 当天帧全部静默丢弃，且西行期间天天如此）。今天不在裁剪区间 → 普通封顶。
 	nonisolated static func insertingDailyUsage(_ history: [DailyUsage], dayKey: String, maxDays: Int) -> [DailyUsage] {
 		var history = history
 		history.append(DailyUsage(dayKey: dayKey))
 		history.sort { $0.dayKey < $1.dayKey }
-		if history.count > maxDays {
-			history.removeFirst(history.count - maxDays)
+		let excess = history.count - maxDays
+		guard excess > 0 else { return history }
+		let todayIndex = history.firstIndex { $0.dayKey == dayKey } ?? history.count
+		if todayIndex < excess {
+			// 今天在最旧端：保住今天，从它的后继起裁掉 excess 个
+			history.removeSubrange((todayIndex + 1)..<(todayIndex + 1 + excess))
+		} else {
+			history.removeFirst(excess)
 		}
 		return history
 	}

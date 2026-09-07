@@ -2645,6 +2645,24 @@ do {
 	let trimmed = BatteryHistoryRecorder.insertingDailyUsage(history, dayKey: "2026-09-05", maxDays: 3)
 	expectEqual(trimmed.map(\.dayKey), ["2026-09-03", "2026-09-04", "2026-09-05"], "时钟异常：封顶删最旧")
 
+	// 封顶护今 v1.18.5（状态机边界）：西行跨日界线后"今天"的日期键变小（本地
+	// 已存 09-06..09-11，跨线后今天=09-05），排序后今天成为全表最旧键，
+	// 旧实现封顶裁掉今天 → 当天帧全部静默丢弃、今日小结永久缺失
+	var westward = (6...11).map { DailyUsage(dayKey: String(format: "2026-09-%02d", $0)) } // 6 天满窗
+	westward = BatteryHistoryRecorder.insertingDailyUsage(westward, dayKey: "2026-09-05", maxDays: 6)
+	expect(westward.contains { $0.dayKey == "2026-09-05" }, "封顶护今：西行后今天保住（旧实现被裁）")
+	expectEqual(westward.count, 6, "封顶护今：封顶数量正确")
+	expect(!westward.contains { $0.dayKey == "2026-09-06" }, "封顶护今：被牺牲的是最老的旧天")
+	// 普通封顶（今天在最新端）行为不变：裁最旧、保今天
+	let normal = BatteryHistoryRecorder.insertingDailyUsage(westward, dayKey: "2026-09-12", maxDays: 6)
+	expectEqual(normal.last?.dayKey, "2026-09-12", "封顶护今：普通封顶今天在末尾（回归不变式）")
+	expectEqual(normal.count, 6, "封顶护今：普通封顶数量正确")
+	expectEqual(normal.first?.dayKey, "2026-09-07", "封顶护今：普通封顶仍裁最旧")
+	// 未超限原样保序
+	let under = BatteryHistoryRecorder.insertingDailyUsage(
+		[DailyUsage(dayKey: "2026-09-02"), DailyUsage(dayKey: "2026-09-03")], dayKey: "2026-09-01", maxDays: 90)
+	expectEqual(under.map(\.dayKey), ["2026-09-01", "2026-09-02", "2026-09-03"], "封顶护今：未超限只排序不裁剪")
+
 	// 周报标记在未来（发通知时时钟被调快）→ 视为失效，不永久静默
 	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(48 * 3600), due: t0.addingTimeInterval(-2 * 3600), now: t0), "时钟异常：未来标记不静默周报")
 	// 本期已发（lastSent 晚于 due）不重发
