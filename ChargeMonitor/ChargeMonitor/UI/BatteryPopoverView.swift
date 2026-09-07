@@ -112,7 +112,9 @@ struct BatteryPopoverView: View {
 
 			if isEditingLayout {
 				HStack(spacing: 8) {
-					Text("点「眼睛」隐藏不想看到的卡片，拖把手调整位置")
+					// v1.18.2 文案对齐现实：编辑模式 v1.17.2 起不再显示把手（与控制条叠影），
+					// 拖拽在常态面板直接进行——旧文案"拖把手调整位置"指向不存在的操作
+					Text("点「眼睛」隐藏卡片，「宽窄」调整占行；重排卡片回到常态拖 ≡ 把手")
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 					Spacer()
