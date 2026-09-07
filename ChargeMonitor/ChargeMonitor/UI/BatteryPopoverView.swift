@@ -157,8 +157,14 @@ struct BatteryPopoverView: View {
 					// 为身份，重排一改行形态，段内卡片连树销毁、新视图在终点凭空出现
 					// （无位移动画），用户看到的就是跳格子卡顿。
 					// 把手仍走独立浮层（handleLayer，v1.17.1 不死手结构）。
+					// v1.18.3 绘制序保证：拖动中被拖卡排到源序列末尾——id 不变只换序，
+					// 视图平移不重建（身份法则）；Layout 不重排子视图语义序（按 plan 对号），
+					// 但 SwiftUI 绘制按子视图声明序，被拖卡因此恒在最上层，滑行交叉不穿帮。
+					let orderedIDs = PanelFlow.dragTopmost(
+						PanelFlow.flatCardIDs(segments), dragging: dragState?.card
+					)
 					PanelMasonryLayout(segments: segments, emptyHeight: isEditingLayout ? 40 : 0) {
-						ForEach(PanelFlow.flatCardIDs(segments), id: \.self) { cardID in
+						ForEach(orderedIDs, id: \.self) { cardID in
 							if let card = CardID(rawValue: cardID) {
 								cardSlot(
 									card,
@@ -590,9 +596,14 @@ struct BatteryPopoverView: View {
 			.padding(3)
 			.contentShape(Circle())
 			.opacity(dragState?.card == id.layoutID ? 0 : 1)
-			.onHover { h in isHandleHovering = h ? id.layoutID : nil }
-			.scaleEffect(isHandleHovering == id.layoutID ? 1.3 : 1.0)
-			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID)
+			// v1.18.3：拖动中禁止沿途把手 hover 亮起（指针拖卡划过谁谁就放大 1.3，视觉噪音），
+			// 且拖动开始后不再写入新 hover 态（松手后旧卡不带着 1.3 复活）
+			.onHover { h in
+				guard dragState == nil else { return }
+				isHandleHovering = h ? id.layoutID : nil
+			}
+			.scaleEffect(isHandleHovering == id.layoutID && dragState == nil ? 1.3 : 1.0)
+			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID && dragState == nil)
 			.gesture(
 				DragGesture(minimumDistance: 0, coordinateSpace: .global)
 					.onChanged { drag in

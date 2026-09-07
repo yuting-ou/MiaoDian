@@ -69,6 +69,17 @@ nonisolated enum PanelFlow {
 		return items.filter { !h.contains(cardID($0)) }
 	}
 
+	/// 拖动中被拖卡置顶（v1.18.3）：把 dragging 移到序列末尾——SwiftUI 按子视图声明序
+	/// 绘制，后声明的画在上层；被拖卡与让位卡滑行交叉时不会被压在下面穿帮。
+	/// 只换序不换身份（视图平移不重建）；未在拖动时原样返回。
+	nonisolated static func dragTopmost(_ ids: [String], dragging: String?) -> [String] {
+		guard let dragging, let i = ids.firstIndex(of: dragging) else { return ids }
+		var r = ids
+		r.remove(at: i)
+		r.append(dragging)
+		return r
+	}
+
 	/// 密铺几何计划（v1.17.3 丝滑重排）：段落 → 每卡的格子位置。
 	/// 行号 r、行内序 c（0=左/1=右）、行宽 w（1=整行 2=半宽）。消费方（自定义 Layout）
 	/// 据此给每张卡稳定坐标——配合以卡自身为身份的平铺子视图，重排 = 坐标重算 + 弹簧滑行，

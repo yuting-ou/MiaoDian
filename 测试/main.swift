@@ -1388,6 +1388,16 @@ do {
 	expectEqual(PanelFlow.removingHidden([FilterProbe(id: "x"), FilterProbe(id: "y")], hidden: ["y"]) { $0.id }.count, 1,
 		"隐藏过滤：泛型载体（卡+高度元组）同样生效")
 
+	// —— 拖动置顶 v1.18.3：绘制序保证 ——
+	expectEqual(PanelFlow.dragTopmost(["a", "b", "c"], dragging: "a"), ["b", "c", "a"],
+		"拖动置顶：被拖卡移到序列末尾（声明序=绘制序，恒在最上层）")
+	expectEqual(PanelFlow.dragTopmost(["a", "b", "c"], dragging: "c"), ["a", "b", "c"],
+		"拖动置顶：末位卡拖动时序列不变")
+	expectEqual(PanelFlow.dragTopmost(["a", "b", "c"], dragging: nil), ["a", "b", "c"],
+		"拖动置顶：未拖动原样返回（身份与序均不变）")
+	expectEqual(PanelFlow.dragTopmost(["a", "b", "c"], dragging: "z"), ["a", "b", "c"],
+		"拖动置顶：拖动卡不在板上（防御）原样返回")
+
 	// —— 落点几何 CardDropResolver（纯函数）——
 	// 模拟密铺板：a|b 一行，W 独占整行，c|d 一行（窗口坐标 frame）
 	var probeTable = CardDropResolver.FrameTable()
