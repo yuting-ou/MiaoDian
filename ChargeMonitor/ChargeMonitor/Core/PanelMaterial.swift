@@ -1,15 +1,19 @@
 import SwiftUI
 
-/// 面板材质三档（v1.20.0，用户可选）：通透 / 均衡（默认）/ 厚重。
-/// 每档 = (壳层地板 alpha, 卡片白纱 alpha) 的参数组合（浅色外观），全部经证明表锁定：
-/// 卡面黑字 AAA、亮背景卡面 ≥0.88、穿透摆幅按档阈值（通透 0.24 / 均衡 0.18 / 厚重 0.10）。
-/// 深色外观三档同参（地板 0.81 黑 / 卡 0.045 白）——白字 AAA 要求深色面板近不透明，
-/// 通透空间物理不存在；深色的通透感来自材质模糊本身，设置 UI 已注明。
-/// 「降低透明度」「增加对比度」系统开关优先级高于档位（外层分支处理，档位只在玻璃路径内生效）。
+/// 面板材质三档（v1.24.0 重设计）：三档映射 Apple 原生玻璃的不同真实选项，而非同一块玻璃上的白纱浓淡。
+/// v1.20.0 的教训：三档只差同块 `.regular` 玻璃上的白/黑纱 alpha（浅 0.30→0.74，深三档同参），
+/// 被玻璃自身霜感吃掉，肉眼不可辨；深色更是像素级相同——「三种面板状态没有差异」的根源。
+/// v1.24.0：材质本体即档位——通透=`.clear`（原生最透）、均衡=`.regular`（原生标准）、
+/// 厚重=`.regular`+高浓度 tint。档差由玻璃变体+壳层 tint+卡面浓度三重承担，证明表锁定。
+/// 深色也拉开（0.76/0.70/0.82 黑 tint，壳层穿透摆幅 0.19/0.15/0.09 单调）：白字 AAA 的物理下限
+/// 仍在（文字面必须暗），通透感体现在壁纸可见度而非绝对亮度——这是深色玻璃的诚实形态。
+/// 可读性分工：所有文字坐卡面（各档卡面按证明锁 ≥7 AAA）；壳层不再直露文字
+/// （控制行/编辑条/托盘 v1.24.0 起坐卡纱），玻璃在四周流动、内容坐稳定面。
+/// 「降低透明度」「增加对比度」系统开关优先级高于档位（外层分支处理）。
 nonisolated enum PanelMaterial: String, Codable, CaseIterable, Sendable, Identifiable {
-	case clear       // 通透：壁纸几乎直接透出
-	case balanced    // 均衡：默认，背景轮廓可辨（与 v1.19.3 观感一致）
-	case solid       // 厚重：接近实色，杂乱背景最稳
+	case clear       // 通透：原生 clear 玻璃，壁纸轮廓与流动最清晰
+	case balanced    // 均衡：原生 regular 玻璃（系统默认面板材质）
+	case solid       // 厚重：原生 regular + 高浓度 tint，接近实色
 
 	var id: String { rawValue }
 
@@ -23,38 +27,66 @@ nonisolated enum PanelMaterial: String, Codable, CaseIterable, Sendable, Identif
 
 	var detail: String {
 		switch self {
-		case .clear: return "壁纸清晰透出，玻璃感最强"
-		case .balanced: return "背景轮廓可辨，内容清晰（推荐）"
-		case .solid: return "接近实色，杂乱背景最稳"
+		case .clear: return "原生 clear 玻璃，壁纸清晰透出，玻璃感最强"
+		case .balanced: return "原生 regular 玻璃，系统默认浓度（推荐）"
+		case .solid: return "玻璃加浓 tint，接近实色，杂乱背景最稳"
 		}
 	}
 
-	/// 该档允许的内容区背景穿透摆幅上限（档位定义本身，证明表按此锁）
+	/// 26 玻璃路径的壳层材质档位（映射原生 glassEffect 浓度选项）
+	nonisolated var shellGlassVariant: ShellGlassVariant {
+		switch self {
+		case .clear: return .clear
+		case .balanced: return .regular
+		case .solid: return .regularTinted
+		}
+	}
+
+	/// 该档允许的内容区背景穿透摆幅上限（浅色档位定义本身，证明表按此锁；深色统一 ≤0.12）
 	nonisolated var interferenceTolerance: Double {
 		switch self {
-		case .clear: return 0.33
-		case .balanced: return 0.18
+		case .clear: return 0.62
+		case .balanced: return 0.38
 		case .solid: return 0.10
 		}
 	}
 
-	/// 壳层地板 alpha：浅色按档位区分（0.30/0.50/0.74）；深色固定 0.81（白字 AAA 硬约束）
+	/// 目检注入口：`MIAODIAN_DEBUG_MATERIAL=<clear|balanced|solid>` 启动时覆盖配置档位，
+	/// 供三档×双外观无人值守截图验收。与 MIAODIAN_DEBUG_OPEN_PANEL / --miao-visual 同族，
+	/// v2.0.0 与 --miao-visual 一并移除。
+	nonisolated static var debugOverride: PanelMaterial? {
+		ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_MATERIAL"].flatMap(Self.init(rawValue:))
+	}
+
+	/// 壳层 tint 浓度（证明模型里的叠加层；26 路径即 glassEffect tint，alpha=0 不施）。
+	/// 浅色通透/均衡走纯原生玻璃（0）托「苹果纯正」；厚重补白 0.74。
+	/// 深色白字 AAA 硬约束下以黑 tint 拉档差：0.76/0.70/0.82——卡面亮度上限随之单调
+	/// （0.098/0.095/0.085，见证明表），通透感由玻璃变体承担（壳层穿透率 0.19/0.15/0.09 严格单调）。
 	nonisolated func floorAlpha(isDark: Bool) -> Double {
-		guard !isDark else { return 0.81 }
 		switch self {
-		case .clear: return 0.30
-		case .balanced: return 0.50
-		case .solid: return 0.74
+		case .clear: return isDark ? 0.76 : 0.0
+		case .balanced: return isDark ? 0.70 : 0.0
+		case .solid: return isDark ? 0.82 : 0.74
 		}
 	}
 
-	/// 卡片白纱 alpha：浅色按档位区分（0.24/0.29/0.42）；深色固定 0.045
+	/// 卡面纱 alpha：所有文字的第一道墙（v1.24.0 起壳层无直露文字）。
+	/// 浅色白纱（黑字需要亮面）：0.30/0.29/0.42；深色黑纱（白字需要暗面）：0.50/0.40/0.10。
+	/// 六组参数全部经证明表锁定（卡面文字 ≥7 AAA + 亮面下限 + 穿透按档阈值）。
 	nonisolated func cardFillAlpha(isDark: Bool) -> Double {
-		guard !isDark else { return 0.045 }
 		switch self {
-		case .clear: return 0.33
-		case .balanced: return 0.29
-		case .solid: return 0.42
+		case .clear: return isDark ? 0.50 : 0.30
+		case .balanced: return isDark ? 0.40 : 0.29
+		case .solid: return isDark ? 0.10 : 0.42
 		}
 	}
+}
+
+/// 壳层玻璃档位到原生 SwiftUI 玻璃 API 的映射（macOS 26 glassEffect 的浓度选项）。
+/// 通透=`.clear`、均衡=`.regular`、厚重=`.regular`+GlassTokens 浓 tint——
+/// 三档是 Apple 材质系统里的不同真实浓度，不是同一块玻璃调 alpha。
+nonisolated enum ShellGlassVariant {
+	case clear
+	case regular
+	case regularTinted
 }

@@ -113,6 +113,8 @@ struct BatteryPopoverView: View {
 
 			// 编辑模式 chrome 过渡（v1.18.6）：提示条+按钮组淡入淡出+上缘滑入滑出，
 			// 取代 if 硬切——进出编辑模式不再"啪一下"。「减少动态效果」直给终态。
+			// v1.24.0 坐卡纱：通透/均衡档壳层=纯原生素颜玻璃（无地板 tint），
+			// 直露文字最坏对比度不保证——文字层全部坐卡面（可读性证明的锁定边界）
 			if isEditingLayout {
 				HStack(spacing: 8) {
 					// v1.18.2 文案对齐现实：编辑模式 v1.17.2 起不再显示把手（与控制条叠影），
@@ -148,7 +150,9 @@ struct BatteryPopoverView: View {
 					}
 					.buttonStyle(.plain)
 				}
-				.padding(.horizontal, 4)
+				.padding(.horizontal, 10)
+				.padding(.vertical, 6)
+				.cardSection()
 				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
 			}
 
@@ -199,14 +203,16 @@ struct BatteryPopoverView: View {
 			}
 
 			// 编辑模式的隐藏托盘：被藏起的卡片在这里，点 + 放回右列
+			// v1.24.0 坐卡纱（壳层无直露文字）
 			if isEditingLayout, !layoutDraft.hidden.isEmpty {
 				hiddenTray
+					.cardSection()
 			}
 
-			Divider()
-				.modifier(CascadeIn(step: cascadeStep(controlStep), active: didAppear))
-
+			// v1.24.0 控制行区坐卡纱：与卡片同浓度材质面（档位随动），壳层纯玻璃不再直露文字；
+			// 卡片与控制区之间的旧 Divider 随之退役——控制区自有卡面边界，素颜玻璃上不残留线条
 			controlRows
+				.cardSection()
 				.modifier(CascadeIn(step: cascadeStep(controlStep), active: didAppear))
 		}
 		.padding(.horizontal, 12)
@@ -463,7 +469,8 @@ struct BatteryPopoverView: View {
 		.accessibilityLabel(Text(label))
 	}
 
-	/// 隐藏托盘：点 + 放回（追加阅读序末尾，位置可再拖微调）
+	/// 隐藏托盘：点 + 放回（追加阅读序末尾，位置可再拖微调）。
+	/// v1.24.0 自身已坐卡纱（调用处 .cardSection()），内部无需再加面
 	private var hiddenTray: some View {
 		VStack(alignment: .leading, spacing: 6) {
 			Text("已隐藏的卡片（点 + 放回阅读序末尾）")
@@ -491,7 +498,6 @@ struct BatteryPopoverView: View {
 		}
 		.padding(8)
 		.frame(maxWidth: .infinity, alignment: .leading)
-		.glassSection()
 	}
 
 	/// 应用布局变更到工作副本

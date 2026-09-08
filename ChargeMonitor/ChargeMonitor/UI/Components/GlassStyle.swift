@@ -10,24 +10,34 @@ nonisolated enum GlassTokens {
 		isDark ? (luminance: 0.05, alpha: 0.5) : (luminance: 0.85, alpha: 0.5)
 	}
 
-	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
-	/// v1.20.0 三档材质（PanelMaterial）：通透/均衡/厚重各有地板浓度——
-	/// 每档 × 双外观的 6 组参数全部经证明表锁定（卡面黑字 AAA、亮面下限、穿透摆幅按档阈值）。
+	/// 原生 clear 玻璃材质模型（近似，v1.24.0 通透档）：比 regular 更透明、自身亮度贡献更小——
+	/// 壁纸几乎原样参与合成（模糊去高频不改均值的近似对 clear 同样成立）
+	nonisolated static func clearGlass(isDark: Bool) -> (luminance: Double, alpha: Double) {
+		isDark ? (luminance: 0.10, alpha: 0.20) : (luminance: 0.90, alpha: 0.15)
+	}
+
+	/// 外壳壳层 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
+	/// v1.24.0 材质档位：浅色通透/均衡走纯原生玻璃（tint 0），厚重补白 0.74；
+	/// 深色三档以黑 tint 浓度拉开（0.76/0.70/0.82，白字 AAA 物理下限内的档差）。
+	/// 26 路径即 glassEffect tint 浓度；也是 15–25/证明模型的近似叠加层。
 	nonisolated static func shellFloorTint(isDark: Bool, material: PanelMaterial = .balanced) -> (luminance: Double, alpha: Double) {
 		(luminance: isDark ? 0.0 : 1.0, alpha: material.floorAlpha(isDark: isDark))
 	}
 
-	/// 卡片分区填充（v1.20.0 材质化）：浅色=白纱（抗透底且卡片不发暗）、深色=极淡 primary 白。
-	/// 浓度随档位：通透最淡、厚重最实。「增加对比度」在档位浓度上加倍。
+	/// 卡片分区填充（v1.24.0 材质化）：浅色=白纱（黑字需要亮面）、深色=黑纱（白字需要暗面）。
+	/// 浓度随档位（浅 0.30/0.29/0.42，深 0.50/0.40/0.10），全部经证明表锁定。
+	/// 「增加对比度」在档位浓度上加倍并钳到 0.5（仅深色厚重 0.10→0.20 不触钳）
 	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool, material: PanelMaterial = .balanced) -> Color {
-		if isDark { return Color.primary.opacity(material.cardFillAlpha(isDark: true) * (increased ? 2 : 1)) }
-		return Color.white.opacity(material.cardFillAlpha(isDark: false) * (increased ? 2 : 1))
+		let alpha = min(material.cardFillAlpha(isDark: isDark) * (increased ? 2 : 1), 0.5)
+		if isDark { return Color.black.opacity(alpha) }
+		return Color.white.opacity(alpha)
 	}
 
-	/// 卡片填充的证明模型（与上面颜色同源：浅色白纱 lum 1.0；深色 primary 白 lum 1.0）
+	/// 卡片填充的证明模型（与上面颜色同源：浅色白纱 lum 1.0；深色黑纱 lum 0.0）
 	nonisolated static func cardSectionFillModel(increased: Bool, isDark: Bool, material: PanelMaterial = .balanced) -> (luminance: Double, alpha: Double) {
-		if isDark { return (luminance: 1.0, alpha: material.cardFillAlpha(isDark: true) * (increased ? 2 : 1)) }
-		return (luminance: 1.0, alpha: material.cardFillAlpha(isDark: false) * (increased ? 2 : 1))
+		let alpha = min(material.cardFillAlpha(isDark: isDark) * (increased ? 2 : 1), 0.5)
+		if isDark { return (luminance: 0.0, alpha: alpha) }
+		return (luminance: 1.0, alpha: alpha)
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
@@ -176,16 +186,20 @@ private struct BadgeBackground: ViewModifier {
 	}
 }
 
-// 面板外壳实现：玻璃 + 自适应亮度地板（材质档位来自配置，三档经证明表锁定）。
+// 面板外壳实现：三档=苹果原生玻璃三选一（v1.24.0，档位见 PanelMaterial.shellGlassVariant）。
+// 通透=原生 .clear、均衡=原生 .regular、厚重=原生 .regular+浓 tint——档差由材质本体承担，
+// 不再是同块玻璃调 alpha。26 路径不再手绘顶边高光/底部内阴影：原生玻璃自带边缘镜面与厚度，
+// 叠画反成"假玻璃"痕迹（15–25 降级路径无玻璃 API，保留原材质语汇）。
 // 「降低透明度」显式分支：不透明纯色底，不走玻璃（对比度退化为常数，必达标）。
-// 顶边镜面高光 + 底部内阴影 = §二 材质语汇：内容 12pt 内缩避开亮边
 private struct PanelShellModifier: ViewModifier {
 	@Environment(\.colorScheme) private var colorScheme
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-	// 材质档位直读服务单例（MainActor）：设置里切换材质后，面板下次渲染即跟随
+	// 材质档位直读服务单例（MainActor）：设置里切换材质后，面板下次渲染即跟随；
+	// 目检注入口 MIAODIAN_DEBUG_MATERIAL 覆盖配置档位（2.0.0 移除）
 	private var material: PanelMaterial {
-		AppServices.shared.configurationManager.configuration.panelMaterial
+		if let debug = PanelMaterial.debugOverride { return debug }
+		return AppServices.shared.configurationManager.configuration.panelMaterial
 	}
 
 	@ViewBuilder
@@ -199,16 +213,33 @@ private struct PanelShellModifier: ViewModifier {
 		} else if #available(macOS 26.0, *) {
 			let floor = GlassTokens.shellFloorTint(isDark: isDark, material: material)
 			let floorColor = isDark ? Color.black.opacity(floor.alpha) : Color.white.opacity(floor.alpha)
+			// 档位=原生玻璃变体；壳层 tint 浓度>0 时施（浅色通透/均衡为 0 = 纯原生素颜）
+			switch material.shellGlassVariant {
+			case .clear:
+				if floor.alpha > 0 {
+					content.glassEffect(.clear.tint(floorColor), in: shape)
+				} else {
+					content.glassEffect(.clear, in: shape)
+				}
+			case .regular:
+				if floor.alpha > 0 {
+					content.glassEffect(.regular.tint(floorColor), in: shape)
+				} else {
+					content.glassEffect(.regular, in: shape)
+				}
+			case .regularTinted:
+				content.glassEffect(.regular.tint(floorColor), in: shape)
+			}
+		} else {
 			content
-				.glassEffect(.regular.tint(floorColor), in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
+				.background(.regularMaterial, in: shape)
 				.overlay(alignment: .top) { specular }
 				.overlay(alignment: .bottom) { bottomShade }
-		} else {
-			content.background(.regularMaterial, in: shape)
 		}
 	}
 
-	/// 顶边镜面高光：~1pt 亮线向下渐隐（26pt 内衰减到 0），纯加光不改变文字对比度判定
+	/// 顶边镜面高光（仅 15–25 降级路径）：~1pt 亮线向下渐隐（26pt 内衰减到 0），
+	/// 纯加光不改变文字对比度判定。26 路径的原生玻璃自带边缘镜面，不再叠画
 	private var specular: some View {
 		LinearGradient(
 			colors: [.white.opacity(0.32), .white.opacity(0)],
@@ -221,7 +252,7 @@ private struct PanelShellModifier: ViewModifier {
 		.accessibilityHidden(true)
 	}
 
-	/// 底部极淡内阴影：与顶边高光一起给"一块玻璃"厚度暗示
+	/// 底部极淡内阴影（仅 15–25 降级路径）：与顶边高光一起给"一块玻璃"厚度暗示
 	private var bottomShade: some View {
 		LinearGradient(
 			colors: [.black.opacity(0), .black.opacity(0.05)],
@@ -241,9 +272,10 @@ private struct CardSectionModifier: ViewModifier {
 	@Environment(\.colorSchemeContrast) private var contrast
 	@Environment(\.colorScheme) private var colorScheme
 
-	// 材质档位直读服务单例（MainActor）：与面板外壳同源，设置切换后即时跟随
+	// 材质档位直读服务单例（MainActor）：与面板外壳同源（含目检注入口），设置切换后即时跟随
 	private var material: PanelMaterial {
-		AppServices.shared.configurationManager.configuration.panelMaterial
+		if let debug = PanelMaterial.debugOverride { return debug }
+		return AppServices.shared.configurationManager.configuration.panelMaterial
 	}
 
 	func body(content: Content) -> some View {

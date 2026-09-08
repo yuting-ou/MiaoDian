@@ -1445,21 +1445,8 @@ do {
 do {
 	let proof = ReadabilityProof.self
 
-	// 材质模型（与 GlassTokens 同源——实现与证明共用同一份数值）
-	let baseLight = GlassTokens.baseGlass(isDark: false)
-	let baseDark = GlassTokens.baseGlass(isDark: true)
-	let floorLight = GlassTokens.shellFloorTint(isDark: false)
-	let floorDark = GlassTokens.shellFloorTint(isDark: true)
+	// 材质模型（与 GlassTokens 同源——实现与证明共用同一份数值；逐档变体在 materialLayers 里取）
 
-	// 外壳合成亮度范围（任意壁纸亮度全域的最坏情况）
-	let shellLight = proof.stackedLuminanceRange(layers: [
-		(luminance: floorLight.luminance, alpha: floorLight.alpha),
-		(luminance: baseLight.luminance, alpha: baseLight.alpha),
-	])
-	let shellDark = proof.stackedLuminanceRange(layers: [
-		(luminance: floorDark.luminance, alpha: floorDark.alpha),
-		(luminance: baseDark.luminance, alpha: baseDark.alpha),
-	])
 	// 降低透明度：不透明纯色底（常数亮度）
 	let opaqueLight = GlassTokens.opaqueSurface(isDark: false).luminance
 	let opaqueDark = GlassTokens.opaqueSurface(isDark: true).luminance
@@ -1468,82 +1455,103 @@ do {
 	let primaryLight = 0.0
 	let primaryDark = 1.0
 
-	// 标签（primary 85%）：sRGB 通道合成到壳面上的有效亮度
-	func labelLum(_ surfaceLum: Double, isDark: Bool) -> Double {
+	// —— 壳层直露文字证明（v1.24.0 移除）——
+	// v1.20 时代壳层承载控制行/编辑条文字，壳层对比度是硬证明；v1.24.0 起这些文字全部
+	// 改坐卡纱（卡面对比度由下方逐档证明锁死），壳层只剩分隔线等非文字元素。
+	// 通透/均衡档浅色为 0 tint 纯原生素颜，壳层最坏对比度天然不达 AAA——
+	// 这不再是缺陷：文字不允许出现在壳层上，玻璃只负责透出壁纸。
+
+	// —— 材质三档证明 v1.24.0（材质=原生玻璃变体，每档各自建模逐档锁）——
+	// v1.20.0 教训：三档只差同块玻璃上的白纱 alpha，肉眼不可辨；深色三档同参像素级相同。
+	// v1.24.0：通透=clear 玻璃+0 tint、均衡=regular 玻璃+0 tint、厚重=regular+浓 tint（浅白/深黑）；
+	// 所有文字坐卡面（壳层不再直露文字，控制行/编辑条/托盘已改坐卡纱），证明边界=卡面文字 AAA。
+	// 每档 × 双外观：卡区堆栈（玻璃→壳层tint→卡纱）穿透摆幅按档阈值锁定（浅 0.62/0.38/0.10），
+	// 外加白纱不压暗（浅）、亮面下限（浅）、卡面文字 AAA（浅黑字/深白字）。
+	for material in PanelMaterial.allCases {
+		// 每档各自的玻璃变体材质模型（clear/regular 都近似为 alpha 混合）
+		let glassL = material == .clear ? GlassTokens.clearGlass(isDark: false) : GlassTokens.baseGlass(isDark: false)
+		let glassD = material == .clear ? GlassTokens.clearGlass(isDark: true) : GlassTokens.baseGlass(isDark: true)
+		let floorL = GlassTokens.shellFloorTint(isDark: false, material: material)
+		let floorD = GlassTokens.shellFloorTint(isDark: true, material: material)
+
+		// 浅色：玻璃→白tint地板→白纱卡面；黑字
+		let fillL = GlassTokens.cardSectionFillModel(increased: false, isDark: false, material: material)
+		let cardStackL = proof.stackedLuminanceRange(layers: [
+			(luminance: fillL.luminance, alpha: fillL.alpha),
+			(luminance: floorL.luminance, alpha: floorL.alpha),
+			(luminance: glassL.luminance, alpha: glassL.alpha),
+		])
+		let interferenceL = cardStackL.max - cardStackL.min
+		let shellOnlyL = proof.stackedLuminanceRange(layers: [
+			(luminance: floorL.luminance, alpha: floorL.alpha),
+			(luminance: glassL.luminance, alpha: glassL.alpha),
+		])
+		let textContrastL = proof.contrast(textLuminance: 0.0, against: cardStackL)
+		print(String(format: "材质证明[浅·%@] 摆幅 %.3f≤%.2f · 卡面 %.3f..%.3f · 黑字 %.1f:1",
+			material.title, interferenceL, material.interferenceTolerance, cardStackL.min, cardStackL.max, textContrastL))
+		expect(interferenceL <= material.interferenceTolerance,
+			"材质证明[浅·\(material.title)]：穿透摆幅按档阈值（\(material.title) 档定义）")
+		expect(cardStackL.min >= shellOnlyL.min && cardStackL.max >= shellOnlyL.max,
+			"材质证明[浅·\(material.title)]：白纱不压暗（卡面 ≥ 同位置裸壳）")
+		expect(cardStackL.max >= 0.88, "材质证明[浅·\(material.title)]：亮背景下卡面 ≥0.88（通透但不发灰）")
+		expect(textContrastL >= 7.0, "材质证明[浅·\(material.title)]：卡面黑字 ≥7 (AAA)")
+
+		// 深色：玻璃→黑tint地板→黑纱卡面；白字（v1.24.0 档差在深色也存在，逐档证明）
+		let fillD = GlassTokens.cardSectionFillModel(increased: false, isDark: true, material: material)
+		let cardStackD = proof.stackedLuminanceRange(layers: [
+			(luminance: fillD.luminance, alpha: fillD.alpha),
+			(luminance: floorD.luminance, alpha: floorD.alpha),
+			(luminance: glassD.luminance, alpha: glassD.alpha),
+		])
+		let interferenceD = cardStackD.max - cardStackD.min
+		let textContrastD = proof.contrast(textLuminance: 1.0, against: cardStackD)
+		print(String(format: "材质证明[深·%@] 摆幅 %.3f≤0.12 · 卡面 %.3f..%.3f · 白字 %.1f:1",
+			material.title, interferenceD, cardStackD.min, cardStackD.max, textContrastD))
+		expect(interferenceD <= 0.12, "材质证明[深·\(material.title)]：穿透摆幅 ≤0.12（AAA 白字物理下限）")
+		expect(textContrastD >= 7.0, "材质证明[深·\(material.title)]：卡面白字 ≥7 (AAA)")
+	}
+	// 深色档差存在性：三档卡面亮度上限单调（通透最透、厚重最实）——防止退回"同参像素级相同"
+	let darkMaxClear = proof.stackedLuminanceRange(layers: materialLayers(.clear, isDark: true)).max
+	let darkMaxBalanced = proof.stackedLuminanceRange(layers: materialLayers(.balanced, isDark: true)).max
+	let darkMaxSolid = proof.stackedLuminanceRange(layers: materialLayers(.solid, isDark: true)).max
+	expect(darkMaxClear > darkMaxBalanced && darkMaxBalanced > darkMaxSolid,
+		"材质证明[深]：三档卡面亮度上限严格单调（档差肉眼可辨的数学前提）")
+	expect(PanelMaterial.clear.floorAlpha(isDark: true) != PanelMaterial.balanced.floorAlpha(isDark: true),
+		"材质证明[深]：通透/均衡壳层 tint 不同（档差不只靠卡纱）")
+
+	// 卡面文字对比度回归底线（逐档证明已锁 AAA；此处防未来调参只盯均值忘最坏）。
+	// 除 primary 关键数字外，把卡面标签（primary 85%，卡上最常见文字形态）也逐档锁 ≥4.5 AA
+	for material in PanelMaterial.allCases {
+		let stackL = proof.stackedLuminanceRange(layers: materialLayers(material, isDark: false))
+		let stackD = proof.stackedLuminanceRange(layers: materialLayers(material, isDark: true))
+		expect(proof.contrast(textLuminance: primaryLight, against: stackL) >= 7.0
+			&& proof.contrast(textLuminance: primaryDark, against: stackD) >= 7.0,
+			"可读性证明：[\(material.title)]抗透底调参后卡面文字对比度不回退")
+		let labelL = proof.contrast(textLuminance: labelLuminance(surface: stackL.min, isDark: false), against: stackL)
+		let labelD = proof.contrast(textLuminance: labelLuminance(surface: stackD.max, isDark: true), against: stackD)
+		expect(min(labelL, labelD) >= 4.5, "可读性证明：[\(material.title)]卡面标签 85% ≥4.5 (AA)")
+	}
+
+	// 标签（primary 85%）在 sRGB 通道向表面色合成的有效亮度（向表面偏移 85%）；
+	// 断言取对标签最不利的表面端点（浅色取最暗端、深色取最亮端）
+	func labelLuminance(surface: Double, isDark: Bool) -> Double {
 		let alpha = GlassTokens.labelOnGlassAlpha
-		let surfaceSrgb = pow(max(surfaceLum, 0), 1 / 2.2)
+		let surfaceSrgb = pow(max(surface, 0), 1 / 2.2)
 		let textSrgb = isDark ? alpha + (1 - alpha) * surfaceSrgb : (1 - alpha) * surfaceSrgb
 		return pow(textSrgb, 2.2)
 	}
-	func worstLabel(_ surface: (min: Double, max: Double), isDark: Bool) -> Double {
-		min(proof.contrast(labelLum(surface.min, isDark: isDark), surface.min),
-			proof.contrast(labelLum(surface.max, isDark: isDark), surface.max))
+
+	// 每档材质的卡区证明堆栈（玻璃变体→壳层tint→卡纱），供上方逐档锁与档差单调断言共用
+	func materialLayers(_ material: PanelMaterial, isDark: Bool) -> [(luminance: Double, alpha: Double)] {
+		let glass = material == .clear ? GlassTokens.clearGlass(isDark: isDark) : GlassTokens.baseGlass(isDark: isDark)
+		let floor = GlassTokens.shellFloorTint(isDark: isDark, material: material)
+		let fill = GlassTokens.cardSectionFillModel(increased: false, isDark: isDark, material: material)
+		return [
+			(luminance: fill.luminance, alpha: fill.alpha),
+			(luminance: floor.luminance, alpha: floor.alpha),
+			(luminance: glass.luminance, alpha: glass.alpha),
+		]
 	}
-
-	// —— 浅色外观（当前用户的实际配置）——
-	let cLightPrimary = proof.contrast(textLuminance: primaryLight, against: shellLight)
-	print(String(format: "证明表[浅·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cLightPrimary))
-	expect(cLightPrimary >= 7.0, "可读性证明：浅色壳 primary/关键数字 ≥7 (AAA)")
-	let cLightLabel = worstLabel(shellLight, isDark: false)
-	print(String(format: "证明表[浅·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cLightLabel))
-	expect(cLightLabel >= 4.5, "可读性证明：浅色壳标签 ≥4.5 (AA)")
-
-	// —— 深色外观 ——
-	let cDarkPrimary = proof.contrast(textLuminance: primaryDark, against: shellDark)
-	print(String(format: "证明表[深·壳·primary/关键数字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cDarkPrimary))
-	expect(cDarkPrimary >= 7.0, "可读性证明：深色壳 primary/关键数字 ≥7 (AAA)")
-	let cDarkLabel = worstLabel(shellDark, isDark: true)
-	print(String(format: "证明表[深·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cDarkLabel))
-	expect(cDarkLabel >= 4.5, "可读性证明：深色壳标签 ≥4.5 (AA)")
-
-	// —— 材质三档证明 v1.20.0（干扰度+通透+对比度，三道锁 × 每档）——
-	// 壳层地板只保证文字对表面的对比度，不管背景高亮细节（白底黑字窗口）穿透进来
-	// 干扰图表区。每档材质 × 双外观：卡内容区堆栈（玻璃→地板→卡白纱）的穿透摆幅
-	// 按档阈值锁定（通透 0.24 / 均衡 0.18 / 厚重 0.10——档位定义本身），
-	// 外加通透不变式（白纱不压暗）、亮面下限、卡面黑字 AAA。填充用白纱（lum 1.0）。
-	for material in PanelMaterial.allCases {
-		let floorM = GlassTokens.shellFloorTint(isDark: false, material: material)
-		let fillM = GlassTokens.cardSectionFillModel(increased: false, isDark: false, material: material)
-		let cardStack = proof.stackedLuminanceRange(layers: [
-			(luminance: fillM.luminance, alpha: fillM.alpha),
-			(luminance: floorM.luminance, alpha: floorM.alpha),
-			(luminance: baseLight.luminance, alpha: baseLight.alpha),
-		])
-		let interference = cardStack.max - cardStack.min
-		let shellOnly = proof.stackedLuminanceRange(layers: [
-			(luminance: floorM.luminance, alpha: floorM.alpha),
-			(luminance: baseLight.luminance, alpha: baseLight.alpha),
-		])
-		let textContrast = proof.contrast(textLuminance: 0.0, against: cardStack)
-		print(String(format: "材质证明[浅·%@] 摆幅 %.3f≤%.2f · 卡面 %.3f..%.3f · 黑字 %.1f:1",
-			material.title, interference, material.interferenceTolerance, cardStack.min, cardStack.max, textContrast))
-		expect(interference <= material.interferenceTolerance,
-			"材质证明[\(material.title)]：穿透摆幅按档阈值（\(material.title) 档定义）")
-		expect(cardStack.min >= shellOnly.min && cardStack.max >= shellOnly.max,
-			"材质证明[\(material.title)]：白纱不压暗（卡面 ≥ 同位置裸壳）")
-		expect(cardStack.max >= 0.88, "材质证明[\(material.title)]：亮背景下卡面 ≥0.88（通透但不发灰）")
-		expect(textContrast >= 7.0, "材质证明[\(material.title)]：卡面黑字 ≥7 (AAA)")
-	}
-	// 深色：三档同参（白字 AAA 要求深色面板近不透明），按均衡参数证明一次
-	let cardFillModelDark = GlassTokens.cardSectionFillModel(increased: false, isDark: true)
-	let cardStackDark = proof.stackedLuminanceRange(layers: [
-		(luminance: cardFillModelDark.luminance, alpha: cardFillModelDark.alpha),
-		(luminance: floorDark.luminance, alpha: floorDark.alpha),
-		(luminance: baseDark.luminance, alpha: baseDark.alpha),
-	])
-	let interferenceDark = cardStackDark.max - cardStackDark.min
-	print(String(format: "证明表[深·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.12)", interferenceDark))
-	expect(interferenceDark <= 0.12, "可读性证明：深色卡片内容区背景穿透摆幅 ≤0.12")
-	// 三档深色同参：floor/card alpha 全等（深色通透空间物理不存在，见 PanelMaterial 注）
-	for material in PanelMaterial.allCases {
-		expect(material.floorAlpha(isDark: true) == PanelMaterial.balanced.floorAlpha(isDark: true),
-			"材质证明[深·\(material.title)]：与均衡同参（深色 AAA 约束）")
-		expect(material.cardFillAlpha(isDark: true) == PanelMaterial.balanced.cardFillAlpha(isDark: true),
-			"材质证明[深·\(material.title)]：卡纱与均衡同参")
-	}
-
-	// 既有文字对比度断言只升不降（地板加白对黑字单调有利，回归守住）
-	expect(cLightPrimary >= 7.0 && cLightLabel >= 4.5, "可读性证明：抗透底调参后文字对比度不回退")
 
 	// —— 降低透明度（不透明纯色底）——
 	let opaqueLightRange = (min: opaqueLight, max: opaqueLight)
@@ -2749,10 +2757,21 @@ do {
 	let matBadJSON = #"{"panelMaterial":"bogus"}"#.data(using: .utf8)!
 	let matBad = try! JSONDecoder().decode(AppConfiguration.self, from: matBadJSON)
 	expect(matBad.panelMaterial == .balanced, "材质：非法值解码回退均衡")
-	// 三档浅色参数单调（通透 < 均衡 < 厚重：地板与卡纱浓度随档递增）
-	expect(PanelMaterial.clear.floorAlpha(isDark: false) < PanelMaterial.balanced.floorAlpha(isDark: false)
-		&& PanelMaterial.balanced.floorAlpha(isDark: false) < PanelMaterial.solid.floorAlpha(isDark: false),
-		"材质：浅色地板浓度按档单调递增")
+	// 三档浅色档位语义：通透/均衡走纯原生玻璃（0 tint，苹果素颜），厚重补白地板——
+	// 档差由玻璃变体承担（clear≠regular），不以 tint 浓度单调为前提
+	expect(PanelMaterial.clear.floorAlpha(isDark: false) == 0 && PanelMaterial.balanced.floorAlpha(isDark: false) == 0
+		&& PanelMaterial.solid.floorAlpha(isDark: false) > 0,
+		"材质：浅色通透/均衡纯原生素颜（0 tint），厚重补地板")
+	// 壳层玻璃变体三档互异（档位=原生玻璃选项本身，不是同块玻璃调 alpha）
+	expect(PanelMaterial.clear.shellGlassVariant != PanelMaterial.balanced.shellGlassVariant
+		&& PanelMaterial.balanced.shellGlassVariant != PanelMaterial.solid.shellGlassVariant,
+		"材质：三档映射互异的原生玻璃变体（clear/regular/regular+tint）")
+	// 深色参数也逐档互异（v1.20.0 深色三档同参像素级相同的教训）
+	expect(PanelMaterial.clear.floorAlpha(isDark: true) != PanelMaterial.balanced.floorAlpha(isDark: true)
+		&& PanelMaterial.balanced.floorAlpha(isDark: true) != PanelMaterial.solid.floorAlpha(isDark: true)
+		&& PanelMaterial.clear.cardFillAlpha(isDark: true) != PanelMaterial.balanced.cardFillAlpha(isDark: true)
+		&& PanelMaterial.balanced.cardFillAlpha(isDark: true) != PanelMaterial.solid.cardFillAlpha(isDark: true),
+		"材质：深色三档参数逐档互异（档差在深色也存在）")
 	// 干扰容忍度单调（通透最宽、厚重最严）
 	expect(PanelMaterial.clear.interferenceTolerance > PanelMaterial.balanced.interferenceTolerance
 		&& PanelMaterial.balanced.interferenceTolerance > PanelMaterial.solid.interferenceTolerance,
