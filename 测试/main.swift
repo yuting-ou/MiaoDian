@@ -2071,6 +2071,12 @@ do {
 	expect(BatteryAlertController.isQuietHour(23, start: 23, end: 8), "免打扰：23 点开始")
 	expect(BatteryAlertController.isQuietHour(3, start: 23, end: 8), "免打扰：凌晨 3 点静音")
 	expect(!BatteryAlertController.isQuietHour(8, start: 23, end: 8), "免打扰：8 点整已结束")
+	// 免打扰结束补发（v1.19.1）：静默窗口有时效边界——23-8 之外的时刻不再静音，
+	// 调用方（flag 不落位）在窗口结束后下一轮即可补发；这里锁边界判定不回归
+	expect(!BatteryAlertController.isQuietHour(22, start: 23, end: 8), "免打扰：22 点未开始（可发）")
+	expect(!BatteryAlertController.isQuietHour(12, start: 23, end: 8), "免打扰：正午可发（跨零点窗口外）")
+	// 关闭态（起止相同）不静音任何时段
+	expect(!BatteryAlertController.isQuietHour(3, start: 8, end: 8), "免打扰：起止相同视为关闭")
 	expect(!BatteryAlertController.isQuietHour(12, start: 23, end: 8), "免打扰：白天不静音")
 
 	// 同日区间：1 点–5 点

@@ -178,12 +178,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let isFullOnAdapter = snapshot.powerSource == .powerAdapter && snapshot.isFull
 		if isFullOnAdapter {
 			guard !didNotifyFull, alertEnabled(.alertFull) else { return }
-			didNotifyFull = true
-			send(
+			if send(
 				id: "battery-full",
 				title: "电池已充满",
 				body: "电量 100%，可以拔掉电源了"
-			)
+			) {
+				didNotifyFull = true
+			}
 		} else {
 			didNotifyFull = false
 		}
@@ -196,13 +197,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		
 		if isLowOnBattery {
 			guard !didNotifyLowBattery, alertEnabled(.alertLowBattery) else { return }
-			didNotifyLowBattery = true
-			send(
+			// urgent 走免打扰旁路必投递；统一走 if send 形态防未来语义变化引入静默吞（v1.19.1）
+			if send(
 				id: "battery-low",
 				title: "电量不足",
 				body: "当前电量 \(soc)%，请及时连接电源",
 				urgent: true
-			)
+			) {
+				didNotifyLowBattery = true
+			}
 		} else if snapshot.powerSource == .powerAdapter || soc >= threshold + 5 {
 			didNotifyLowBattery = false
 		}
@@ -214,12 +217,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		
 		if temperature >= threshold {
 			guard !didNotifyHighTemperature, alertEnabled(.alertHighTemperature) else { return }
-			didNotifyHighTemperature = true
-			send(
+			if send(
 				id: "battery-hot",
 				title: "电池温度偏高",
 				body: String(format: "当前 %.1f°C，建议移到通风处，避免边充电边高负荷使用", temperature)
-			)
+			) {
+				didNotifyHighTemperature = true
+			}
 		} else if temperature < threshold - 2 {
 			didNotifyHighTemperature = false
 		}
@@ -238,13 +242,14 @@ final class BatteryAlertController: NSObject, ObservableObject {
 				snoozeUntil: defaults.object(forKey: Self.chargeCareSnoozeKey) as? Date,
 				now: Date()
 			) else { return }
-			didNotifyChargeCare = true
-			send(
+			if send(
 				id: "charge-care",
 				title: "已充到 \(soc)%",
 				body: "想保养电池的话，现在就可以拔电源了",
 				category: Self.chargeCareCategoryID
-			)
+			) {
+				didNotifyChargeCare = true
+			}
 		} else if snapshot.powerSource != .powerAdapter || soc < threshold - 5 {
 			// 重置条件看“拔没拔电源”而非“在不在充电”：
 			// 系统优化充电会在 80% 附近反复暂停/恢复充电，
@@ -287,12 +292,14 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		for device in devices {
 			if device.percent <= threshold, device.percent > 0 {
 				guard !notifiedLowDevices.contains(device.name) else { continue }
-				notifiedLowDevices.insert(device.name)
-				send(
+				// 免打扰被吞时不入集合——下轮条件仍成立则补发（v1.19.1）
+				if send(
 					id: "device-low-\(device.name)",
 					title: "外设电量不足",
 					body: "\(device.name) 只剩 \(device.percent)%，记得充电"
-				)
+				) {
+					notifiedLowDevices.insert(device.name)
+				}
 			} else if device.percent >= threshold + Self.deviceLowResetMargin {
 				notifiedLowDevices.remove(device.name)
 			}
@@ -315,12 +322,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let isAbnormal = lastSnapshot.powerSource == .battery && rate >= threshold
 		if isAbnormal {
 			guard !didNotifyHighDrain, alertEnabled(.alertHighDrain) else { return }
-			didNotifyHighDrain = true
 			var body = String(format: "最近一小时掉电 %.0f%%/小时，比平时快不少", rate)
 			if let culprit = monitor?.significantEnergyApps.first?.name, !culprit.isEmpty {
 				body += "，「\(culprit)」正在高耗电"
 			}
-			send(id: "high-drain", title: "掉电有点快", body: body)
+			if send(id: "high-drain", title: "掉电有点快", body: body) {
+				didNotifyHighDrain = true
+			}
 		} else if lastSnapshot.powerSource != .battery || rate < threshold - Self.highDrainResetMargin {
 			didNotifyHighDrain = false
 		}
@@ -341,12 +349,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let minutesToThreshold = Double(soc - threshold) / rate * 60
 		if minutesToThreshold <= Self.lowForecastLeadMinutes {
 			guard !didNotifyLowForecast, alertEnabled(.alertLowForecast) else { return }
-			didNotifyLowForecast = true
-			send(
+			if send(
 				id: "low-forecast",
 				title: "电量快要告急",
 				body: "按当前掉电速度，约 \(Int(minutesToThreshold)) 分钟后就到 \(threshold)% 了，附近有插座就充上吧"
-			)
+			) {
+				didNotifyLowForecast = true
+			}
 		} else if minutesToThreshold > Self.lowForecastLeadMinutes * 2 {
 			// 掉速回落、缓冲充足后才重置，避免在临界点反复横跳
 			didNotifyLowForecast = false
@@ -363,13 +372,14 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		guard snapshot.isCharging, !snapshot.isFull else { return }
 		guard let minutes = snapshot.timeToFullChargeMinutes, minutes >= 10 else { return }
 		guard !didNotifyFullForecast, alertEnabled(.alertFullForecast) else { return }
-		
-		didNotifyFullForecast = true
-		send(
+
+		if send(
 			id: "full-forecast",
 			title: "开始充电",
 			body: "预计 \(DurationFormatter.clockText(afterMinutes: minutes)) 充满（还需 \(DurationFormatter.chinese(minutes: minutes))）"
-		)
+		) {
+			didNotifyFullForecast = true
+		}
 	}
 	
 	// 温度骤升：不等到高温线，短时间内快速升温就先提个醒
@@ -391,12 +401,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		
 		if delta >= Self.tempSurgeDeltaC, celsius >= Self.tempSurgeMinC {
 			guard !didNotifyTempSurge, alertEnabled(.alertTempSurge) else { return }
-			didNotifyTempSurge = true
-			send(
+			if send(
 				id: "temp-surge",
 				title: "温度上升较快",
 				body: String(format: "5 分钟内从 %.1f°C 升到 %.1f°C，留意下是不是在跑重任务或散热不良", baseline.celsius, celsius)
-			)
+			) {
+				didNotifyTempSurge = true
+			}
 		} else if delta < 1 {
 			didNotifyTempSurge = false
 		}
@@ -418,15 +429,20 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			return
 		}
 		defaults.set(health, forKey: Self.healthMilestoneKey)
-		
+
 		guard alertEnabled(.alertHealthMilestone) else { return }
 		guard let crossed = Self.healthMilestones.first(where: { stored > $0 && health <= $0 }) else { return }
 		let suffix = crossed == 80 ? "，已到官方建议检测电池的参考线" : "，属正常老化，留意即可"
-		send(
+		// 里程碑是单向永久标记（defaults.set 已先行）：免打扰被吞的话这一档提醒永久丢失——
+		// 但重发也无从谈起（阈值穿越是一次性事件），所以这里要求投递失败时把标记回退，
+		// 让免打扰结束后下一轮若仍在阈值下方可补发（v1.19.1）
+		if !send(
 			id: "health-milestone-\(crossed)",
 			title: "电池健康度跌破 \(crossed)%",
 			body: "当前健康度 \(health)%" + suffix
-		)
+		) {
+			defaults.set(stored, forKey: Self.healthMilestoneKey)
+		}
 	}
 	
 	private func evaluateSlowCharge(_ snapshot: BatterySnapshot) {
@@ -446,14 +462,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let negotiatedWatts = Double(voltageMV) * Double(currentMA) / 1_000_000.0
 		guard negotiatedWatts < Double(rated) * Self.slowChargeRatio else { return }
 		guard !didNotifySlowCharge else { return }
-		
-		didNotifySlowCharge = true
-		send(
+
+		if send(
 			id: "slow-charge",
 			title: "检测到慢充",
 			body: String(format: "协商档位仅 %.0fW（充电器额定 %dW），请检查数据线或接口", negotiatedWatts, rated),
 			category: Self.slowChargeCategoryID
-		)
+		) {
+			didNotifySlowCharge = true
+		}
 	}
 	
 	// 睡眠掉电异常：合盖一觉掉得太多，多半是有应用在阻止休眠或“断电时唤醒”在捣鬼
@@ -461,15 +478,19 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		guard isEnabled, configuration.enabledOptions.contains(.sleepDrainReport) else { return }
 		let lastAlerted = defaults.object(forKey: Self.sleepDrainAlertedKey) as? Date
 		guard Self.shouldAlertSleepDrain(record: record, now: Date(), lastAlertedWakeDate: lastAlerted) else { return }
-		// 先记账再发：哪怕通知投递失败，也不靠重复轰炸来“补偿”
-		defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
 
 		// 元凶名单由历史记录器在醒来时抓取并留档，这里直接复述
 		var body = String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
 		if let owners = record.culpritNames, !owners.isEmpty {
 			body += "\n正在阻止睡眠：\(owners.joined(separator: "、"))"
 		}
-		send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
+		// 先记账再发（针对"投递失败不重复轰炸"）：系统通知中心 add 失败仍算已投递、标记照落。
+		// v1.19.1 起 send 的 false 只表示"免打扰静默"——这种不记账，新鲜度窗口内免打扰结束
+		// 后补发一次（shouldAlertSleepDrain 的去重保证不轰炸）
+		let delivered = send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
+		if delivered {
+			defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
+		}
 	}
 	
 	// 纯判定，供单测直接调：
@@ -643,8 +664,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		return Self.isQuietHour(hour, start: configuration.quietHoursStartHour, end: configuration.quietHoursEndHour)
 	}
 
-	private func send(id: String, title: String, body: String, urgent: Bool = false, category: String = "") {
-		if isInQuietHours, !urgent { return }
+	// 发送通知（v1.19.1 返回值语义化）：返回是否真正投递——免打扰时段非紧急通知被
+	// 静默跳过时返回 false，调用方不落”已通知”标记，免打扰结束、条件仍成立时下一轮补发
+	// （此前 flag 在 send 前落位，夜间被吞的提醒永远丢失——健康里程碑尤其致命，一次性）。
+	@discardableResult
+	private func send(id: String, title: String, body: String, urgent: Bool = false, category: String = "") -> Bool {
+		if isInQuietHours, !urgent { return false }
 
 		let content = UNMutableNotificationContent()
 		content.title = title
@@ -652,7 +677,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		content.sound = .default
 		content.categoryIdentifier = category
 		// 紧急提醒（低电量等）标为时效性通知，专注模式下才真正能穿透；
-		// 需要用户在系统设置里授予“时效性通知”权限，未授予时按普通通知处理
+		// 需要用户在系统设置里授予”时效性通知”权限，未授予时按普通通知处理
 		content.interruptionLevel = urgent ? .timeSensitive : .active
 
 		let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
@@ -661,6 +686,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 				DiagnosticLog.failureOnce("notification-send-failed", category: "BatteryAlertController", "发送通知失败：\(error.localizedDescription)")
 			}
 		}
+		return true
 	}
 
 	// MARK: - 可交互通知
