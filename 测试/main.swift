@@ -2840,6 +2840,68 @@ do {
 	expect(noName.contains("峰值67W") && !noName.contains("Anker"), "记录显头：认不出时安静省略，不留空段")
 }
 
+// MARK: - 视觉状态解析器（动效诚实性：数据驱动、单调、缺失退安静）
+
+do {
+	// 优先级：充电 > 已充满 > 低电 > 正常（插电低电 = 待充电不是危机，与头部 isLowBattery 同口径）
+	expect(BatteryVisualResolver.fillMood(isCharging: true, isFull: false, onBatteryPower: false, socPercent: 15, lowBatteryThreshold: 20) == .charging,
+		   "视觉 mood：充电优先于低电（插着电的 15% 是待充电）")
+	expect(BatteryVisualResolver.fillMood(isCharging: true, isFull: true, onBatteryPower: false, socPercent: 100, lowBatteryThreshold: 20) == .full,
+		   "视觉 mood：已充满压过充电中（满电稳态不跳波浪）")
+	expect(BatteryVisualResolver.fillMood(isCharging: false, isFull: false, onBatteryPower: true, socPercent: 15, lowBatteryThreshold: 20) == .lowBattery,
+		   "视觉 mood：电池供电且 ≤ 阈值判低电")
+	expect(BatteryVisualResolver.fillMood(isCharging: false, isFull: false, onBatteryPower: false, socPercent: 15, lowBatteryThreshold: 20) == .calm,
+		   "视觉 mood：插电未充不判低电（同头部口径，不谎报危机）")
+	expect(BatteryVisualResolver.fillMood(isCharging: false, isFull: false, onBatteryPower: true, socPercent: nil, lowBatteryThreshold: 20) == .calm,
+		   "视觉 mood：soc 缺失退平静（缺数据不编状态）")
+	// 边界：恰好等于阈值算低电（≤），阈值+1 不算
+	expect(BatteryVisualResolver.fillMood(isCharging: false, isFull: false, onBatteryPower: true, socPercent: 20, lowBatteryThreshold: 20) == .lowBattery,
+		   "视觉 mood：恰好阈值判低电（≤ 语义）")
+	expect(BatteryVisualResolver.fillMood(isCharging: false, isFull: false, onBatteryPower: true, socPercent: 21, lowBatteryThreshold: 20) == .calm,
+		   "视觉 mood：阈值+1 不判低电")
+
+	// 波速：功率越高越快（周期单调递减）；缺失/零功率 = 最慢（系统没算出来时宁可从容）
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: 10) == BatteryVisualResolver.wavePeriodSlow,
+		   "波速：10W 锚点 = 最慢 2.4s")
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: 60) == BatteryVisualResolver.wavePeriodFast,
+		   "波速：60W 锚点 = 最快 1.2s")
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: 35) < BatteryVisualResolver.wavePeriod(chargingPowerW: 10)
+		   && BatteryVisualResolver.wavePeriod(chargingPowerW: 35) > BatteryVisualResolver.wavePeriod(chargingPowerW: 60),
+		   "波速：35W 介于两锚点之间（单调性，实现写反必红）")
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: nil) == BatteryVisualResolver.wavePeriodSlow,
+		   "波速：功率缺失按最慢（缺数据不吓人）")
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: 200) == BatteryVisualResolver.wavePeriodFast,
+		   "波速：超 60W 封顶最快（不做无界映射）")
+	expect(BatteryVisualResolver.wavePeriod(chargingPowerW: -5) == BatteryVisualResolver.wavePeriodSlow,
+		   "波速：负功率钳到最慢")
+
+	// 温度急促度：阈值起 1.0、+8°C 封顶 2.0、区间单调；缺失 = 无警示
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: 40, thresholdC: 40) == 1.0,
+		   "急促度：阈值处 1.0（基准速）")
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: 48, thresholdC: 40) == 2.0,
+		   "急促度：+8°C 封顶 2.0（最快档）")
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: 44, thresholdC: 40) == 1.5,
+		   "急促度：+4°C 中点 1.5（线性插值，写反必红）")
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: 39.9, thresholdC: 40) == nil,
+		   "急促度：阈值以下无警示")
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: nil, thresholdC: 40) == nil,
+		   "急促度：温度缺失无警示（缺数据 ≠ 在发热）")
+	expect(BatteryVisualResolver.temperatureUrgency(tempC: 55, thresholdC: 40) == 2.0,
+		   "急促度：远超阈值仍封顶 2.0")
+
+	// 迟滞：到阈值出现、阈值-1 才解除（抖动不闪烁）；数据消失立即解除
+	expect(BatteryVisualResolver.shouldWarnHeat(tempC: 40, thresholdC: 40, wasShowing: false),
+		   "热迟滞：到阈值出现")
+	expect(!BatteryVisualResolver.shouldWarnHeat(tempC: 39.6, thresholdC: 40, wasShowing: false),
+		   "热迟滞：未显示时 39.6 不触发（无迟滞进）")
+	expect(BatteryVisualResolver.shouldWarnHeat(tempC: 39.6, thresholdC: 40, wasShowing: true),
+		   "热迟滞：已在显示时 39.6 保持（1°C 迟滞出，抖动不闪烁）")
+	expect(!BatteryVisualResolver.shouldWarnHeat(tempC: 38.9, thresholdC: 40, wasShowing: true),
+		   "热迟滞：跌破阈值-1 才解除")
+	expect(!BatteryVisualResolver.shouldWarnHeat(tempC: nil, thresholdC: 40, wasShowing: true),
+		   "热迟滞：数据消失立即解除（缺数据不等于在发热）")
+}
+
 // MARK: - 汇总
 
 print("")
