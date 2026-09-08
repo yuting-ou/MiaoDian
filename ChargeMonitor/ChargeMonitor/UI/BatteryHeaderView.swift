@@ -9,6 +9,9 @@ struct BatteryHeaderView: View {
 	var hotTemperatureThreshold: Int = 40
 	// 宽面板时传入体检评分，展在头部右侧的空白区；窄面板为 nil、体检仍走卡片
 	var checkup: BatteryCheckup? = nil
+	// 弧端流光晕的可见性把门（v1.25.0）：「减少动态效果」时光晕整层退场——
+	// 它是纯动效零信息，静态语义由波浪静面与光点承担
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	
 	var body: some View {
 		HStack(spacing: 12) {
@@ -161,6 +164,15 @@ struct BatteryHeaderView: View {
 				.rotationEffect(.degrees(-90))
 				.animation(.easeOut(duration: 0.4), value: percentFraction)
 			
+			// 弧端流光晕（v1.25.0）：充电时一小段白色高光沿进度弧从 12 点流向弧端，
+			// 流速 = arcFlowPeriod（wavePeriod 量化档，功率越快流得越快）。
+			// 走 mood 门而非裸 isCharging：--miao-visual=charging 注入也能照出光晕；
+			// 「减少动态效果」整层退场（纯动效零信息，不似波浪还留着静面语义）
+			if fillMoodForWarning == .charging && !reduceMotion {
+				ArcFlowGlow(period: BatteryVisualResolver.arcFlowPeriod(chargingPowerW: snapshot.chargingPowerW),
+							progress: max(0.02, percentFraction))
+			}
+
 			// 充电且未充满时：进度弧尽头一颗呼吸光点，克制不喧闹
 			// 充满后光点停在 12 点钟方向持续呼吸没意义，不再显示
 			if snapshot.isCharging && !snapshot.isFull {
@@ -168,7 +180,7 @@ struct BatteryHeaderView: View {
 					.offset(y: -23)
 					.rotationEffect(.degrees(360 * percentFraction))
 			}
-			
+
 			Image(systemName: centerSymbol)
 				.font(.system(size: 14, weight: .semibold))
 				.foregroundStyle(gaugeColor)
@@ -386,6 +398,40 @@ private struct ChargingWaveFill: View {
 		path.addLine(to: CGPoint(x: 0, y: size.height))
 		path.closeSubpath()
 		return path
+	}
+}
+
+// 弧端流光晕（v1.25.0 填充通道）：一小段白色高光沿进度弧从 12 点流向弧端，到站即隐、
+// 循环往复——能量沿弧线流入、汇入弧端光点的隐喻。白色就是光点的颜色：流光是还没到达的光点。
+// 动画走全屋统一的 TimelineView 墙钟模式（12fps 限帧、纯几何位移、无模糊无 repeatForever），
+// 周期取 arcFlowPeriod（wavePeriod 量化档，采样抖动不让光段瞬移）；
+// 「减少动态效果」整层退场（纯动效零信息，不似波浪还留着静面语义，挂载处把门）。
+private struct ArcFlowGlow: View {
+	let period: Double    // 走完一圈弧的周期（秒），随充电功率换档
+	let progress: CGFloat // 进度弧末端占比（0.02...1，与进度弧同一终点）
+
+	var body: some View {
+		TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+			// 相位取模成单程：0→1 对应 12 点→弧端；光段头部在此位置，尾拖在身后渐隐
+			let turns = (context.date.timeIntervalSinceReferenceDate / period)
+				.truncatingRemainder(dividingBy: 1)
+			let head = progress * CGFloat(turns)
+			let tail = max(0, head - CGFloat(BatteryVisualResolver.arcGlowSegment(progress: Double(progress))))
+			// 进出渐隐包络：出发与到站各 12% 行程内淡入淡出，循环两端都不闪
+			let envelope = max(0, min(1, turns / 0.12, (1 - turns) / 0.12))
+			Circle()
+				.trim(from: tail, to: head)
+				.stroke(
+					AngularGradient(
+						colors: [.white.opacity(0), .white.opacity(BatteryVisualResolver.arcGlowMaxAlpha * envelope)],
+						center: .center,
+						startAngle: .degrees(360 * tail),
+						endAngle: .degrees(360 * head)
+					),
+					style: StrokeStyle(lineWidth: 4.5, lineCap: .round)
+				)
+				.rotationEffect(.degrees(-90))
+		}
 	}
 }
 

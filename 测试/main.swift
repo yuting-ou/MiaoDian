@@ -2961,6 +2961,54 @@ do {
 		   "填充令牌：功率锚点下限 < 上限（映射区间非空）")
 }
 
+// MARK: - 弧端流光晕令牌（v1.25.0：流动可以比波浪亮一档，但光段不许长过进度弧）
+
+do {
+	// 亮度阶梯：静息 < 波浪 < 流光——会动的可以亮一档，但整体纪律不动摇
+	expect(BatteryVisualResolver.calmBaseMaxAlpha < BatteryVisualResolver.waveFillMaxAlpha
+		   && BatteryVisualResolver.waveFillMaxAlpha < BatteryVisualResolver.arcGlowMaxAlpha,
+		   "流光令牌：静息 0.16 < 波浪 0.26 < 流光（动效亮度阶梯单调，写反必红）")
+	expect(BatteryVisualResolver.arcGlowMaxAlpha <= 0.35,
+		   "流光令牌：流光头部 ≤0.35（46pt 小面积装饰，不靠蛮力抢眼）")
+	// 光段长度：满弧封顶约 20°（0.055）；短弧按比例收缩——光晕不许长过进度弧本身
+	expect(BatteryVisualResolver.arcGlowSegment(progress: 1) == 0.055,
+		   "流光令牌：满弧光段封顶 0.055（约 20°）")
+	expect(BatteryVisualResolver.arcGlowSegment(progress: 0.02) == 0.012,
+		   "流光令牌：短弧光段随 progress 收缩（0.02×0.6=0.012，写反必红）")
+	// 比例区内的单调性（0.05/0.08 都在封顶点 0.0917 之下，落在饱和区比的是两个相等的封顶值）
+	expect(BatteryVisualResolver.arcGlowSegment(progress: 0.05) < BatteryVisualResolver.arcGlowSegment(progress: 0.08),
+		   "流光令牌：比例区内光段随进度单调不缩（写反必红）")
+	expect(BatteryVisualResolver.arcGlowSegment(progress: -0.1) == 0,
+		   "流光令牌：负进度钳到 0（防御性，光段永不负长）")
+	// 光段必须短于它所流的弧：短弧极端（2%）时光段 0.012 < 弧 0.02，永远只衬不盖
+	expect(BatteryVisualResolver.arcGlowSegment(progress: 0.02) < 0.02,
+		   "流光令牌：光段 < 所流弧长（最短弧极端下光晕仍短于弧本身）")
+
+	// 流光周期 = wavePeriod 量化档：锚点不变、全程落在档位上、偏差不越半档（写反必红）
+	expect(abs(BatteryVisualResolver.arcFlowPeriod(chargingPowerW: nil) - 2.4) < 1e-9,
+		   "流光周期：功率缺失最慢 2.4s（缺数据不吓人）")
+	expect(abs(BatteryVisualResolver.arcFlowPeriod(chargingPowerW: 10) - 2.4) < 1e-9,
+		   "流光周期：10W 锚点 2.4s")
+	expect(abs(BatteryVisualResolver.arcFlowPeriod(chargingPowerW: 60) - 1.2) < 1e-9,
+		   "流光周期：60W 锚点 1.2s（量化不改锚点）")
+	var flowMonotone = true
+	var flowQuantized = true
+	var flowClose = true
+	var lastFlowPeriod = Double.infinity
+	for watts in stride(from: 0.0, through: 70.0, by: 0.5) {
+		let quantized = BatteryVisualResolver.arcFlowPeriod(chargingPowerW: watts)
+		if quantized > lastFlowPeriod + 1e-9 { flowMonotone = false }
+		if abs((quantized / BatteryVisualResolver.arcFlowPeriodStep).rounded()
+			   * BatteryVisualResolver.arcFlowPeriodStep - quantized) > 1e-9 { flowQuantized = false }
+		if abs(quantized - BatteryVisualResolver.wavePeriod(chargingPowerW: watts))
+			   > BatteryVisualResolver.arcFlowPeriodStep / 2 + 1e-9 { flowClose = false }
+		lastFlowPeriod = quantized
+	}
+	expect(flowMonotone, "流光周期：功率越高周期不增（单调，写反必红）")
+	expect(flowQuantized, "流光周期：全程落在 0.3s 档位上（量化防瞬移）")
+	expect(flowClose, "流光周期：量化偏差不越半档（速度语义仍随功率分档）")
+}
+
 // MARK: - 警示通道令牌与调试注入口（v1.23.0）
 
 do {

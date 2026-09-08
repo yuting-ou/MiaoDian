@@ -34,6 +34,28 @@ nonisolated enum BatteryVisualResolver {
 		return wavePeriodSlow - (wavePeriodSlow - wavePeriodFast) * t
 	}
 
+	// —— 弧端流光晕令牌（v1.25.0，实现与证明测试同源）——
+	/// 流光高光不透明度上限：白色高光沿弧流动（白 = 弧端光点的颜色，流光是还没到达的光点）。
+	/// 动效亮度阶梯 静息 0.16 < 波浪 0.26 < 流光 0.30——会动的东西可以比静物亮一档，
+	/// 但白色 0.30 叠在饱和弧上恰好是「亮一档的高光」，再高就成第二条弧了
+	nonisolated static let arcGlowMaxAlpha: Double = 0.30
+	/// 流光周期量化步长（秒）：相位由墙钟直推（与波浪/光点同模式），周期任何抖动都会让
+	/// 光段沿弧瞬移——量化后只有真实换档（SMC 采样噪声 ±1W 远够不着 ≈12W 一档）才变速度
+	nonisolated static let arcFlowPeriodStep: Double = 0.3
+
+	/// 流光光段长度（弧长占比）：满弧约 20°（0.055）封顶，弧短时按比例收缩——
+	/// 光晕永远不许长过进度弧本身（低电量时弧只有百分之几，光段必须随之缩）
+	nonisolated static func arcGlowSegment(progress: Double) -> Double {
+		min(0.055, max(0, progress) * 0.6)
+	}
+
+	/// 弧端流光晕周期（秒）：复用 wavePeriod 功率映射再量化到 0.3s 档。锚点不变：
+	/// ≤10W→2.4s，≥60W→1.2s，中间 ≈每 12W 一档——速度仍单调随功率，只是抗抖动
+	nonisolated static func arcFlowPeriod(chargingPowerW: Double?) -> Double {
+		(wavePeriod(chargingPowerW: chargingPowerW) / arcFlowPeriodStep)
+			.rounded(.toNearestOrAwayFromZero) * arcFlowPeriodStep
+	}
+
 	/// 填充通道：soc 缺失一律平静——头部数字已经显示"—"，视觉跟着安静，不另编状态
 	nonisolated static func fillMood(
 		isCharging: Bool,
