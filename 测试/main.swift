@@ -1496,35 +1496,35 @@ do {
 	print(String(format: "证明表[深·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cDarkLabel))
 	expect(cDarkLabel >= 4.5, "可读性证明：深色壳标签 ≥4.5 (AA)")
 
-	// —— 抗透底 v1.18.7→v1.19.3（干扰度证明）：背景细节穿透量 ——
-	// 玻璃地板只保证文字对表面的对比度，不管背景高亮细节（白底黑字窗口）穿透进来
-	// 干扰图表区。卡片内容区堆栈（玻璃→地板→卡白纱）对背景黑→白摆幅的剩余穿透
-	// 以 ≤0.18 为准（v1.19.3 用户反馈"太白了"回调后的平衡点：卡片内容区幽灵字仅
-	// 隐约不可辨读，壳层恢复通透）。v1.18.8 修正保留：填充用白纱（lum 1.0）不用黑
-	// tint——同等穿透衰减且卡片不变暗。
-	let cardFillModelLight = GlassTokens.cardSectionFillModel(increased: false, isDark: false)
-	let cardStackLight = proof.stackedLuminanceRange(layers: [
-		(luminance: cardFillModelLight.luminance, alpha: cardFillModelLight.alpha),
-		(luminance: floorLight.luminance, alpha: floorLight.alpha),
-		(luminance: baseLight.luminance, alpha: baseLight.alpha),
-	])
-	let interferenceLight = cardStackLight.max - cardStackLight.min
-	print(String(format: "证明表[浅·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.18)", interferenceLight))
-	expect(interferenceLight <= 0.18, "可读性证明：浅色卡片内容区背景穿透摆幅 ≤0.18（内容区幽灵字受控）")
-	// 通透不变式（v1.19.3）：白纱只会提亮表面（卡片 ≥ 同位置裸壳，两端都成立）；
-	// 亮背景（白窗口）下卡片表面保持亮（≥0.90），不发灰不发暗
-	let shellLightRange = proof.stackedLuminanceRange(layers: [
-		(luminance: floorLight.luminance, alpha: floorLight.alpha),
-		(luminance: baseLight.luminance, alpha: baseLight.alpha),
-	])
-	expect(cardStackLight.min >= shellLightRange.min && cardStackLight.max >= shellLightRange.max,
-		"可读性证明：卡片白纱不压暗（卡片表面 ≥ 同位置裸壳）")
-	expect(cardStackLight.max >= 0.90, "可读性证明：亮背景下卡片表面保持亮（≥0.90，通透但不发灰）")
-	// 卡面上黑字对比度 AAA（内容可读的硬底线）
-	let cardTextContrast = proof.contrast(textLuminance: 0.0, against: cardStackLight)
-	print(String(format: "证明表[浅·卡面·黑字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cardTextContrast))
-	expect(cardTextContrast >= 7.0, "可读性证明：浅色卡面黑字 ≥7 (AAA)")
-
+	// —— 材质三档证明 v1.20.0（干扰度+通透+对比度，三道锁 × 每档）——
+	// 壳层地板只保证文字对表面的对比度，不管背景高亮细节（白底黑字窗口）穿透进来
+	// 干扰图表区。每档材质 × 双外观：卡内容区堆栈（玻璃→地板→卡白纱）的穿透摆幅
+	// 按档阈值锁定（通透 0.24 / 均衡 0.18 / 厚重 0.10——档位定义本身），
+	// 外加通透不变式（白纱不压暗）、亮面下限、卡面黑字 AAA。填充用白纱（lum 1.0）。
+	for material in PanelMaterial.allCases {
+		let floorM = GlassTokens.shellFloorTint(isDark: false, material: material)
+		let fillM = GlassTokens.cardSectionFillModel(increased: false, isDark: false, material: material)
+		let cardStack = proof.stackedLuminanceRange(layers: [
+			(luminance: fillM.luminance, alpha: fillM.alpha),
+			(luminance: floorM.luminance, alpha: floorM.alpha),
+			(luminance: baseLight.luminance, alpha: baseLight.alpha),
+		])
+		let interference = cardStack.max - cardStack.min
+		let shellOnly = proof.stackedLuminanceRange(layers: [
+			(luminance: floorM.luminance, alpha: floorM.alpha),
+			(luminance: baseLight.luminance, alpha: baseLight.alpha),
+		])
+		let textContrast = proof.contrast(textLuminance: 0.0, against: cardStack)
+		print(String(format: "材质证明[浅·%@] 摆幅 %.3f≤%.2f · 卡面 %.3f..%.3f · 黑字 %.1f:1",
+			material.title, interference, material.interferenceTolerance, cardStack.min, cardStack.max, textContrast))
+		expect(interference <= material.interferenceTolerance,
+			"材质证明[\(material.title)]：穿透摆幅按档阈值（\(material.title) 档定义）")
+		expect(cardStack.min >= shellOnly.min && cardStack.max >= shellOnly.max,
+			"材质证明[\(material.title)]：白纱不压暗（卡面 ≥ 同位置裸壳）")
+		expect(cardStack.max >= 0.88, "材质证明[\(material.title)]：亮背景下卡面 ≥0.88（通透但不发灰）")
+		expect(textContrast >= 7.0, "材质证明[\(material.title)]：卡面黑字 ≥7 (AAA)")
+	}
+	// 深色：三档同参（白字 AAA 要求深色面板近不透明），按均衡参数证明一次
 	let cardFillModelDark = GlassTokens.cardSectionFillModel(increased: false, isDark: true)
 	let cardStackDark = proof.stackedLuminanceRange(layers: [
 		(luminance: cardFillModelDark.luminance, alpha: cardFillModelDark.alpha),
@@ -1534,6 +1534,13 @@ do {
 	let interferenceDark = cardStackDark.max - cardStackDark.min
 	print(String(format: "证明表[深·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.12)", interferenceDark))
 	expect(interferenceDark <= 0.12, "可读性证明：深色卡片内容区背景穿透摆幅 ≤0.12")
+	// 三档深色同参：floor/card alpha 全等（深色通透空间物理不存在，见 PanelMaterial 注）
+	for material in PanelMaterial.allCases {
+		expect(material.floorAlpha(isDark: true) == PanelMaterial.balanced.floorAlpha(isDark: true),
+			"材质证明[深·\(material.title)]：与均衡同参（深色 AAA 约束）")
+		expect(material.cardFillAlpha(isDark: true) == PanelMaterial.balanced.cardFillAlpha(isDark: true),
+			"材质证明[深·\(material.title)]：卡纱与均衡同参")
+	}
 
 	// 既有文字对比度断言只升不降（地板加白对黑字单调有利，回归守住）
 	expect(cLightPrimary >= 7.0 && cLightLabel >= 4.5, "可读性证明：抗透底调参后文字对比度不回退")
@@ -2727,6 +2734,29 @@ do {
 	// —— 通知点按开面板 v1.18.9：决策纯函数 ——
 	expect(PanelOpenPolicy.shouldOpen(isVisible: false), "通知开面板：面板不可见 → 打开（点通知=看详情）")
 	expect(!PanelOpenPolicy.shouldOpen(isVisible: true), "通知开面板：面板已可见 → 不动（不闪烁不重播入场）")
+
+	// —— 面板材质三档 v1.20.0：持久化 roundtrip + 旧档兼容 ——
+	var matConfig = AppConfiguration.default
+	expect(matConfig.panelMaterial == .balanced, "材质：默认均衡（升级无感）")
+	matConfig.panelMaterial = .clear
+	let matRoundtrip = try! JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(matConfig))
+	expect(matRoundtrip.panelMaterial == .clear, "材质：往返编码一致")
+	// 旧档无 panelMaterial 字段 → .balanced
+	let matLegacyJSON = #"{"enabledOptions":[]}"#.data(using: .utf8)!
+	let matLegacy = try! JSONDecoder().decode(AppConfiguration.self, from: matLegacyJSON)
+	expect(matLegacy.panelMaterial == .balanced, "材质：旧档缺字段解码为均衡")
+	// 非法 rawValue（手改存档）→ .balanced 不炸
+	let matBadJSON = #"{"panelMaterial":"bogus"}"#.data(using: .utf8)!
+	let matBad = try! JSONDecoder().decode(AppConfiguration.self, from: matBadJSON)
+	expect(matBad.panelMaterial == .balanced, "材质：非法值解码回退均衡")
+	// 三档浅色参数单调（通透 < 均衡 < 厚重：地板与卡纱浓度随档递增）
+	expect(PanelMaterial.clear.floorAlpha(isDark: false) < PanelMaterial.balanced.floorAlpha(isDark: false)
+		&& PanelMaterial.balanced.floorAlpha(isDark: false) < PanelMaterial.solid.floorAlpha(isDark: false),
+		"材质：浅色地板浓度按档单调递增")
+	// 干扰容忍度单调（通透最宽、厚重最严）
+	expect(PanelMaterial.clear.interferenceTolerance > PanelMaterial.balanced.interferenceTolerance
+		&& PanelMaterial.balanced.interferenceTolerance > PanelMaterial.solid.interferenceTolerance,
+		"材质：干扰容忍度按档单调递减（通透最宽）")
 
 	// 周报标记在未来（发通知时时钟被调快）→ 视为失效，不永久静默
 	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(48 * 3600), due: t0.addingTimeInterval(-2 * 3600), now: t0), "时钟异常：未来标记不静默周报")

@@ -33,6 +33,11 @@ final class ConfigurationManager: ObservableObject {
         update { $0.menuBarContent = content }
     }
 
+    // 面板材质三档（v1.20.0）：写档后 UI 侧（Modifier 直读 configuration）即时跟随
+    func setPanelMaterial(_ material: PanelMaterial) {
+        update { $0.panelMaterial = material }
+    }
+
     // 数值型配置统一走键路径写入（设置窗口数据驱动），归一化后落盘
     func setValue(_ value: Int, at keyPath: WritableKeyPath<AppConfiguration, Int>) {
         update { $0[keyPath: keyPath] = value }

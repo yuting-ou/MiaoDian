@@ -35,6 +35,9 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	// 修复 v1.16.0 缺陷——自动模式下应用预设时快照到 nil，无法区分"没快照"和"快照的是自动"，
 	// 导致撤销按钮不出现、一键隐藏无后悔药。canUndo = lastCustomLayout != nil || undoWasAuto
 	var undoWasAuto: Bool = false
+	// 面板材质三档（v1.20.0）：通透/均衡/厚重，用户可选。旧档缺字段解码为 .balanced
+	// （与 v1.19.3 观感一致，升级无感）；纯 UI 偏好，不进电池数据档案
+	var panelMaterial: PanelMaterial = .balanced
 
 	static let `default` = AppConfiguration()
 	
@@ -98,6 +101,7 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case panelLayout
 		case lastCustomLayout
 		case undoWasAuto
+		case panelMaterial
 	}
 
 	init(from decoder: Decoder) throws {
@@ -178,5 +182,10 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 			Bool.self,
 			forKey: .undoWasAuto
 		) ?? false
+		// v1.20.0：面板材质（旧档缺字段 = .balanced，与 v1.19.3 观感一致）
+		if let raw = try container.decodeIfPresent(String.self, forKey: .panelMaterial),
+			let material = PanelMaterial(rawValue: raw) {
+			self.panelMaterial = material
+		}
 	}
 }

@@ -11,25 +11,23 @@ nonisolated enum GlassTokens {
 	}
 
 	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
-	/// v1.19.3 平衡点（用户反馈"太白了"回调）：浅色 0.5 白——壳层恢复通透，
-	/// 内容区的抗透底由卡片白纱承担（卡片内容区穿透摆幅 ≤0.18，幽灵字仅隐约）；
-	/// 文字对比度不降（primary 最坏 15+ AAA）。深色 0.81 黑不变。
-	nonisolated static func shellFloorTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
-		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.5)
+	/// v1.20.0 三档材质（PanelMaterial）：通透/均衡/厚重各有地板浓度——
+	/// 每档 × 双外观的 6 组参数全部经证明表锁定（卡面黑字 AAA、亮面下限、穿透摆幅按档阈值）。
+	nonisolated static func shellFloorTint(isDark: Bool, material: PanelMaterial = .balanced) -> (luminance: Double, alpha: Double) {
+		(luminance: isDark ? 0.0 : 1.0, alpha: material.floorAlpha(isDark: isDark))
 	}
 
-	/// 卡片分区填充（v1.18.8 修正）：浅色=白纱——v1.18.7 抗透底误用黑 tint（primary），
-	/// 26% 黑纱让浅色卡片表面亮度 0.85→0.70 明显发暗；白纱同等穿透衰减（摆幅 0.118）
-	/// 且卡片保持透亮。「增加对比度」浓度上调。深色=极淡 primary 白（定义感，壳已 0.81 黑）。
-	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool) -> Color {
-		if isDark { return Color.primary.opacity(increased ? 0.09 : 0.045) }
-		return Color.white.opacity(increased ? 0.39 : 0.29)
+	/// 卡片分区填充（v1.20.0 材质化）：浅色=白纱（抗透底且卡片不发暗）、深色=极淡 primary 白。
+	/// 浓度随档位：通透最淡、厚重最实。「增加对比度」在档位浓度上加倍。
+	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool, material: PanelMaterial = .balanced) -> Color {
+		if isDark { return Color.primary.opacity(material.cardFillAlpha(isDark: true) * (increased ? 2 : 1)) }
+		return Color.white.opacity(material.cardFillAlpha(isDark: false) * (increased ? 2 : 1))
 	}
 
 	/// 卡片填充的证明模型（与上面颜色同源：浅色白纱 lum 1.0；深色 primary 白 lum 1.0）
-	nonisolated static func cardSectionFillModel(increased: Bool, isDark: Bool) -> (luminance: Double, alpha: Double) {
-		if isDark { return (luminance: 1.0, alpha: increased ? 0.09 : 0.045) }
-		return (luminance: 1.0, alpha: increased ? 0.39 : 0.29)
+	nonisolated static func cardSectionFillModel(increased: Bool, isDark: Bool, material: PanelMaterial = .balanced) -> (luminance: Double, alpha: Double) {
+		if isDark { return (luminance: 1.0, alpha: material.cardFillAlpha(isDark: true) * (increased ? 2 : 1)) }
+		return (luminance: 1.0, alpha: material.cardFillAlpha(isDark: false) * (increased ? 2 : 1))
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
@@ -178,12 +176,17 @@ private struct BadgeBackground: ViewModifier {
 	}
 }
 
-// 面板外壳实现：玻璃 + 自适应亮度地板（参数来自 GlassTokens，与证明测试同源）。
+// 面板外壳实现：玻璃 + 自适应亮度地板（材质档位来自配置，三档经证明表锁定）。
 // 「降低透明度」显式分支：不透明纯色底，不走玻璃（对比度退化为常数，必达标）。
 // 顶边镜面高光 + 底部内阴影 = §二 材质语汇：内容 12pt 内缩避开亮边
 private struct PanelShellModifier: ViewModifier {
 	@Environment(\.colorScheme) private var colorScheme
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+	// 材质档位直读服务单例（MainActor）：设置里切换材质后，面板下次渲染即跟随
+	private var material: PanelMaterial {
+		AppServices.shared.configurationManager.configuration.panelMaterial
+	}
 
 	@ViewBuilder
 	func body(content: Content) -> some View {
@@ -194,7 +197,7 @@ private struct PanelShellModifier: ViewModifier {
 				shape.fill(Color(nsColor: .windowBackgroundColor))
 			)
 		} else if #available(macOS 26.0, *) {
-			let floor = GlassTokens.shellFloorTint(isDark: isDark)
+			let floor = GlassTokens.shellFloorTint(isDark: isDark, material: material)
 			let floorColor = isDark ? Color.black.opacity(floor.alpha) : Color.white.opacity(floor.alpha)
 			content
 				.glassEffect(.regular.tint(floorColor), in: .rect(cornerRadius: GlassMetrics.shellCornerRadius))
@@ -238,12 +241,16 @@ private struct CardSectionModifier: ViewModifier {
 	@Environment(\.colorSchemeContrast) private var contrast
 	@Environment(\.colorScheme) private var colorScheme
 
+	// 材质档位直读服务单例（MainActor）：与面板外壳同源，设置切换后即时跟随
+	private var material: PanelMaterial {
+		AppServices.shared.configurationManager.configuration.panelMaterial
+	}
+
 	func body(content: Content) -> some View {
 		let increased = contrast == .increased
 		let isDark = colorScheme == .dark
-		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill——v1.18.8 浅色白纱：
-		// 抗透底第二道衰减且卡片不发暗）
-		let fill = GlassTokens.cardSectionFill(increased: increased, isDark: isDark)
+		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill，材质档位化 v1.20.0）
+		let fill = GlassTokens.cardSectionFill(increased: increased, isDark: isDark, material: material)
 		let stroke = increased ? 0.22 : 0.09
 		if #available(macOS 26.0, *) {
 			content

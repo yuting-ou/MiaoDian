@@ -52,6 +52,16 @@ struct SettingsView: View {
 					Text(content.title).tag(content)
 				}
 			}
+			// 面板材质三选一（v1.20.0）：玻璃路径内的透明度档位——「降低透明度」系统开关
+			// 优先级更高；深色外观下三档同参（白字 AAA 要求深色面板近不透明）
+			Picker("面板材质", selection: panelMaterialBinding) {
+				ForEach(PanelMaterial.allCases) { material in
+					Text(material.title).tag(material)
+				}
+			}
+			Text("当前：\(configurationManager.configuration.panelMaterial.title) —— \(configurationManager.configuration.panelMaterial.detail)。更改后面板立即切换。")
+				.font(.system(size: 11))
+				.foregroundStyle(.secondary)
 		}
 
 		cardManagementSection
@@ -598,6 +608,14 @@ struct SettingsView: View {
 		Binding(
 			get: { configurationManager.configuration.menuBarContent },
 			set: { configurationManager.setMenuBarContent($0) }
+		)
+	}
+
+	// 面板材质三选一（v1.20.0）：写入即生效（Modifier 直读配置，面板在开时也跟随）
+	private var panelMaterialBinding: Binding<PanelMaterial> {
+		Binding(
+			get: { configurationManager.configuration.panelMaterial },
+			set: { configurationManager.setPanelMaterial($0) }
 		)
 	}
 
