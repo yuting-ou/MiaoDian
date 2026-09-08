@@ -5,6 +5,8 @@ struct BatteryHeaderView: View {
 	let snapshot: BatterySnapshot
 	let drainEstimate: DrainRateEstimate?
 	let lowBatteryThreshold: Int
+	// 高温预警边框阈值（°C，v1.23.0 警示通道）：与高温提醒同一用户设置，不另造第二套
+	var hotTemperatureThreshold: Int = 40
 	// 宽面板时传入体检评分，展在头部右侧的空白区；窄面板为 nil、体检仍走卡片
 	var checkup: BatteryCheckup? = nil
 	
@@ -52,6 +54,26 @@ struct BatteryHeaderView: View {
 		// 头部容器：26 上与卡片同款发丝分区（头部是内容不是控件，不单独成玻璃）；
 		// 15–25 保持原裸排无底，降级观感与玻璃化之前一致
 		.modifier(HeaderSection())
+		// 警示通道（v1.23.0）：高温时头部外缘橙色预警边框，脉冲急促度随温度连续加快；
+		// 低电呼吸挂在圆环内部（见 gaugeInterior），文字永不参与呼吸
+		.modifier(HeatAlertBorder(snapshot: snapshot, thresholdC: hotTemperatureThreshold))
+	}
+
+	// 警示通道用的 mood（与 gaugeInterior 同一解析结果，一处解析两处消费）；
+	// 调试注入优先（仅视觉层，不碰数据与记录）
+	private var fillMoodForWarning: BatteryFillMood {
+		switch DebugVisualForce.current {
+		case .charging, .hotCharging: return .charging
+		case .low: return .lowBattery
+		case .none, .hot: break
+		}
+		return BatteryVisualResolver.fillMood(
+			isCharging: snapshot.isCharging,
+			isFull: snapshot.isFull,
+			onBatteryPower: snapshot.powerSource == .battery,
+			socPercent: snapshot.stateOfChargePercent,
+			lowBatteryThreshold: lowBatteryThreshold
+		)
 	}
 	
 	// 头部组合朗读：电量 + 状态 + 续航，拼成一句自然语句
@@ -161,39 +183,41 @@ struct BatteryHeaderView: View {
 	// 充电 = 波浪液面（周期随瞬时功率）；其余 = 静息底色渐变（事件过渡，无常驻动效）。
 	// 「减少动态效果」：波浪静止为平液面，不退场——静态语义仍在，动效让步。
 	private var gaugeInterior: some View {
-		let mood = BatteryVisualResolver.fillMood(
-			isCharging: snapshot.isCharging,
-			isFull: snapshot.isFull,
-			onBatteryPower: snapshot.powerSource == .battery,
-			socPercent: snapshot.stateOfChargePercent,
-			lowBatteryThreshold: lowBatteryThreshold
-		)
-		return ZStack {
+		ZStack {
 			Circle()
-				.fill(moodBaseGradient(mood))
-			if mood == .charging {
+				.fill(moodBaseGradient(fillMoodForWarning))
+			if fillMoodForWarning == .charging {
 				ChargingWaveFill(color: gaugeColor,
 								 period: BatteryVisualResolver.wavePeriod(chargingPowerW: snapshot.chargingPowerW),
 								 level: percentFraction)
 			}
 		}
-		.animation(.easeInOut(duration: 0.35), value: mood)
+		.animation(.easeInOut(duration: 0.35), value: fillMoodForWarning)
+		// 低电轻呼吸（v1.23.0）：只呼吸圆环内的底色层，文字与大数字永不参与
+		.modifier(LowPowerBreath(active: fillMoodForWarning == .lowBattery))
 	}
 
 	// 各态底色：正常/低电用各自语义色的极淡渐变（液面从下往上涨的隐喻），
-	// 充电/充满绿色。低电的橙→红警示通道在 v1.23.0 接管呼吸动效，此处先落底色。
+	// 充电/充满绿色。低电走暖橙→红渐变（v1.23.0 警示语言）。
 	// 不透明度上限取解析器令牌（证明测试同源）：常态 ≤0.16，必须比动效态安静
 	private func moodBaseGradient(_ mood: BatteryFillMood) -> LinearGradient {
-		let base: Color
 		switch mood {
-		case .calm: base = .accentColor
-		case .full, .charging: base = .green
-		case .lowBattery: base = .orange
+		case .calm:
+			return LinearGradient(
+				colors: [Color.accentColor.opacity(0.10), Color.accentColor.opacity(BatteryVisualResolver.calmBaseMaxAlpha)],
+				startPoint: .top, endPoint: .bottom
+			)
+		case .full, .charging:
+			return LinearGradient(
+				colors: [Color.green.opacity(0.10), Color.green.opacity(BatteryVisualResolver.calmBaseMaxAlpha)],
+				startPoint: .top, endPoint: .bottom
+			)
+		case .lowBattery:
+			return LinearGradient(
+				colors: [Color.orange.opacity(0.12), Color.red.opacity(BatteryVisualResolver.calmBaseMaxAlpha)],
+				startPoint: .top, endPoint: .bottom
+			)
 		}
-		return LinearGradient(
-			colors: [base.opacity(0.10), base.opacity(BatteryVisualResolver.calmBaseMaxAlpha)],
-			startPoint: .top, endPoint: .bottom
-		)
 	}
 	
 	// 呼吸光点：限帧到 12fps（慢呼吸肉眼无差），模糊半径固定不变避免逐帧重算高斯模糊，
@@ -362,6 +386,120 @@ private struct ChargingWaveFill: View {
 		path.addLine(to: CGPoint(x: 0, y: size.height))
 		path.closeSubpath()
 		return path
+	}
+}
+
+// 高温预警边框（v1.23.0 警示通道）：头部外缘橙色描边，脉冲节奏随温度急促度连续加快
+// （急促度 1.0 → 1.6s/拍，2.0 → 0.8s/拍）。阈值与迟滞全部走 BatteryVisualResolver
+// （与高温提醒同一用户设置）；温度缺失 = 不警示；「减少动态效果」退化为静息描边。
+// 调试注入口（--miao-visual=hot / hot-charging）强制显示，v2.0.0 移除
+private struct HeatAlertBorder: ViewModifier {
+	let snapshot: BatterySnapshot
+	let thresholdC: Int
+	@State private var heatShowing = false
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+	// 调试注入：hot / hot-charging 强制显示边框（演示急促度取 1.5 中档）
+	private var forced: Bool {
+		switch DebugVisualForce.current {
+		case .hot, .hotCharging: return true
+		default: return false
+		}
+	}
+
+	private var showing: Bool { forced || heatShowing }
+
+	// 急促度：真实温度过阈值走解析器；调试注入固定 1.5 中档
+	private var urgency: Double {
+		forced ? 1.5 : (BatteryVisualResolver.temperatureUrgency(tempC: snapshot.temperatureC, thresholdC: Double(thresholdC)) ?? 1.0)
+	}
+
+	func body(content: Content) -> some View {
+		content
+			.overlay {
+				if showing {
+					warningStroke
+				}
+			}
+			.onChange(of: snapshot.temperatureC) {
+				heatShowing = BatteryVisualResolver.shouldWarnHeat(
+					tempC: snapshot.temperatureC,
+					thresholdC: Double(thresholdC),
+					wasShowing: heatShowing
+				)
+			}
+			.onAppear {
+				heatShowing = BatteryVisualResolver.shouldWarnHeat(
+					tempC: snapshot.temperatureC,
+					thresholdC: Double(thresholdC),
+					wasShowing: heatShowing
+				)
+			}
+	}
+
+	@ViewBuilder
+	private var warningStroke: some View {
+		let period = BatteryVisualResolver.heatPulseBasePeriod / urgency
+		if reduceMotion {
+			borderShape.opacity(0.55)
+		} else {
+			TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+				let t = context.date.timeIntervalSinceReferenceDate
+				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
+				borderShape.opacity(0.30 + 0.28 * breathe)
+			}
+		}
+	}
+
+	// 与头部玻璃分区同族圆角（26 玻璃路径 12 / 15–25 裸排 10）；发丝细线宽——警示靠节奏不靠蛮力
+	@ViewBuilder
+	private var borderShape: some View {
+		if #available(macOS 26.0, *) {
+			RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+				.strokeBorder(Color.orange, lineWidth: 1.5)
+		} else {
+			RoundedRectangle(cornerRadius: 10, style: .continuous)
+				.strokeBorder(Color.orange, lineWidth: 1.5)
+		}
+	}
+}
+
+// 低电呼吸（v1.23.0 警示通道）：低电态下圆环内底色轻呼吸（透明度微幅波动），
+// 周期 2.2s 比充电光点更慢更沉——提醒而非催促。「减少动态效果」退静止。
+// 调试注入口（--miao-visual=low）强制显示，v2.0.0 移除
+private struct LowPowerBreath: ViewModifier {
+	let active: Bool
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+	private var forcedActive: Bool {
+		DebugVisualForce.current == .low ? true : active
+	}
+
+	func body(content: Content) -> some View {
+		if forcedActive, !reduceMotion {
+			content
+				.modifier(BreathPulse(period: BatteryVisualResolver.lowBreathPeriod))
+		} else {
+			content
+		}
+	}
+}
+
+// 通用呼吸脉冲：整层透明度 0.75↔1.0 微幅波动（只动 opacity，不动几何不重排）
+private struct BreathPulse: ViewModifier {
+	let period: Double
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+	func body(content: Content) -> some View {
+		if reduceMotion {
+			content
+		} else {
+			TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+				let t = context.date.timeIntervalSinceReferenceDate
+				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
+				content.opacity(0.75 + 0.25 * breathe)
+			}
+		}
 	}
 }
 

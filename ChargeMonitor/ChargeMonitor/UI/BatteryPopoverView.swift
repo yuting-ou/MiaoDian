@@ -106,6 +106,7 @@ struct BatteryPopoverView: View {
 				snapshot: monitor.snapshot,
 				drainEstimate: monitor.drainEstimate,
 				lowBatteryThreshold: configuration.lowBatteryThresholdPercent,
+				hotTemperatureThreshold: configuration.highTemperatureThresholdC,
 				checkup: twoColumns ? checkup : nil
 			)
 			.modifier(CascadeIn(step: 0, active: didAppear))
