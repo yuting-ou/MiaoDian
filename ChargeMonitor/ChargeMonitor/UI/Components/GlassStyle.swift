@@ -11,12 +11,11 @@ nonisolated enum GlassTokens {
 	}
 
 	/// 外壳亮度地板 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
-	/// 参数由可读性证明反推（测试/main.swift 证明表）：浅色 0.68 白（primary 最坏 13+ AAA，
-	/// 且卡片内容区背景穿透摆幅 ≤0.12——v1.18.7 抗透底：白底黑字窗口贴面板后文字幽灵不可辨）、
-	/// 深色 0.81 黑（primary/关键数字最坏 ≥7.0 AAA、标签 ≥4.5——亮壁纸下白字要 AAA
-	/// 必须近不透明，深色外观的面板本就趋近系统原生暗板，已按裁决规则选定）
+	/// v1.19.3 平衡点（用户反馈"太白了"回调）：浅色 0.5 白——壳层恢复通透，
+	/// 内容区的抗透底由卡片白纱承担（卡片内容区穿透摆幅 ≤0.18，幽灵字仅隐约）；
+	/// 文字对比度不降（primary 最坏 15+ AAA）。深色 0.81 黑不变。
 	nonisolated static func shellFloorTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
-		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.68)
+		isDark ? (luminance: 0.0, alpha: 0.81) : (luminance: 1.0, alpha: 0.5)
 	}
 
 	/// 卡片分区填充（v1.18.8 修正）：浅色=白纱——v1.18.7 抗透底误用黑 tint（primary），
@@ -24,13 +23,13 @@ nonisolated enum GlassTokens {
 	/// 且卡片保持透亮。「增加对比度」浓度上调。深色=极淡 primary 白（定义感，壳已 0.81 黑）。
 	nonisolated static func cardSectionFill(increased: Bool, isDark: Bool) -> Color {
 		if isDark { return Color.primary.opacity(increased ? 0.09 : 0.045) }
-		return Color.white.opacity(increased ? 0.36 : 0.26)
+		return Color.white.opacity(increased ? 0.39 : 0.29)
 	}
 
 	/// 卡片填充的证明模型（与上面颜色同源：浅色白纱 lum 1.0；深色 primary 白 lum 1.0）
 	nonisolated static func cardSectionFillModel(increased: Bool, isDark: Bool) -> (luminance: Double, alpha: Double) {
 		if isDark { return (luminance: 1.0, alpha: increased ? 0.09 : 0.045) }
-		return (luminance: 1.0, alpha: increased ? 0.36 : 0.26)
+		return (luminance: 1.0, alpha: increased ? 0.39 : 0.29)
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板

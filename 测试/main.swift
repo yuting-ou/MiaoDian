@@ -1496,11 +1496,12 @@ do {
 	print(String(format: "证明表[深·壳·标签85%%] 最坏对比度 = %.2f:1 (阈值 AA 4.5)", cDarkLabel))
 	expect(cDarkLabel >= 4.5, "可读性证明：深色壳标签 ≥4.5 (AA)")
 
-	// —— 抗透底 v1.18.7（干扰度证明）：背景细节穿透量 ——
+	// —— 抗透底 v1.18.7→v1.19.3（干扰度证明）：背景细节穿透量 ——
 	// 玻璃地板只保证文字对表面的对比度，不管背景高亮细节（白底黑字窗口）穿透进来
-	// 干扰图表区。卡片内容区堆栈（玻璃→地板→卡填充）对背景黑→白摆幅的剩余穿透
-	// 必须 ≤0.12。v1.18.8 修正：填充用白纱（lum 1.0）不用黑 tint——同等穿透衰减
-	// 且卡片不变暗（v1.18.7 黑纱让浅色卡片表面 0.85→0.70，用户实测"变暗了"）。
+	// 干扰图表区。卡片内容区堆栈（玻璃→地板→卡白纱）对背景黑→白摆幅的剩余穿透
+	// 以 ≤0.18 为准（v1.19.3 用户反馈"太白了"回调后的平衡点：卡片内容区幽灵字仅
+	// 隐约不可辨读，壳层恢复通透）。v1.18.8 修正保留：填充用白纱（lum 1.0）不用黑
+	// tint——同等穿透衰减且卡片不变暗。
 	let cardFillModelLight = GlassTokens.cardSectionFillModel(increased: false, isDark: false)
 	let cardStackLight = proof.stackedLuminanceRange(layers: [
 		(luminance: cardFillModelLight.luminance, alpha: cardFillModelLight.alpha),
@@ -1508,10 +1509,21 @@ do {
 		(luminance: baseLight.luminance, alpha: baseLight.alpha),
 	])
 	let interferenceLight = cardStackLight.max - cardStackLight.min
-	print(String(format: "证明表[浅·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.12)", interferenceLight))
-	expect(interferenceLight <= 0.12, "可读性证明：浅色卡片内容区背景穿透摆幅 ≤0.12（温度曲线不被背后文字幽灵干扰）")
-	// 卡片不发暗不变式（v1.18.8）：白纱只会提亮表面——卡片表面最暗处仍 ≥0.85（与 v1.17 观感持平）
-	expect(cardStackLight.min >= 0.85, "可读性证明：浅色卡片表面不发暗（白纱修正，黑纱曾让表面掉到 0.70）")
+	print(String(format: "证明表[浅·卡片内容区·背景穿透摆幅] = %.3f (阈值 ≤0.18)", interferenceLight))
+	expect(interferenceLight <= 0.18, "可读性证明：浅色卡片内容区背景穿透摆幅 ≤0.18（内容区幽灵字受控）")
+	// 通透不变式（v1.19.3）：白纱只会提亮表面（卡片 ≥ 同位置裸壳，两端都成立）；
+	// 亮背景（白窗口）下卡片表面保持亮（≥0.90），不发灰不发暗
+	let shellLightRange = proof.stackedLuminanceRange(layers: [
+		(luminance: floorLight.luminance, alpha: floorLight.alpha),
+		(luminance: baseLight.luminance, alpha: baseLight.alpha),
+	])
+	expect(cardStackLight.min >= shellLightRange.min && cardStackLight.max >= shellLightRange.max,
+		"可读性证明：卡片白纱不压暗（卡片表面 ≥ 同位置裸壳）")
+	expect(cardStackLight.max >= 0.90, "可读性证明：亮背景下卡片表面保持亮（≥0.90，通透但不发灰）")
+	// 卡面上黑字对比度 AAA（内容可读的硬底线）
+	let cardTextContrast = proof.contrast(textLuminance: 0.0, against: cardStackLight)
+	print(String(format: "证明表[浅·卡面·黑字] 最坏对比度 = %.2f:1 (阈值 AAA 7.0)", cardTextContrast))
+	expect(cardTextContrast >= 7.0, "可读性证明：浅色卡面黑字 ≥7 (AAA)")
 
 	let cardFillModelDark = GlassTokens.cardSectionFillModel(increased: false, isDark: true)
 	let cardStackDark = proof.stackedLuminanceRange(layers: [
