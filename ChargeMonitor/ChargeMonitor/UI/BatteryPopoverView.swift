@@ -209,10 +209,10 @@ struct BatteryPopoverView: View {
 					.cardSection()
 			}
 
-			// v1.24.0 控制行区坐卡纱：与卡片同浓度材质面（档位随动），壳层纯玻璃不再直露文字；
-			// 卡片与控制区之间的旧 Divider 随之退役——控制区自有卡面边界，素颜玻璃上不残留线条
+			// v1.24.1 控制行回归玻璃家族：去掉 v1.24.0 的整块卡纱垫板——板下壁纸亮部幽灵穿透，
+			// 与上方浮卡的玻璃语言割裂（用户实测「格格不入」）。每行自成一颗粒 tint 玻璃药丸
+			// （GlassRow→controlPillGlass），文字坐药丸 tint，对比度由证明锁（浅黑字/深白字 ≥7 AAA）
 			controlRows
-				.cardSection()
 				.modifier(CascadeIn(step: cascadeStep(controlStep), active: didAppear))
 		}
 		.padding(.horizontal, 12)
@@ -1047,7 +1047,8 @@ struct BatteryPopoverView: View {
 	}
 
 	private var controlRows: some View {
-		VStack(spacing: 0) {
+		// v1.24.1 行距 4：药丸各自成件后留出玻璃缝隙（贴死会连成一条，失去"浮在玻璃上"的节奏）
+		VStack(spacing: 4) {
 			// 开了提醒但系统不给发通知：提醒实际收不到，给个显眼的入口去开权限
 			if configurationManager.configuration.enabledOptions.contains(.alerts),
 			   alertController.isNotificationPermissionDenied {

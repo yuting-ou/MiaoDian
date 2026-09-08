@@ -40,6 +40,13 @@ nonisolated enum GlassTokens {
 		return (luminance: 1.0, alpha: alpha)
 	}
 
+	/// 控制行玻璃药丸的 tint（v1.24.1）：行文字坐药丸，tint 即文字的第一道墙——
+	/// 浅色白 0.5（黑字最坏 12:1 AAA）、深色黑 0.9（白字最坏 8:1 AAA，证明见测试）。
+	/// 药丸本体仍是 clear interactive 玻璃（控件=玻璃件，浮在壳层上，与材质档位无关）
+	nonisolated static func controlPillTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
+		isDark ? (luminance: 0.0, alpha: 0.9) : (luminance: 1.0, alpha: 0.5)
+	}
+
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板
 	nonisolated static func opaqueSurface(isDark: Bool) -> (luminance: Double, alpha: Double) {
 		isDark ? (luminance: 0.03, alpha: 1.0) : (luminance: 0.87, alpha: 1.0)
@@ -72,6 +79,12 @@ extension View {
 	/// 卡片分区：26 极淡填充+发丝线（内容对比度由外壳玻璃统一柔化，分区本身不再加模糊层）；
 	/// 15–25 原 quaternarySystemFill+0.06 描边，观感与玻璃化之前完全一致
 	func cardSection() -> some View { modifier(CardSectionModifier()) }
+
+	/// 控制行玻璃药丸（v1.24.1）：clear interactive 玻璃 + 浓 tint（GlassTokens.controlPillTint）。
+	/// v1.24.0 曾把控制行整体垫一块卡纱板——板下壁纸亮部幽灵穿透，与上方浮卡的玻璃语言割裂
+	/// （用户实测「格格不入」）；改行自成才：每行一颗玻璃药丸浮在壳层上，与控件玻璃同族，
+	/// 文字坐药丸 tint，对比度由证明锁定。15–25 壳层自带材质地板，行保持原悬停灰底不加面
+	func controlPillGlass() -> some View { modifier(ControlPillGlassModifier()) }
 
 	/// 可交互控件玻璃：26 clear+interactive（悬停高光、按压弹性，"液态"的灵魂在反馈）；
 	/// 15–25 不施玻璃，由调用方保留原悬停灰底行为
@@ -263,6 +276,23 @@ private struct PanelShellModifier: ViewModifier {
 		.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 		.allowsHitTesting(false)
 		.accessibilityHidden(true)
+	}
+}
+
+// 控制行玻璃药丸的实现：拿 colorScheme 选 tint 色（浅白/深黑），浓度数值在 GlassTokens
+private struct ControlPillGlassModifier: ViewModifier {
+	@Environment(\.colorScheme) private var colorScheme
+
+	func body(content: Content) -> some View {
+		if #available(macOS 26.0, *) {
+			let isDark = colorScheme == .dark
+			let tint = GlassTokens.controlPillTint(isDark: isDark)
+			let tintColor = isDark ? Color.black.opacity(tint.alpha) : Color.white.opacity(tint.alpha)
+			content
+				.glassEffect(.clear.tint(tintColor).interactive(), in: .rect(cornerRadius: GlassMetrics.rowCornerRadius))
+		} else {
+			content
+		}
 	}
 }
 

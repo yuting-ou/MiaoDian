@@ -1553,6 +1553,28 @@ do {
 		]
 	}
 
+	// —— 控制行玻璃药丸证明（v1.24.1：控制行自成才，tint 即文字的第一道墙）——
+	// 药丸 = clear 玻璃 + controlPillTint，行文字直接坐其上；任意壁纸亮度全域最坏对比度 ≥7 AAA。
+	// v1.24.0 的教训：控制行垫整块卡纱板，板下壁纸亮部幽灵穿透、与浮卡玻璃语言割裂（用户实测）。
+	// 变异检验：tint 浓度若写反（如浅色 0.05），最坏对比度跌至 ~2:1，此断言必红。
+	for isDark in [false, true] {
+		let pillGlass = GlassTokens.clearGlass(isDark: isDark)
+		let pillTint = GlassTokens.controlPillTint(isDark: isDark)
+		let pillStack = proof.stackedLuminanceRange(layers: [
+			(luminance: pillTint.luminance, alpha: pillTint.alpha),
+			(luminance: pillGlass.luminance, alpha: pillGlass.alpha),
+		])
+		let textLum = isDark ? primaryDark : primaryLight
+		let c = proof.contrast(textLuminance: textLum, against: (min: pillStack.min, max: pillStack.max))
+		print(String(format: "药丸证明[%@] 面 %.3f..%.3f · %@ %.1f:1",
+			isDark ? "深" : "浅", pillStack.min, pillStack.max, isDark ? "白字" : "黑字", c))
+		expect(c >= 7.0, "药丸证明[\(isDark ? "深" : "浅")]：控制行文字坐药丸 tint ≥7 (AAA)")
+		// 亮度语义不变式：深色药丸必须压成暗面（白字语义）、浅色必须托成亮面（黑字语义）——
+		// 防未来把 tint 色相/浓度调到"对比度恰好过线但面亮度语义翻反"的脆态
+		expect(isDark ? pillStack.max < 0.35 : pillStack.min > 0.45,
+			"药丸证明[\(isDark ? "深" : "浅")]：药丸亮度区间守住文字语义（深=暗面/浅=亮面，档位无关恒成立）")
+	}
+
 	// —— 降低透明度（不透明纯色底）——
 	let opaqueLightRange = (min: opaqueLight, max: opaqueLight)
 	let opaqueDarkRange = (min: opaqueDark, max: opaqueDark)

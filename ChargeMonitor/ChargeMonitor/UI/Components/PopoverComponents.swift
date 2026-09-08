@@ -214,7 +214,8 @@ struct GlassRow<Content: View>: View {
 	
 	var body: some View {
 		if #available(macOS 26.0, *) {
-			content.controlGlass()
+			// v1.24.1 浓 tint 药丸：行文字坐 tint（控制行自成才，不再依赖 v1.24.0 的整块卡纱垫板）
+			content.controlPillGlass()
 		} else {
 			content
 				.background(
