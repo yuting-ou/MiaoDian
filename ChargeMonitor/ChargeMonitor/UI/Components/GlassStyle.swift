@@ -10,14 +10,14 @@ nonisolated enum GlassTokens {
 		isDark ? (luminance: 0.05, alpha: 0.5) : (luminance: 0.85, alpha: 0.5)
 	}
 
-	/// 原生 clear 玻璃材质模型（近似，v1.24.0 通透档）：比 regular 更透明、自身亮度贡献更小——
+	/// 原生 clear 玻璃材质模型（近似，v1.24.0「液态玻璃」档）：比 regular 更透明、自身亮度贡献更小——
 	/// 壁纸几乎原样参与合成（模糊去高频不改均值的近似对 clear 同样成立）
 	nonisolated static func clearGlass(isDark: Bool) -> (luminance: Double, alpha: Double) {
 		isDark ? (luminance: 0.10, alpha: 0.20) : (luminance: 0.90, alpha: 0.15)
 	}
 
 	/// 外壳壳层 tint：浅色补白（托住黑字）、深色补黑（压住亮壁纸保白字）。
-	/// v1.24.0 材质档位：浅色通透/均衡走纯原生玻璃（tint 0），厚重补白 0.74；
+	/// v1.24.0 材质档位：浅色液态玻璃/均衡走纯原生玻璃（tint 0），厚重补白 0.74；
 	/// 深色三档以黑 tint 浓度拉开（0.76/0.70/0.82，白字 AAA 物理下限内的档差）。
 	/// 26 路径即 glassEffect tint 浓度；也是 15–25/证明模型的近似叠加层。
 	nonisolated static func shellFloorTint(isDark: Bool, material: PanelMaterial = .balanced) -> (luminance: Double, alpha: Double) {
@@ -200,7 +200,7 @@ private struct BadgeBackground: ViewModifier {
 }
 
 // 面板外壳实现：三档=苹果原生玻璃三选一（v1.24.0，档位见 PanelMaterial.shellGlassVariant）。
-// 通透=原生 .clear、均衡=原生 .regular、厚重=原生 .regular+浓 tint——档差由材质本体承担，
+// 液态玻璃=原生 .clear、均衡=原生 .regular、厚重=原生 .regular+浓 tint——档差由材质本体承担，
 // 不再是同块玻璃调 alpha。26 路径不再手绘顶边高光/底部内阴影：原生玻璃自带边缘镜面与厚度，
 // 叠画反成"假玻璃"痕迹（15–25 降级路径无玻璃 API，保留原材质语汇）。
 // 「降低透明度」显式分支：不透明纯色底，不走玻璃（对比度退化为常数，必达标）。
@@ -226,7 +226,7 @@ private struct PanelShellModifier: ViewModifier {
 		} else if #available(macOS 26.0, *) {
 			let floor = GlassTokens.shellFloorTint(isDark: isDark, material: material)
 			let floorColor = isDark ? Color.black.opacity(floor.alpha) : Color.white.opacity(floor.alpha)
-			// 档位=原生玻璃变体；壳层 tint 浓度>0 时施（浅色通透/均衡为 0 = 纯原生素颜）
+			// 档位=原生玻璃变体；壳层 tint 浓度>0 时施（浅色液态玻璃/均衡为 0 = 纯原生素颜）
 			switch material.shellGlassVariant {
 			case .clear:
 				if floor.alpha > 0 {

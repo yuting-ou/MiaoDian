@@ -1458,12 +1458,12 @@ do {
 	// —— 壳层直露文字证明（v1.24.0 移除）——
 	// v1.20 时代壳层承载控制行/编辑条文字，壳层对比度是硬证明；v1.24.0 起这些文字全部
 	// 改坐卡纱（卡面对比度由下方逐档证明锁死），壳层只剩分隔线等非文字元素。
-	// 通透/均衡档浅色为 0 tint 纯原生素颜，壳层最坏对比度天然不达 AAA——
+	// 液态玻璃/均衡档浅色为 0 tint 纯原生素颜，壳层最坏对比度天然不达 AAA——
 	// 这不再是缺陷：文字不允许出现在壳层上，玻璃只负责透出壁纸。
 
 	// —— 材质三档证明 v1.24.0（材质=原生玻璃变体，每档各自建模逐档锁）——
 	// v1.20.0 教训：三档只差同块玻璃上的白纱 alpha，肉眼不可辨；深色三档同参像素级相同。
-	// v1.24.0：通透=clear 玻璃+0 tint、均衡=regular 玻璃+0 tint、厚重=regular+浓 tint（浅白/深黑）；
+	// v1.24.0：液态玻璃=clear 玻璃+0 tint、均衡=regular 玻璃+0 tint、厚重=regular+浓 tint（浅白/深黑）；
 	// 所有文字坐卡面（壳层不再直露文字，控制行/编辑条/托盘已改坐卡纱），证明边界=卡面文字 AAA。
 	// 每档 × 双外观：卡区堆栈（玻璃→壳层tint→卡纱）穿透摆幅按档阈值锁定（浅 0.62/0.38/0.10），
 	// 外加白纱不压暗（浅）、亮面下限（浅）、卡面文字 AAA（浅黑字/深白字）。
@@ -1510,14 +1510,14 @@ do {
 		expect(interferenceD <= 0.12, "材质证明[深·\(material.title)]：穿透摆幅 ≤0.12（AAA 白字物理下限）")
 		expect(textContrastD >= 7.0, "材质证明[深·\(material.title)]：卡面白字 ≥7 (AAA)")
 	}
-	// 深色档差存在性：三档卡面亮度上限单调（通透最透、厚重最实）——防止退回"同参像素级相同"
+	// 深色档差存在性：三档卡面亮度上限单调（液态玻璃最透、厚重最实）——防止退回"同参像素级相同"
 	let darkMaxClear = proof.stackedLuminanceRange(layers: materialLayers(.clear, isDark: true)).max
 	let darkMaxBalanced = proof.stackedLuminanceRange(layers: materialLayers(.balanced, isDark: true)).max
 	let darkMaxSolid = proof.stackedLuminanceRange(layers: materialLayers(.solid, isDark: true)).max
 	expect(darkMaxClear > darkMaxBalanced && darkMaxBalanced > darkMaxSolid,
 		"材质证明[深]：三档卡面亮度上限严格单调（档差肉眼可辨的数学前提）")
 	expect(PanelMaterial.clear.floorAlpha(isDark: true) != PanelMaterial.balanced.floorAlpha(isDark: true),
-		"材质证明[深]：通透/均衡壳层 tint 不同（档差不只靠卡纱）")
+		"材质证明[深]：液态玻璃/均衡壳层 tint 不同（档差不只靠卡纱）")
 
 	// 卡面文字对比度回归底线（逐档证明已锁 AAA；此处防未来调参只盯均值忘最坏）。
 	// 除 primary 关键数字外，把卡面标签（primary 85%，卡上最常见文字形态）也逐档锁 ≥4.5 AA
@@ -2779,11 +2779,15 @@ do {
 	let matBadJSON = #"{"panelMaterial":"bogus"}"#.data(using: .utf8)!
 	let matBad = try! JSONDecoder().decode(AppConfiguration.self, from: matBadJSON)
 	expect(matBad.panelMaterial == .balanced, "材质：非法值解码回退均衡")
-	// 三档浅色档位语义：通透/均衡走纯原生玻璃（0 tint，苹果素颜），厚重补白地板——
+	// v1.24.2 用户命名：clear 档选项名=「液态玻璃」（对齐 Apple Liquid Glass 叫法）；
+	// rawValue 保持 clear 不变——旧配置存档解码兼容
+	expect(PanelMaterial.clear.title == "液态玻璃", "材质：clear 档选项名=液态玻璃（用户命名）")
+	expect(PanelMaterial.clear.rawValue == "clear", "材质：clear 档 rawValue 不变（旧档兼容）")
+	// 三档浅色档位语义：液态玻璃/均衡走纯原生玻璃（0 tint，苹果素颜），厚重补白地板——
 	// 档差由玻璃变体承担（clear≠regular），不以 tint 浓度单调为前提
 	expect(PanelMaterial.clear.floorAlpha(isDark: false) == 0 && PanelMaterial.balanced.floorAlpha(isDark: false) == 0
 		&& PanelMaterial.solid.floorAlpha(isDark: false) > 0,
-		"材质：浅色通透/均衡纯原生素颜（0 tint），厚重补地板")
+		"材质：浅色液态玻璃/均衡纯原生素颜（0 tint），厚重补地板")
 	// 壳层玻璃变体三档互异（档位=原生玻璃选项本身，不是同块玻璃调 alpha）
 	expect(PanelMaterial.clear.shellGlassVariant != PanelMaterial.balanced.shellGlassVariant
 		&& PanelMaterial.balanced.shellGlassVariant != PanelMaterial.solid.shellGlassVariant,
@@ -2794,10 +2798,10 @@ do {
 		&& PanelMaterial.clear.cardFillAlpha(isDark: true) != PanelMaterial.balanced.cardFillAlpha(isDark: true)
 		&& PanelMaterial.balanced.cardFillAlpha(isDark: true) != PanelMaterial.solid.cardFillAlpha(isDark: true),
 		"材质：深色三档参数逐档互异（档差在深色也存在）")
-	// 干扰容忍度单调（通透最宽、厚重最严）
+	// 干扰容忍度单调（液态玻璃最宽、厚重最严）
 	expect(PanelMaterial.clear.interferenceTolerance > PanelMaterial.balanced.interferenceTolerance
 		&& PanelMaterial.balanced.interferenceTolerance > PanelMaterial.solid.interferenceTolerance,
-		"材质：干扰容忍度按档单调递减（通透最宽）")
+		"材质：干扰容忍度按档单调递减（液态玻璃最宽）")
 
 	// 周报标记在未来（发通知时时钟被调快）→ 视为失效，不永久静默
 	expect(BatteryAlertController.digestSendAllowed(lastSent: t0.addingTimeInterval(48 * 3600), due: t0.addingTimeInterval(-2 * 3600), now: t0), "时钟异常：未来标记不静默周报")
