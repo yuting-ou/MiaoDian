@@ -120,7 +120,10 @@ struct BatteryHeaderView: View {
 		ZStack {
 			Circle()
 				.stroke(gaugeColor.opacity(0.15), lineWidth: 4.5)
-			
+
+			// 填充通道（v1.22.0）：圆环内部的氛围层——充电波浪 / 静息渐变，解析器驱动
+			gaugeInterior
+
 			// 进度弧：沿弧线方向由淡到浓的角度渐变，更有质感
 			Circle()
 				.trim(from: 0, to: max(0.02, percentFraction))
@@ -152,6 +155,45 @@ struct BatteryHeaderView: View {
 		// 圆环浮在一枚小玻璃镜片上（仪表属控件层，允许上玻璃）；15–25 无
 		.padding(3)
 		.gaugeGlassBase()
+	}
+
+	// 填充通道（v1.22.0）：圆环内部的氛围层，BatteryVisualResolver 四态驱动。
+	// 充电 = 波浪液面（周期随瞬时功率）；其余 = 静息底色渐变（事件过渡，无常驻动效）。
+	// 「减少动态效果」：波浪静止为平液面，不退场——静态语义仍在，动效让步。
+	private var gaugeInterior: some View {
+		let mood = BatteryVisualResolver.fillMood(
+			isCharging: snapshot.isCharging,
+			isFull: snapshot.isFull,
+			onBatteryPower: snapshot.powerSource == .battery,
+			socPercent: snapshot.stateOfChargePercent,
+			lowBatteryThreshold: lowBatteryThreshold
+		)
+		return ZStack {
+			Circle()
+				.fill(moodBaseGradient(mood))
+			if mood == .charging {
+				ChargingWaveFill(color: gaugeColor,
+								 period: BatteryVisualResolver.wavePeriod(chargingPowerW: snapshot.chargingPowerW),
+								 level: percentFraction)
+			}
+		}
+		.animation(.easeInOut(duration: 0.35), value: mood)
+	}
+
+	// 各态底色：正常/低电用各自语义色的极淡渐变（液面从下往上涨的隐喻），
+	// 充电/充满绿色。低电的橙→红警示通道在 v1.23.0 接管呼吸动效，此处先落底色。
+	// 不透明度上限取解析器令牌（证明测试同源）：常态 ≤0.16，必须比动效态安静
+	private func moodBaseGradient(_ mood: BatteryFillMood) -> LinearGradient {
+		let base: Color
+		switch mood {
+		case .calm: base = .accentColor
+		case .full, .charging: base = .green
+		case .lowBattery: base = .orange
+		}
+		return LinearGradient(
+			colors: [base.opacity(0.10), base.opacity(BatteryVisualResolver.calmBaseMaxAlpha)],
+			startPoint: .top, endPoint: .bottom
+		)
 	}
 	
 	// 呼吸光点：限帧到 12fps（慢呼吸肉眼无差），模糊半径固定不变避免逐帧重算高斯模糊，
@@ -263,6 +305,63 @@ struct BatteryHeaderView: View {
 			}
 		}
 		return nil
+	}
+}
+
+// 充电波浪液面（v1.22.0）：液位 = 真实电量占比（视觉有出处，不许装饰说谎），
+// 波面正弦涌动。限帧 12fps（与呼吸光点同纪律）；纯几何位移，无模糊无 repeatForever；
+// 「减少动态效果」退化为静止波面（同一液位同一语义色，只让步动效不让步信息）
+private struct ChargingWaveFill: View {
+	let color: Color
+	let period: Double
+	let level: CGFloat   // 0...1 水位 = 电量占比
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+	var body: some View {
+		Group {
+			if reduceMotion {
+				waveCanvas(phase: .pi / 3)
+			} else {
+				TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+					let time = context.date.timeIntervalSinceReferenceDate
+					waveCanvas(phase: (time / period) * 2 * .pi)
+				}
+			}
+		}
+		.clipShape(Circle())
+	}
+
+	// 主波 + 错相淡波：两层错相制造"液面厚度"，淡波频率取负制造反向流动视差
+	private func waveCanvas(phase: Double) -> some View {
+		Canvas { context, size in
+			let surfaceY = size.height * (1 - level * 0.92) - 1
+			let main = wavePath(size: size, surfaceY: surfaceY, amplitude: 1.6, waveNumber: 0.05, phase: phase)
+			context.fill(
+				main,
+				with: .linearGradient(
+					Gradient(colors: [color.opacity(0.14), color.opacity(BatteryVisualResolver.waveFillMaxAlpha)]),
+					startPoint: CGPoint(x: 0, y: surfaceY),
+					endPoint: CGPoint(x: 0, y: size.height)
+				)
+			)
+			let echo = wavePath(size: size, surfaceY: surfaceY + 1.4, amplitude: 1.0, waveNumber: -0.032, phase: phase * 0.7)
+			context.fill(echo, with: .color(color.opacity(0.10)))
+		}
+	}
+
+	private func wavePath(size: CGSize, surfaceY: CGFloat, amplitude: CGFloat, waveNumber: Double, phase: Double) -> Path {
+		var path = Path()
+		path.move(to: CGPoint(x: 0, y: surfaceY))
+		var x: CGFloat = 0
+		while x <= size.width {
+			let y = surfaceY + amplitude * CGFloat(sin(phase + Double(x) * waveNumber))
+			path.addLine(to: CGPoint(x: x, y: y))
+			x += 2
+		}
+		path.addLine(to: CGPoint(x: size.width, y: size.height))
+		path.addLine(to: CGPoint(x: 0, y: size.height))
+		path.closeSubpath()
+		return path
 	}
 }
 

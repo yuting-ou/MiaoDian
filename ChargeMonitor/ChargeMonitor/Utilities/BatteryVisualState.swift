@@ -20,6 +20,12 @@ nonisolated enum BatteryVisualResolver {
 	nonisolated static let wavePowerFloorW: Double = 10
 	nonisolated static let wavePowerCeilW: Double = 60
 
+	// —— 填充通道视觉令牌（v1.22.0，实现与证明测试同源）——
+	/// 波浪主波不透明度上限：46pt 小面积装饰层，不许淹没中心符号与进度弧
+	nonisolated static let waveFillMaxAlpha: Double = 0.26
+	/// 静息底色不透明度上限：常态必须比动效态更安静（最正常 = 最安静）
+	nonisolated static let calmBaseMaxAlpha: Double = 0.16
+
 	/// 充电波浪周期（秒）：随瞬时充电功率连续加快（功率来自 IOKit 已有采样，零新增）。
 	/// 功率缺失或为 0 按最慢——系统还没算出功率时，宁可从容不可吓人。
 	nonisolated static func wavePeriod(chargingPowerW: Double?) -> Double {

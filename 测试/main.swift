@@ -2902,6 +2902,20 @@ do {
 		   "热迟滞：数据消失立即解除（缺数据不等于在发热）")
 }
 
+// MARK: - 填充通道视觉令牌（装饰层定位：氛围不许压过信息）
+
+do {
+	// 波浪是 46pt 小面积上的装饰层：透明度上限锁死，中心符号与进度弧永远可辨
+	expect(BatteryVisualResolver.waveFillMaxAlpha <= 0.30,
+		   "填充令牌：波浪主波 ≤0.30（小面积装饰不淹没符号）")
+	expect(BatteryVisualResolver.calmBaseMaxAlpha < BatteryVisualResolver.waveFillMaxAlpha,
+		   "填充令牌：静息底色必须比动效态更安静（最正常 = 最安静）")
+	expect(BatteryVisualResolver.wavePeriodSlow > BatteryVisualResolver.wavePeriodFast,
+		   "填充令牌：慢周期锚点 > 快周期锚点（定义自洽）")
+	expect(BatteryVisualResolver.wavePowerFloorW < BatteryVisualResolver.wavePowerCeilW,
+		   "填充令牌：功率锚点下限 < 上限（映射区间非空）")
+}
+
 // MARK: - 汇总
 
 print("")
