@@ -516,6 +516,8 @@ struct SettingsView: View {
 				Text("见过 \(profile.connectCount) 次")
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
+					// 口径可溯源（v1.19.2）：N 怎么来的悬停即答——30 分钟内重连（重启/唤醒）不虚增
+					.help("拔插超过 30 分钟算新的一次；30 分钟内的重启、唤醒不重复计次")
 			}
 			TextField("起个名字，如「Anker 65W · 桌面」", text: customNameBinding(profile.key))
 			.font(.system(size: 12))

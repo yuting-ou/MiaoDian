@@ -2486,6 +2486,19 @@ do {
 	expectEqual(after.first?.customName, "Anker · 桌面", "命名：重连保留用户命名")
 	expectEqual(after.first?.connectCount, 2, "命名：重连超窗正常计次")
 
+	// 「见过 N 次」口径 v1.19.2（可溯源）：30 分钟重连窗口内再见不计次
+	// （应用重启/睡眠唤醒不虚增）；窗口边界（>30min）恰好计次
+	let recount = BatteryHistoryRecorder.upsertingChargerProfile(
+		[claimed], key: claimed.key, name: "", manufacturer: "", ratedWatts: 65,
+		now: t0.addingTimeInterval(29 * 60)
+	)
+	expectEqual(recount.first?.connectCount, 1, "见过N次口径：30 分钟窗口内重连不计次（重启不虚增）")
+	let atBoundary = BatteryHistoryRecorder.upsertingChargerProfile(
+		[claimed], key: claimed.key, name: "", manufacturer: "", ratedWatts: 65,
+		now: t0.addingTimeInterval(30 * 60 + 1)
+	)
+	expectEqual(atBoundary.first?.connectCount, 2, "见过N次口径：超窗重连计新的一次")
+
 	// 旧版存档没有 customName 字段，解码缺省 nil 不炸
 	let legacyJSON = #"[{"key":"a|b|65","name":"65W","ratedWatts":65,"firstSeen":0,"lastSeen":0,"connectCount":3}]"#.data(using: .utf8)!
 	let decoder = JSONDecoder()
