@@ -34,7 +34,7 @@ fi
 echo "==> 源文件：${#SOURCES[@]} 个"
 
 echo "==> 测试门：先编译并运行单元测试（与主程序共用源文件，测的是真代码）..."
-bash "$ROOT/测试/run_tests.sh"
+zsh "$ROOT/测试/run_tests.sh"
 
 echo "==> 编译 Swift 源码（universal：arm64 + x86_64）..."
 SLICES=()

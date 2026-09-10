@@ -755,7 +755,7 @@ extension BatteryAlertController: UNUserNotificationCenterDelegate {
 		default:
 			// 点通知本体（v1.18.9）：打开面板看详情——此前默认动作什么都不做，
 			// 通知只是消失，信任链断在"通知→查看"。面板是否打开由 PanelOpenPolicy 判
-			NotificationCenter.default.post(name: MenuBarPanelController.openPanelRequestNotification, object: nil)
+			NotificationCenter.default.post(name: PanelNotifications.openPanelRequest, object: nil)
 		}
 	}
 }

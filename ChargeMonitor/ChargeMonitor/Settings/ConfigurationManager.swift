@@ -29,6 +29,14 @@ final class ConfigurationManager: ObservableObject {
         }
     }
 
+    /// 一键应用场景模式预设（C1）。经 update 通道：发布变更 + normalized + 持久化同源。
+    /// 应用后的回显由 ScenarioPreset.matched 反查得出，切换失败不会被界面谎报成成功。
+    func applyPreset(_ preset: ScenarioPreset) {
+        update { config in
+            config = preset.applied(to: config)
+        }
+    }
+
     func setMenuBarContent(_ content: MenuBarContent) {
         update { $0.menuBarContent = content }
     }

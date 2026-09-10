@@ -25,7 +25,6 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 
 	// 点通知本体打开面板的路由名（v1.18.9）：提醒控制器发、这里听。
 	// 经进程内 NotificationCenter 解耦，不引入控制器间直接依赖（AppServices 不持有面板控制器）
-	static let openPanelRequestNotification = Notification.Name("miaodian.openPanelRequested")
 
 	func install() {
 		let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -38,7 +37,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// 用户点充满/低电通知想看详情，通知只是消失（信任链断在"通知→查看"）
 		NotificationCenter.default.addObserver(
 			self, selector: #selector(handleOpenPanelRequest),
-			name: Self.openPanelRequestNotification, object: nil
+			name: PanelNotifications.openPanelRequest, object: nil
 		)
 
 		let panel = GlassPopoverPanel(

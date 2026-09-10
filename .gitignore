@@ -19,3 +19,4 @@ DerivedData/
 
 # 循环内部记忆（与作业书/报告同性质，不入库）
 经验账本.md
+.build-tests/

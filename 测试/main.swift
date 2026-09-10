@@ -2879,9 +2879,9 @@ do {
 
 do {
 	let session = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 67, chargerKey: "anker")
-	let withName = ChargeHistorySection.detail(session, chargerName: "Anker·桌面")
+	let withName = ChargeSessionText.detail(session, chargerName: "Anker·桌面")
 	expect(withName.contains("Anker·桌面") && withName.contains("峰值67W"), "记录显头：认得出时带名字")
-	let noName = ChargeHistorySection.detail(session, chargerName: nil)
+	let noName = ChargeSessionText.detail(session, chargerName: nil)
 	expect(noName.contains("峰值67W") && !noName.contains("Anker"), "记录显头：认不出时安静省略，不留空段")
 }
 
@@ -3026,6 +3026,52 @@ do {
 	expect(DebugVisualForce.parse(["--miao-visual=hot-charging"]) == .hotCharging, "调试注入：hot-charging 叠加态")
 	expect(DebugVisualForce.parse(["--miao-visual=banana"]) == .none, "调试注入：非法值回退不强制")
 	expect(DebugVisualForce.parse(["-v", "--miao-visual=hot", "--other"]) == .hot, "调试注入：多参数中定位")
+}
+
+// MARK: - 充电场景模式预设（C1：模式＝配置预设，纯函数映射）
+do {
+	let base = AppConfiguration.default
+
+	// 每档 applied 后的三要素正确
+	for preset in ScenarioPreset.allCases {
+		let cfg = preset.applied(to: base)
+		expect(cfg.enabledOptions.contains(.chargeCareReminder), "预设\(preset.title)：保养提醒开")
+		expectEqual(
+			ScenarioPreset.matched(in: cfg), preset,
+			"预设\(preset.title)：applied 后反查命中自身（回显不撒谎）"
+		)
+	}
+	expectEqual(ScenarioPreset.office.applied(to: base).chargeCareThresholdPercent, 80, "办公：保养线 80")
+	expect(ScenarioPreset.office.applied(to: base).enabledOptions.contains(.quietHours), "办公：免打扰开")
+	expectEqual(ScenarioPreset.travel.applied(to: base).chargeCareThresholdPercent, 90, "外出满充：保养线 90")
+	expectEqual(ScenarioPreset.travel.applied(to: base).lowBatteryThresholdPercent, 25, "外出满充：低电警示 25")
+	expect(!ScenarioPreset.travel.applied(to: base).enabledOptions.contains(.quietHours), "外出满充：免打扰关")
+	expectEqual(ScenarioPreset.storage.applied(to: base).chargeCareThresholdPercent, 70, "长期存放：保养线 70")
+	expectEqual(ScenarioPreset.fastCharge.applied(to: base).chargeCareThresholdPercent, 90, "快充：保养线 90")
+
+	// 四档两两互不相同：任一档的配置不得命中另一档
+	for a in ScenarioPreset.allCases {
+		let cfg = a.applied(to: base)
+		for b in ScenarioPreset.allCases where b != a {
+			expect(!b.matches(cfg), "预设\(a.title) 的配置不被 \(b.title) 认领")
+		}
+	}
+
+	// 不替用户做主：预设只组合三类参数，其余配置原样保留
+	var custom = base
+	custom.menuBarContent = .power
+	custom.enabledOptions.remove(.adapterName)
+	let kept = ScenarioPreset.office.applied(to: custom)
+	expectEqual(kept.menuBarContent, .power, "预设不覆盖菜单栏显示选择")
+	expect(!kept.enabledOptions.contains(.adapterName), "预设不复活用户关掉的卡片")
+
+	// 手动调参即脱离预设：matched 反查为 nil（回显显示自定义）
+	var drifted = ScenarioPreset.office.applied(to: base)
+	drifted.chargeCareThresholdPercent = 85
+	expectEqual(ScenarioPreset.matched(in: drifted), nil, "调过保养线后不算任何预设")
+	var driftedQuiet = ScenarioPreset.travel.applied(to: base)
+	driftedQuiet.enabledOptions.insert(.quietHours)
+	expectEqual(ScenarioPreset.matched(in: driftedQuiet), nil, "自行开免打扰后不算任何预设")
 }
 
 // MARK: - 汇总

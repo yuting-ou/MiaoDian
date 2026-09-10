@@ -32,6 +32,8 @@ struct SettingsView: View {
 
 	@ViewBuilder
 	private var configSections: some View {
+		scenarioPresetSection
+
 		ForEach(DisplayOption.Group.allCases, id: \.title) { group in
 			Section {
 				ForEach(DisplayOption.allCases.filter { $0.group == group }) { option in
@@ -579,6 +581,47 @@ struct SettingsView: View {
 	}
 
 	@ViewBuilder
+	// MARK: - 充电场景预设（核心功能优化计划 C1）
+	// 一键切换「保养线 + 低电线 + 提醒/免打扰」组合；D1 裁决后无任何充电干预。
+	// 回显从 ScenarioPreset.matched(in:) 反查真实落盘配置，不信任切换动作本身——
+	// 切换若静默失败，界面显示「自定义」，不谎报模式。面板健康卡实时读同一配置，
+	// 切换后无需额外桥接即同步。
+
+	private var scenarioPresetSection: some View {
+		let active = ScenarioPreset.matched(in: configurationManager.configuration)
+		return Section {
+			Picker("场景模式", selection: scenarioPresetBinding) {
+				Text("自定义").tag(ScenarioPreset?.none)
+				ForEach(ScenarioPreset.allCases) { preset in
+					Text(preset.title).tag(ScenarioPreset?.some(preset))
+				}
+			}
+			if let active {
+				Text("已生效：\(active.detail)。手动改动任一阈值或开关后自动回到「自定义」。")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			} else {
+				Text("当前配置不属于四档预设。选择任一预设会覆盖保养提醒线、低电量警示线与夜间免打扰组合；其余设置不受影响。")
+					.font(.system(size: 11))
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+		} header: {
+			Label("充电场景", systemImage: "bolt")
+		}
+	}
+
+	private var scenarioPresetBinding: Binding<ScenarioPreset?> {
+		Binding(
+			get: { ScenarioPreset.matched(in: configurationManager.configuration) },
+			set: { preset in
+				guard let preset else { return } // 「自定义」只是回显态，不是可选项
+				configurationManager.applyPreset(preset)
+			}
+		)
+	}
+
 	private var thresholdControls: some View {
 		Divider()
 		ForEach(thresholdConfigs, id: \.title) { config in
