@@ -19,6 +19,7 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
 - 版本号单一来源：`ChargeMonitor/ChargeMonitor.xcodeproj/project.pbxproj` 的 `MARKETING_VERSION`
 - 源文件由 build.sh 自动收集（`ChargeMonitor/ChargeMonitor/**/*.swift`），新增文件无需改脚本
 - 单元测试是构建前置门：纯逻辑回归（估算/格式化/配置迁移/历史记录状态机判定）失败时构建直接中止
+- 工具链与 SDK：CLT 27.0.0 起工具链不带 SwiftUIMacros 宏插件（SDK 27 的 SwiftUI 属性包装器是宏实现），CLT-only 环境 UI 层会编译失败——build.sh 对此自动钉住 MacOSX26.5.sdk 规避（26.5 SDK 的 SwiftUI 尚非宏实现），装完整 Xcode 后自动回落默认 SDK；CI 在测试面之外另跑全量源码 Swift 6 审计（含 UI 层），保证「CI 绿 = 可构建」
 
 ## 注意事项
 

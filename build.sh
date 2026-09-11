@@ -11,6 +11,19 @@ APP="$OUT/妙电.app"
 # 26 走玻璃、15–25 保留原 PopoverCard 质感降级——妙电已开源，覆盖面是资产
 DEPLOYMENT_TARGET="15.0"
 
+# SDK 选择：CLT 27.0.0 工具链不带 SwiftUIMacros 宏插件，而 SDK 27 起 SwiftUI 属性
+# 包装器（@State 等）改为宏实现——CLT-only 环境下 UI 层编译必挂。SDK 26.5 的
+# SwiftUI 仍是 property wrapper 实现，不依赖宏插件，钉住它即可继续仅用 CLT 构建；
+# 换用完整 Xcode（工具链自带宏插件）后条件不成立，自动回落默认 SDK。
+CS_PATH="$(xcode-select -p)"
+if [[ "$CS_PATH" == *CommandLineTools* && -d "$CS_PATH/SDKs/MacOSX26.5.sdk" ]]; then
+	SDK_ARGS=(-sdk "$CS_PATH/SDKs/MacOSX26.5.sdk")
+	echo "==> SDK：MacOSX26.5.sdk（CLT-only 钉旧 SDK，规避宏插件缺失）"
+else
+	SDK_ARGS=()
+	echo "==> SDK：默认"
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -45,6 +58,7 @@ for ARCH in arm64 x86_64; do
 		-swift-version 5 \
 		-default-isolation MainActor \
 		-target "$ARCH-apple-macosx$DEPLOYMENT_TARGET" \
+		"${SDK_ARGS[@]}" \
 		"${SOURCES[@]}" \
 		-o "$SLICE"
 	SLICES+=("$SLICE")

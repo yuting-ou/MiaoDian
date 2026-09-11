@@ -13,3 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: 运行单元测试（与主程序共用源文件）
         run: bash 测试/run_tests.sh
+      # 全量源码（含 UI 层）Swift 6 审计。run_tests.sh 的测试面排除 UI/ 与宏宿主
+      # （CLT-only 工具链缺 SwiftUIMacros 插件），CI 若只跑测试面，「绿」就不再等于
+      # 「可构建」——96d1d29 在盲区里带进了两个 UI 编译错误（@ViewBuilder 被插入挤走、
+      # import 被抽走），靠这一步在门上拦住。runner 的完整 Xcode 自带宏插件。
+      - name: 全量源码 Swift 6 审计（含 UI 层）
+        run: swiftc -swift-version 6 -default-isolation MainActor -target arm64-apple-macosx15.0 -typecheck -parse-as-library $(find ChargeMonitor/ChargeMonitor -name '*.swift' | sort)

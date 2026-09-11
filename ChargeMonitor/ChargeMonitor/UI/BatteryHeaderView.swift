@@ -62,15 +62,9 @@ struct BatteryHeaderView: View {
 		.modifier(HeatAlertBorder(snapshot: snapshot, thresholdC: hotTemperatureThreshold))
 	}
 
-	// 警示通道用的 mood（与 gaugeInterior 同一解析结果，一处解析两处消费）；
-	// 调试注入优先（仅视觉层，不碰数据与记录）
+	// 警示通道用的 mood（与 gaugeInterior 同一解析结果，一处解析两处消费）
 	private var fillMoodForWarning: BatteryFillMood {
-		switch DebugVisualForce.current {
-		case .charging, .hotCharging: return .charging
-		case .low: return .lowBattery
-		case .none, .hot: break
-		}
-		return BatteryVisualResolver.fillMood(
+		BatteryVisualResolver.fillMood(
 			isCharging: snapshot.isCharging,
 			isFull: snapshot.isFull,
 			onBatteryPower: snapshot.powerSource == .battery,
@@ -166,7 +160,7 @@ struct BatteryHeaderView: View {
 			
 			// 弧端流光晕（v1.25.0）：充电时一小段白色高光沿进度弧从 12 点流向弧端，
 			// 流速 = arcFlowPeriod（wavePeriod 量化档，功率越快流得越快）。
-			// 走 mood 门而非裸 isCharging：--miao-visual=charging 注入也能照出光晕；
+			// 走 mood 门而非裸 isCharging：与警示通道同一解析口径；
 			// 「减少动态效果」整层退场（纯动效零信息，不似波浪还留着静面语义）
 			if fillMoodForWarning == .charging && !reduceMotion {
 				ArcFlowGlow(period: BatteryVisualResolver.arcFlowPeriod(chargingPowerW: snapshot.chargingPowerW),
@@ -438,26 +432,17 @@ private struct ArcFlowGlow: View {
 // 高温预警边框（v1.23.0 警示通道）：头部外缘橙色描边，脉冲节奏随温度急促度连续加快
 // （急促度 1.0 → 1.6s/拍，2.0 → 0.8s/拍）。阈值与迟滞全部走 BatteryVisualResolver
 // （与高温提醒同一用户设置）；温度缺失 = 不警示；「减少动态效果」退化为静息描边。
-// 调试注入口（--miao-visual=hot / hot-charging）强制显示，v2.0.0 移除
 private struct HeatAlertBorder: ViewModifier {
 	let snapshot: BatterySnapshot
 	let thresholdC: Int
 	@State private var heatShowing = false
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-	// 调试注入：hot / hot-charging 强制显示边框（演示急促度取 1.5 中档）
-	private var forced: Bool {
-		switch DebugVisualForce.current {
-		case .hot, .hotCharging: return true
-		default: return false
-		}
-	}
+	private var showing: Bool { heatShowing }
 
-	private var showing: Bool { forced || heatShowing }
-
-	// 急促度：真实温度过阈值走解析器；调试注入固定 1.5 中档
+	// 急促度：温度过阈值走解析器（1.0 → 2.0 线性）
 	private var urgency: Double {
-		forced ? 1.5 : (BatteryVisualResolver.temperatureUrgency(tempC: snapshot.temperatureC, thresholdC: Double(thresholdC)) ?? 1.0)
+		BatteryVisualResolver.temperatureUrgency(tempC: snapshot.temperatureC, thresholdC: Double(thresholdC)) ?? 1.0
 	}
 
 	func body(content: Content) -> some View {
@@ -512,17 +497,12 @@ private struct HeatAlertBorder: ViewModifier {
 
 // 低电呼吸（v1.23.0 警示通道）：低电态下圆环内底色轻呼吸（透明度微幅波动），
 // 周期 2.2s 比充电光点更慢更沉——提醒而非催促。「减少动态效果」退静止。
-// 调试注入口（--miao-visual=low）强制显示，v2.0.0 移除
 private struct LowPowerBreath: ViewModifier {
 	let active: Bool
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-	private var forcedActive: Bool {
-		DebugVisualForce.current == .low ? true : active
-	}
-
 	func body(content: Content) -> some View {
-		if forcedActive, !reduceMotion {
+		if active, !reduceMotion {
 			content
 				.modifier(BreathPulse(period: BatteryVisualResolver.lowBreathPeriod))
 		} else {

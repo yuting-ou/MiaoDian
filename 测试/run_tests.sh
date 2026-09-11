@@ -13,6 +13,7 @@ mkdir -p "$OUT"
 
 # 收集除 @main 入口外的全部源文件（入口与测试的 main.swift 冲突）
 SOURCES=()
+EXCLUDED_MACRO=()
 while IFS= read -r f; do
 	[ "$(basename "$f")" = "ChargeMonitorApp.swift" ] && continue
 	# SwiftUIMacros(@State 等)需要 macro plugin; CLT-only 工具链(缺 Xcode)会全挂。
@@ -24,9 +25,17 @@ while IFS= read -r f; do
 		*/UI/*) continue ;;                  # 其余视图层与 macro 文件互耦, 全排
 		*/Core/ChargeCurveWindowController.swift) continue ;;  # 窗口控制器, 引用 UI/ 的 Host 视图
 	esac
-	grep -qE '@(State|StateObject|AppStorage|SceneStorage|FocusedValue|EnvironmentObject)\b' "$f" && continue
+	if grep -qE '@(State|StateObject|AppStorage|SceneStorage|FocusedValue|EnvironmentObject|Environment|Observable)\b' "$f"; then
+		EXCLUDED_MACRO+=("$f")  # 宏宿主编译不了, 排除但必须显式回显, 防静默侵蚀
+		continue
+	fi
 	SOURCES+=("$f")
 done < <(find "$SRC" -name '*.swift' | sort)
+
+if [ ${#EXCLUDED_MACRO[@]} -gt 0 ]; then
+	echo "==> 宏宿主排除 ${#EXCLUDED_MACRO[@]} 个（清单如下，逻辑层新增宏宿主=架构越界信号）"
+	printf '    %s\n' "${EXCLUDED_MACRO[@]}"
+fi
 
 echo "==> 编译测试（源文件 ${#SOURCES[@]} 个 + 测试用例）..."
 swiftc \

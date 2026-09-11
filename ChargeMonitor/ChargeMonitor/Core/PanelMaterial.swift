@@ -53,13 +53,6 @@ nonisolated enum PanelMaterial: String, Codable, CaseIterable, Sendable, Identif
 		}
 	}
 
-	/// 目检注入口：`MIAODIAN_DEBUG_MATERIAL=<clear|balanced|solid>` 启动时覆盖配置档位，
-	/// 供三档×双外观无人值守截图验收。与 MIAODIAN_DEBUG_OPEN_PANEL / --miao-visual 同族，
-	/// v2.0.0 与 --miao-visual 一并移除。
-	nonisolated static var debugOverride: PanelMaterial? {
-		ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_MATERIAL"].flatMap(Self.init(rawValue:))
-	}
-
 	/// 壳层 tint 浓度（证明模型里的叠加层；26 路径即 glassEffect tint，alpha=0 不施）。
 	/// 浅色液态玻璃/均衡走纯原生玻璃（0）托「苹果纯正」；厚重补白 0.74。
 	/// 深色白字 AAA 硬约束下以黑 tint 拉档差：0.76/0.70/0.82——卡面亮度上限随之单调

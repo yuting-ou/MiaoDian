@@ -271,3 +271,11 @@
 - 流速与波速同一物理口径：`arcFlowPeriod` 复用 `wavePeriod` 功率映射再量化 0.3s 档（≤10W→2.4s、≥60W→1.2s，约每 12W 一档）——量化防 SMC 采样抖动让光段沿弧瞬移；光段长度随弧长收缩封顶 20°，永远短于进度弧本身
 - 纪律全沿用：12fps 限帧、纯几何位移、无模糊无 repeatForever；「减少动态效果」整层退场（纯动效零信息，不似波浪留静面语义）；可见性走 mood 门（`--miao-visual=charging` 注入可照出）；令牌 静息 0.16 < 波浪 0.26 < 流光 0.30 亮度阶梯锁进证明表
 - 修正过程：首版用 accent 色光晕叠加饱和弧，像素仲裁证实不可见且 `.task` 相位累加器在该宿主下不推进——改白色高光 + 全屋统一 TimelineView 墙钟模式后四帧互证流动在案；728→741 测试全绿
+
+## v2.0.0 — 2026-09-12
+
+- **充电场景模式预设（核心功能优化计划 M1-C1 转正）**：设置页新增「充电场景」区——办公 / 外出满充 / 长期存放 / 快充四档，一键切换「保养线 + 低电警示线 + 提醒/免打扰」组合；模式＝配置预设（D1 裁决后无任何充电干预，其余设置原样保留）。回显从 `ScenarioPreset.matched` 反查真实落盘配置：手动改任何阈值即显示「自定义」，切换失败不会被界面谎报成功
+- **可发布性修复（构建环境事故）**：CLT 自动升级 27.0.0 后工具链不再携带 SwiftUIMacros 宏插件，而 SDK 27 起 SwiftUI 属性包装器改为宏实现，UI 层编译全面断闸；`build.sh` 在 CLT-only 环境下自动钉住 MacOSX26.5 SDK（26.5 的 SwiftUI 尚是 property wrapper 实现，不依赖宏插件），装完整 Xcode 后自动回落默认 SDK
+- **编译盲区两个实锤缺陷（新审计门抓出）**：上轮测试门现代化把 UI 层排除出一切自动编译信号，96d1d29 在盲区里带进两处必挂——①设置页插入场景预设区时把 `thresholdControls` 的 `@ViewBuilder` 属性挤走（Swift 6 opaque 推断失败）②从 GlassStyle 抽出 GlassTokens 时顺手删掉了 `import SwiftUI`。均已修复；CI 新增全量源码 Swift 6 审计步（runner 完整 Xcode 自带宏插件），恢复「CI 绿 = 可构建」等式；测试门排宏清单补 @Environment/@Observable，宏宿主排除改为显式回显清单
+- **调试注入口按 2.0 计划退役**：`--miao-visual` 与 `MIAODIAN_DEBUG_MATERIAL` 全部移除（四态/三档目检使命完成）；`MIAODIAN_DEBUG_OPEN_PANEL` 保留（ADR-5：截图流验收唯一程序化开面板通道）
+- 测试 772→765（移除 7 条注入解析断言）；Swift 6 全量审计零错误；CI 绿

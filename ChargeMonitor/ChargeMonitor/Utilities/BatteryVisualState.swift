@@ -91,25 +91,3 @@ nonisolated enum BatteryVisualResolver {
 	/// 低电呼吸周期：比充电光点（1.8s）更慢更沉——提醒而非催促
 	nonisolated static let lowBreathPeriod: Double = 2.2
 }
-
-/// 调试视觉注入口（v1.23.0 临时设施，v2.0.0 移除）：启动参数
-/// `--miao-visual=charging|low|hot|hot-charging` 强制头部呈现对应状态，
-/// 供用户在真实数据不可得时（高温/低电）目检验收。解析为纯函数可测。
-nonisolated enum DebugVisualForce: Equatable, Sendable {
-	case none, charging, low, hot, hotCharging
-
-	nonisolated static func parse(_ arguments: [String]) -> DebugVisualForce {
-		guard let flag = arguments.first(where: { $0.hasPrefix("--miao-visual=") }) else { return .none }
-		switch flag.dropFirst("--miao-visual=".count) {
-		case "charging": return .charging
-		case "low": return .low
-		case "hot": return .hot
-		case "hot-charging": return .hotCharging
-		default: return .none
-		}
-	}
-
-	nonisolated static var current: DebugVisualForce {
-		parse(ProcessInfo.processInfo.arguments)
-	}
-}

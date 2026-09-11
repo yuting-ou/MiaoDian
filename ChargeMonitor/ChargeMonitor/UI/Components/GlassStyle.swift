@@ -1,3 +1,4 @@
+import SwiftUI
 enum GlassMetrics {
 	nonisolated static let shellCornerRadius: CGFloat = 12
 	nonisolated static let cardCornerRadius: CGFloat = 12
@@ -142,11 +143,9 @@ private struct PanelShellModifier: ViewModifier {
 	@Environment(\.colorScheme) private var colorScheme
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-	// 材质档位直读服务单例（MainActor）：设置里切换材质后，面板下次渲染即跟随；
-	// 目检注入口 MIAODIAN_DEBUG_MATERIAL 覆盖配置档位（2.0.0 移除）
+	// 材质档位直读服务单例（MainActor）：设置里切换材质后，面板下次渲染即跟随
 	private var material: PanelMaterial {
-		if let debug = PanelMaterial.debugOverride { return debug }
-		return AppServices.shared.configurationManager.configuration.panelMaterial
+		AppServices.shared.configurationManager.configuration.panelMaterial
 	}
 
 	@ViewBuilder
@@ -236,10 +235,9 @@ private struct CardSectionModifier: ViewModifier {
 	@Environment(\.colorSchemeContrast) private var contrast
 	@Environment(\.colorScheme) private var colorScheme
 
-	// 材质档位直读服务单例（MainActor）：与面板外壳同源（含目检注入口），设置切换后即时跟随
+	// 材质档位直读服务单例（MainActor）：与面板外壳同源，设置切换后即时跟随
 	private var material: PanelMaterial {
-		if let debug = PanelMaterial.debugOverride { return debug }
-		return AppServices.shared.configurationManager.configuration.panelMaterial
+		AppServices.shared.configurationManager.configuration.panelMaterial
 	}
 
 	func body(content: Content) -> some View {

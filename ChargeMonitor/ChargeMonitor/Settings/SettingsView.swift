@@ -580,7 +580,6 @@ struct SettingsView: View {
 		]
 	}
 
-	@ViewBuilder
 	// MARK: - 充电场景预设（核心功能优化计划 C1）
 	// 一键切换「保养线 + 低电线 + 提醒/免打扰」组合；D1 裁决后无任何充电干预。
 	// 回显从 ScenarioPreset.matched(in:) 反查真实落盘配置，不信任切换动作本身——
@@ -622,6 +621,7 @@ struct SettingsView: View {
 		)
 	}
 
+	@ViewBuilder
 	private var thresholdControls: some View {
 		Divider()
 		ForEach(thresholdConfigs, id: \.title) { config in

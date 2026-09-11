@@ -3009,7 +3009,7 @@ do {
 	expect(flowClose, "流光周期：量化偏差不越半档（速度语义仍随功率分档）")
 }
 
-// MARK: - 警示通道令牌与调试注入口（v1.23.0）
+// MARK: - 警示通道令牌（v1.23.0；调试注入口随 v2.0.0 移除）
 
 do {
 	// 周期令牌自洽：高温脉冲必须随急促度加快（基准 1.6s，封顶 0.8s）；低电呼吸更慢更沉
@@ -3017,15 +3017,6 @@ do {
 		   "警示令牌：高温脉冲急促度越高周期越短（越急越快）")
 	expect(BatteryVisualResolver.lowBreathPeriod > BatteryVisualResolver.heatPulseBasePeriod,
 		   "警示令牌：低电呼吸比高温脉冲更慢（提醒而非催促）")
-
-	// 调试注入口解析：合法值、非法值、缺省（变异：default 分支漏写会红）
-	expect(DebugVisualForce.parse([]) == .none, "调试注入：无参数 = 不强制")
-	expect(DebugVisualForce.parse(["--miao-visual=charging"]) == .charging, "调试注入：charging")
-	expect(DebugVisualForce.parse(["--miao-visual=low"]) == .low, "调试注入：low")
-	expect(DebugVisualForce.parse(["--miao-visual=hot"]) == .hot, "调试注入：hot")
-	expect(DebugVisualForce.parse(["--miao-visual=hot-charging"]) == .hotCharging, "调试注入：hot-charging 叠加态")
-	expect(DebugVisualForce.parse(["--miao-visual=banana"]) == .none, "调试注入：非法值回退不强制")
-	expect(DebugVisualForce.parse(["-v", "--miao-visual=hot", "--other"]) == .hot, "调试注入：多参数中定位")
 }
 
 // MARK: - 充电场景模式预设（C1：模式＝配置预设，纯函数映射）
