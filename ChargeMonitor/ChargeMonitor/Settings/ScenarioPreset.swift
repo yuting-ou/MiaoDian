@@ -25,7 +25,7 @@ nonisolated enum ScenarioPreset: String, CaseIterable, Identifiable, Sendable {
 		switch self {
 		case .office: return "保养线 80%·到线提醒拔电·夜间免打扰"
 		case .travel: return "保养线 90%·低电警示提前到 25%·全天候提醒"
-		case .storage: return "保养线 70%·适合长期插电存放"
+		case .storage: return "保养线 70%·夜间免打扰·适合长期插电存放"
 		case .fastCharge: return "保养线 90%·免打扰关闭，到线即提醒"
 		}
 	}

@@ -3048,6 +3048,15 @@ do {
 		}
 	}
 
+	// 文案诚实不变式：把免打扰打开的预设，说明里必须写明（防未来新增预设静默改开关不告知）
+	for preset in ScenarioPreset.allCases {
+		let applied = preset.applied(to: base)
+		let turnsQuietOn = applied.enabledOptions.contains(.quietHours) && !base.enabledOptions.contains(.quietHours)
+		if turnsQuietOn {
+			expect(preset.detail.contains("免打扰"), "预设文案诚实：\(preset.title) 打开免打扰必须在说明写明")
+		}
+	}
+
 	// 不替用户做主：预设只组合三类参数，其余配置原样保留
 	var custom = base
 	custom.menuBarContent = .power
