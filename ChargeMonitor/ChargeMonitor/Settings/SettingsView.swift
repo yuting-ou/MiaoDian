@@ -600,8 +600,15 @@ struct SettingsView: View {
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
+				// 诚实送达警告：承诺了提醒就要交代送达条件——总开关关着时一条都不会响
+				if let deliveryWarning = ScenarioPreset.deliveryWarning(for: configurationManager.configuration) {
+					Text(deliveryWarning)
+						.font(.system(size: 11))
+						.foregroundStyle(.orange)
+						.fixedSize(horizontal: false, vertical: true)
+				}
 			} else {
-				Text("当前配置不属于四档预设。选择任一预设会覆盖保养提醒线、低电量警示线与夜间免打扰组合；其余设置不受影响。")
+				Text("当前配置不属于四档预设。选择任一预设会覆盖保养提醒线、低电警示线、相关提醒开关与夜间免打扰组合；其余设置不受影响。")
 					.font(.system(size: 11))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)

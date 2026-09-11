@@ -46,6 +46,9 @@ nonisolated enum ScenarioPreset: String, CaseIterable, Identifiable, Sendable {
 			copy.chargeCareThresholdPercent = 90
 			copy.lowBatteryThresholdPercent = 25
 			copy.enabledOptions.insert(.chargeCareReminder)
+			// 说明里承诺了「低电警示提前到 25%」——承诺的开关必须由预设自己打开，
+			// 否则用户关着低电量提醒时这句说明就是静默谎报（matches 同步认领此开关）
+			copy.enabledOptions.insert(.alertLowBattery)
 			copy.enabledOptions.remove(.quietHours)
 		case .storage:
 			copy.chargeCareThresholdPercent = 70
@@ -78,6 +81,7 @@ nonisolated enum ScenarioPreset: String, CaseIterable, Identifiable, Sendable {
 			return config.chargeCareThresholdPercent == 90
 				&& config.lowBatteryThresholdPercent == 25
 				&& careOn && !quietOn
+				&& config.enabledOptions.contains(.alertLowBattery)
 		case .storage:
 			return config.chargeCareThresholdPercent == 70
 				&& config.lowBatteryThresholdPercent == 20
@@ -94,5 +98,14 @@ nonisolated enum ScenarioPreset: String, CaseIterable, Identifiable, Sendable {
 	/// 面板与设置页的回显都从这里取值，防止「预设切换静默失败」后界面谎报模式。
 	nonisolated static func matched(in config: AppConfiguration) -> ScenarioPreset? {
 		allCases.first { $0.matches(config) }
+	}
+
+	/// 诚实回显的送达警告：预设打开了提醒开关，但「启用提醒通知」总开关关着时，
+	/// 任何提醒都不会送达——界面承诺了「到线提醒」就必须同时交代送达条件。
+	/// 非预设态返回 nil（自定义态已有覆盖警告文案，不重复）。
+	nonisolated static func deliveryWarning(for config: AppConfiguration) -> String? {
+		guard matched(in: config) != nil else { return nil }
+		guard !config.enabledOptions.contains(.alerts) else { return nil }
+		return "提醒总开关当前关闭，以上提醒不会送达；在设置页「提醒通知」里打开后生效。"
 	}
 }

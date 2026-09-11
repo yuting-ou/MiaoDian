@@ -3037,6 +3037,20 @@ do {
 	expectEqual(ScenarioPreset.travel.applied(to: base).chargeCareThresholdPercent, 90, "外出满充：保养线 90")
 	expectEqual(ScenarioPreset.travel.applied(to: base).lowBatteryThresholdPercent, 25, "外出满充：低电警示 25")
 	expect(!ScenarioPreset.travel.applied(to: base).enabledOptions.contains(.quietHours), "外出满充：免打扰关")
+	// 说明承诺了「低电警示提前到 25%」，预设必须自己打开低电量提醒开关——含用户此前手动关闭的情况（变异：删 applied 里的 insert 此条必红）
+	var lowAlertOff = base
+	lowAlertOff.enabledOptions.remove(.alertLowBattery)
+	expect(ScenarioPreset.travel.applied(to: lowAlertOff).enabledOptions.contains(.alertLowBattery), "外出满充：承诺低电警示则打开低电量提醒开关")
+	// 用户事后关掉承诺的开关即脱离预设（回显自定义，不谎报还在外出满充）
+	var travelNoLowAlert = ScenarioPreset.travel.applied(to: base)
+	travelNoLowAlert.enabledOptions.remove(.alertLowBattery)
+	expectEqual(ScenarioPreset.matched(in: travelNoLowAlert), nil, "外出满充：低电量提醒被关后不算任何预设")
+	// 送达诚实警告：预设态 + 提醒总开关关 → 必须警告；总开关开或自定义态 → 不警告（变异：guard 写反必红）
+	var presetMasterOff = ScenarioPreset.office.applied(to: base)
+	presetMasterOff.enabledOptions.remove(.alerts)
+	expect(ScenarioPreset.deliveryWarning(for: presetMasterOff)?.contains("不会送达") == true, "送达警告：预设态且总开关关必须警告")
+	expectEqual(ScenarioPreset.deliveryWarning(for: ScenarioPreset.office.applied(to: base)), nil, "送达警告：总开关开不警告")
+	expectEqual(ScenarioPreset.deliveryWarning(for: base), nil, "送达警告：自定义态不警告（已有覆盖警告文案）")
 	expectEqual(ScenarioPreset.storage.applied(to: base).chargeCareThresholdPercent, 70, "长期存放：保养线 70")
 	expectEqual(ScenarioPreset.fastCharge.applied(to: base).chargeCareThresholdPercent, 90, "快充：保养线 90")
 
