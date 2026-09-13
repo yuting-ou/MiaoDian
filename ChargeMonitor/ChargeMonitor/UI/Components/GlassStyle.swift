@@ -234,6 +234,7 @@ private struct ControlPillGlassModifier: ViewModifier {
 private struct CardSectionModifier: ViewModifier {
 	@Environment(\.colorSchemeContrast) private var contrast
 	@Environment(\.colorScheme) private var colorScheme
+	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
 	// 材质档位直读服务单例（MainActor）：与面板外壳同源，设置切换后即时跟随
 	private var material: PanelMaterial {
@@ -246,16 +247,21 @@ private struct CardSectionModifier: ViewModifier {
 		// 填充 token 与证明测试同源（GlassTokens.cardSectionFill，材质档位化 v1.20.0）
 		let fill = GlassTokens.cardSectionFill(increased: increased, isDark: isDark, material: material)
 		let stroke = increased ? 0.22 : 0.09
+		let shape = RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
+		let hairline = shape.strokeBorder(Color.primary.opacity(stroke), lineWidth: 1)
 		if #available(macOS 26.0, *) {
-			content
-				.background(
-					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-						.fill(fill)
-				)
-				.overlay(
-					RoundedRectangle(cornerRadius: GlassMetrics.cardCornerRadius, style: .continuous)
-						.strokeBorder(Color.primary.opacity(stroke), lineWidth: 1)
-				)
+			if GlassTokens.cardIsGlass(material, reduceTransparency: reduceTransparency) {
+				// 液态玻璃档（v2.0.3 用户裁决）：卡面=真玻璃，卡纱浓度进 .clear.tint——
+				// 平涂白块在清玻璃壳上读作塑料，整个面板必须是一族玻璃；
+				// 玻璃的模糊/折射让壁纸在卡面下流动，浓度预算与证明表同源
+				content
+					.glassEffect(.clear.tint(fill), in: shape)
+					.overlay(hairline)
+			} else {
+				content
+					.background(shape.fill(fill))
+					.overlay(hairline)
+			}
 		} else {
 			content
 				.background(

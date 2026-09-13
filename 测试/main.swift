@@ -1519,6 +1519,17 @@ do {
 	expect(PanelMaterial.clear.floorAlpha(isDark: true) != PanelMaterial.balanced.floorAlpha(isDark: true),
 		"材质证明[深]：液态玻璃/均衡壳层 tint 不同（档差不只靠卡纱）")
 
+	// v2.0.3 用户裁决「整个面板都要是液态玻璃」：卡面材质归属锁——
+	// 液态玻璃档卡面=真玻璃（.clear.tint 同浓度），均衡/厚重磨砂卡面即档位语义保持平涂；
+	// 降低透明度下壳层已不透明，卡面一律不叠玻璃（变异：cardIsGlass 写反或漏透明分支必红）
+	expect(GlassTokens.cardIsGlass(.clear), "卡面材质：液态玻璃档卡面=真玻璃")
+	expect(!GlassTokens.cardIsGlass(.balanced), "卡面材质：均衡档卡面=磨砂平涂（档位语义）")
+	expect(!GlassTokens.cardIsGlass(.solid), "卡面材质：厚重档卡面=磨砂平涂（档位语义）")
+	for material in PanelMaterial.allCases {
+		expect(!GlassTokens.cardIsGlass(material, reduceTransparency: true),
+			"卡面材质：降低透明度下「\(material.title)」不叠玻璃")
+	}
+
 	// 卡面文字对比度回归底线（逐档证明已锁 AAA；此处防未来调参只盯均值忘最坏）。
 	// 除 primary 关键数字外，把卡面标签（primary 85%，卡上最常见文字形态）也逐档锁 ≥4.5 AA
 	for material in PanelMaterial.allCases {

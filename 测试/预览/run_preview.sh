@@ -24,10 +24,17 @@ while IFS= read -r f; do
 done < <(find "$SRC" -name '*.swift' | sort)
 
 echo "==> 编译预览（源文件 ${#SOURCES[@]} 个 + 预览入口）..."
+# 与 build.sh 同款 SDK 自适应：CLT-only 环境钉 26.5（CLT 27 缺 SwiftUIMacros 宏插件，UI 层宏展开必挂）
+CS_PATH="$(xcode-select -p)"
+SDK_ARGS=()
+if [[ "$CS_PATH" == *CommandLineTools* && -d "$CS_PATH/SDKs/MacOSX26.5.sdk" ]]; then
+	SDK_ARGS=(-sdk "$CS_PATH/SDKs/MacOSX26.5.sdk")
+fi
 swiftc \
 	-swift-version 5 \
 	-default-isolation MainActor \
 	-target "arm64-apple-macosx$DEPLOYMENT_TARGET" \
+	"${SDK_ARGS[@]}" \
 	"${SOURCES[@]}" \
 	"$ROOT/测试/预览/main.swift" \
 	-o "$APP/Contents/MacOS/preview"

@@ -48,6 +48,10 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 		)
 		window.titlebarAppearsTransparent = true
 		window.titleVisibility = .hidden
+		// 展示图取景：红绿灯与面板气质无关，预览 harness 专属隐藏（不是产品窗口）
+		window.standardWindowButton(.closeButton)?.isHidden = true
+		window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+		window.standardWindowButton(.zoomButton)?.isHidden = true
 		// 透底：玻璃效果采样窗口后面的桌面，与 MenuBarExtra 面板同条件
 		window.isOpaque = false
 		window.backgroundColor = .clear
@@ -56,7 +60,14 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 		// 高度取内容自然高与屏幕可用高的较小值，保证底部不被 Dock 吞掉
 		let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 		window.setContentSize(NSSize(width: hosting.fittingSize.width, height: min(hosting.fittingSize.height, visible.height - 20)))
-		window.center()
+		// 展示图取景：右上贴菜单栏位（与真实面板同位），正后方留纯壁纸——
+		// 玻璃采样桌面，截出来只有面板与壁纸，不带用户任何窗口内容
+		if let screen = NSScreen.main {
+			let f = screen.frame
+			window.setFrameTopLeftPoint(NSPoint(x: f.maxX - window.frame.width - 24, y: f.maxY - 40))
+		} else {
+			window.center()
+		}
 		window.makeKeyAndOrderFront(nil)
 		self.window = window
 
