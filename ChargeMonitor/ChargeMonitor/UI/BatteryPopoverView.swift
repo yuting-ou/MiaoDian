@@ -1060,12 +1060,12 @@ struct BatteryPopoverView: View {
 
 	// 动作组之间的小间距（不加文字标题：控制行栈已占近 1/4 面板高，再加标题只会更长）
 	private var controlGroupGap: some View {
-		Spacer().frame(height: 6)
+		Spacer().frame(height: 4)
 	}
 
 	private var controlRows: some View {
 		// v1.24.1 行距 4：药丸各自成件后留出玻璃缝隙（贴死会连成一条，失去"浮在玻璃上"的节奏）
-		VStack(spacing: 4) {
+		VStack(spacing: 3) {
 			// 开了提醒但系统不给发通知：提醒实际收不到，给个显眼的入口去开权限
 			if configurationManager.configuration.enabledOptions.contains(.alerts),
 			   alertController.isNotificationPermissionDenied {
@@ -1080,7 +1080,7 @@ struct BatteryPopoverView: View {
 			// 前者是"现在发生了什么"，后者是"你可以做什么"，同形同权重时状态行读起来像第 8 个按钮
 			if hasControlStateRows {
 				Divider()
-					.padding(.vertical, 3)
+					.padding(.vertical, 2)
 			}
 			// 设置已迁到独立设置窗口，这里只负责打开它；
 			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多。

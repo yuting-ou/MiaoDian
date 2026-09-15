@@ -153,12 +153,14 @@ struct BatteryInfoFormatter {
 		var value = "\(formatVoltage(voltageMV)) \(formatCurrent(currentMA))（\(formatTierWatts(watts))）"
 		// 协商明显低于额定 → 文案直说"偏低"（与"充电器偏慢"洞察同一套语言）；
 		// 以前靠染橙警示，但彩色小字坐透玻璃面在多数壁纸下不达 AA，语义不能靠一个看不见的颜色承担
-		var isUnderRated = false
+		// 额定瓦数只在"没吃到额定"时才有信息量（等于协商值时它是重复信息，
+		// 却会把值挤成两行、把面板顶出屏幕）——判断与额定一起出现，前缀短到一行内
+		var underRatedWatts: Int? = nil
 		if let rated = snapshot.adapterRatedWatts, rated > 0, watts < Double(rated) * 0.6 {
-			isUnderRated = true
+			underRatedWatts = rated
 		}
-		if let rated = snapshot.adapterRatedWatts, rated > 0 {
-			value += isUnderRated ? " · 额定\(rated)W（偏低）" : " · 额定\(rated)W"
+		if let rated = underRatedWatts {
+			value += " · 额定\(rated)W（偏低）"
 		}
 		return BatteryInfoItem(
 			group: .power,
@@ -178,11 +180,16 @@ struct BatteryInfoFormatter {
 			let text = formatTierWatts(watts)
 			return index == snapshot.activeTierIndex ? "✓\(text)" : text
 		}
+		// 单位只在末档出现一次："15/27/36/45/✓100W"（124pt 一行装得下；
+		// 逐档带 W 的写法 200pt，逼出第二行、把面板顶出屏幕）
+		let compacted = parts.enumerated().map { index, text -> String in
+			index == parts.count - 1 ? text : text.replacingOccurrences(of: "W", with: "")
+		}
 		return BatteryInfoItem(
 			group: .power,
 			symbol: "square.grid.2x2",
 			label: "可选档位",
-			value: parts.joined(separator: " / "),
+			value: compacted.joined(separator: "/"),
 			iconTint: .blue
 		)
 	}

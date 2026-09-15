@@ -114,7 +114,7 @@ struct PopoverCard<Content: View>: View {
 			content
 		}
 		.padding(.horizontal, 10)
-		.padding(.vertical, 7)
+		.padding(.vertical, 4)   // v2.1.2：7→6→5→4，12 张卡共省 ~72pt（面板高度受屏幕可用高约束）
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.cardSection()
 	}
@@ -157,7 +157,7 @@ struct PopoverInfoRow: View {
 				.contentTransition(.opacity)
 				.animation(.easeInOut(duration: 0.3), value: item.value)
 		}
-		.padding(.vertical, 3)
+		.padding(.vertical, 1.5) // v2.1.2：3→2→1.5（面板高度受屏幕可用高约束）
 		.help(item.helpText ?? item.value)
 	}
 }

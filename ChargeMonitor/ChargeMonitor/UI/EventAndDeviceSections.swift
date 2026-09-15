@@ -6,7 +6,8 @@ struct PowerEventTimelineSection: View {
 	let isCollapsed: Bool
 	let onToggle: () -> Void
 	
-	private static let maxVisible = 6
+	// 5 行：合并后每行已能代表多个事件；再多就把面板顶出屏幕（面板高度受屏幕可用高约束）
+	private static let maxVisible = 4
 	
 	var body: some View {
 		PopoverCard {
@@ -183,7 +184,9 @@ struct ChargeHistorySection: View {
 	// 每行悬停态（按 startDate 区分，避免 ForEach 里逐行 @State 状态残留）
 	@State private var hoveredStartDate: Date? = nil
 
-	private static let maxVisibleSessions = 3
+	// 2 条：面板整体高度必须落在 Dock 之上（实测 12 张卡全开时超出可用高 90pt，
+	// 底部"电池设置/退出"被 Dock 盖住点不到）；最近两次充电足以回答"上次充了多久"
+	private static let maxVisibleSessions = 2
 	
 	var body: some View {
 		PopoverCard {

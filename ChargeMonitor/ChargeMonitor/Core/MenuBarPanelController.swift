@@ -161,10 +161,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		panel.setContentSize(NSSize(width: width, height: size.height))
 		// 定位与状态项图标解耦：iBar 会把图标收进隐藏区，其窗口位置随收纳状态漂移
 		// （实测面板曾跟着漂到菜单栏下 50pt/屏幕中部）。锚定屏幕本身：
-		// 顶边=菜单栏下缘（visibleFrame.maxY），右缘=屏幕右缘留 12pt
+		// 顶边=菜单栏下缘（visibleFrame.maxY），右缘=**可视区**右缘留 12pt。
+		// 右缘必须用 visibleFrame 而不是 frame：Dock 停在右侧时，按整屏右缘摆放会被
+		// AppKit 的 constrainFrameRect 当场挤窄（实测 584→526 并往下挪 52pt），
+		// 卡片被压窄、值被迫折行、底部"退出"挤出屏幕——看着像排版丑，其实是窗口被裁
 		let screen = buttonWindow.screen ?? NSScreen.main
 		let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-		let originX = (screen?.frame.maxX ?? visible.maxX) - 12 - width
+		let originX = visible.maxX - 12 - width
 		panel.setFrameTopLeftPoint(NSPoint(x: originX, y: visible.maxY - 4))
 		// 先无条件显示再尝试拿 key：调试自动弹出时应用未激活，若直接 makeKeyAndOrderFront
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示

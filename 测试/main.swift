@@ -208,12 +208,14 @@ do {
 	expectEqual(value("充满还需"), "1小时30分钟", "信息行：充满还需 90 分钟格式化")
 	expectEqual(value("循环次数"), "163 / 1000", "信息行：循环次数带 1000 参照系")
 	expectEqual(value("电池健康"), "95%（4500/4720 mAh）", "信息行：健康度带容量明细")
-	expectEqual(value("当前档位"), "20V 3A（60W） · 额定100W", "信息行：协商档位格式化")
+	// 额定只在"没吃到额定"时出现（60W 恰好等于 100W 的 60% → 不算偏低 → 不重复显示额定）
+	expectEqual(value("当前档位"), "20V 3A（60W）", "信息行：协商档位格式化（满速不重复额定）")
 	expectEqual(value("输入功率"), "12.50W", "信息行：功率数字与单位之间不加空格")
 	// 玻璃优先裁决（v2.1.x）：异常语义从字色迁到文案——彩色小字坐透玻璃面多数壁纸不达 AA
 	expect(value("电池温度")?.contains("（偏高）") == true, "信息行：40°C 文案直说偏高（不再染橙）")
 	// 变异检验：把 isHot 判定写反或阈值取错，下面这条必红
-	expectEqual(value("当前档位"), "20V 3A（60W） · 额定100W", "信息行：恰好 60% 额定不算偏低（边界不含）")
+	// 边界：恰好 60% 不算偏低（不含等号），故不显示额定
+	expectEqual(value("当前档位"), "20V 3A（60W）", "信息行：恰好 60% 额定不算偏低（边界不含）")
 	
 	let omitted = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, omitsTimeEstimates: true).makeItems()
 	expect(!omitted.contains { $0.label == "充满还需" }, "信息行：面板模式不重复展示充满还需")
@@ -226,8 +228,11 @@ do {
 	var weak = s
 	weak.negotiatedCurrentMA = 1500  // 20V 1.5A = 30W < 额定100W 的 60%
 	let weakItems = BatteryInfoFormatter(snapshot: weak, configuration: fullConfig).makeItems()
-	expect(weakItems.first { $0.label == "当前档位" }?.value.contains("（偏低）") == true,
-		"信息行：协商 30W/额定 100W 文案说偏低（变异检验：删掉 isUnderRated 分支必红）")
+	let weakTier = weakItems.first { $0.label == "当前档位" }?.value ?? ""
+	expect(weakTier.contains("（偏低）"), "信息行：协商 30W/额定 100W 文案说偏低（变异检验：闸门恒假必红）")
+	expect(weakTier.contains("额定100W"), "信息行：偏低时才把额定搬出来做对照")
+	expect(weakTier.range(of: "额定")!.lowerBound < weakTier.range(of: "（偏低）")!.lowerBound,
+		"信息行：额定在判断之前（对照在前、结论在后，两行上限兜住尾部）")
 }
 
 do {

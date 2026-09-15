@@ -63,23 +63,27 @@ struct SignificantEnergySection: View {
 							.foregroundStyle(index == 0 ? Color.primary : GlassTokens.labelOnGlass)
 							.frame(width: 12)
 
-						VStack(alignment: .leading, spacing: 1) {
-							Text(entry.name)
-								.font(.system(size: PopoverLayout.bodyFontSize))
+						// 表格化：名字/分钟/时段各占固定列。原来"分钟"被 Spacer 甩到最右，
+						// 在整行宽的卡里留下大片空白，读起来像没排完
+						Text(entry.name)
+							.font(.system(size: PopoverLayout.bodyFontSize))
+							.lineLimit(1)
+							.frame(maxWidth: 180, alignment: .leading)
+
+						Text(DurationFormatter.chinese(minutes: Int(entry.seconds / 60)))
+							.font(.system(size: 11, weight: .semibold).monospacedDigit())
+							.foregroundStyle(.primary)
+							.frame(width: 62, alignment: .trailing)
+
+						// 时段归因：把"谁最费电"细化到"一般几点在费电"
+						if let window = entry.window {
+							Text("集中在 \(window)")
+								.font(.system(size: 10))
+								.foregroundStyle(GlassTokens.labelOnGlass)
 								.lineLimit(1)
-							// 时段归因：把"谁最费电"细化到"一般几点在费电"
-							if let window = entry.window {
-								Text("集中在 \(window)")
-									.font(.system(size: 9))
-									.foregroundStyle(GlassTokens.labelOnGlass)
-							}
 						}
 
 						Spacer(minLength: 8)
-
-						Text(DurationFormatter.chinese(minutes: Int(entry.seconds / 60)))
-							.font(.system(size: 10).monospacedDigit())
-							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 					.padding(.vertical, 2)
 				}
