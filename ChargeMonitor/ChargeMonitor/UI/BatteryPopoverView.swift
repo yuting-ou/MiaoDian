@@ -617,7 +617,9 @@ struct BatteryPopoverView: View {
 			// 位置与可抓取性不变（v1.13 的回归是"常态无处可抓"，不是"常态可见"）
 			.background(Capsule().fill(.ultraThinMaterial).opacity(isHandleHovering == id.layoutID || dragState?.card == id.layoutID ? 1 : 0))
 			.padding(3)
-			.contentShape(Circle())
+			// 热区放大到视觉尺寸的 ~2.5 倍（原 ≈25pt 圆点：按住把手本身就要瞄，
+			// 是"不顺手"的另一半）。视觉不变，只把可抓取范围向外扩 9pt
+			.contentShape(Circle().inset(by: -9))
 			.opacity(dragState?.card == id.layoutID ? 0 : 1)
 			// 把手浮现/隐没过渡（v1.18.6）：抓起隐没、松手浮现走快速淡变——旧版无动画瞬跳
 			.animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: dragState?.card == id.layoutID)
@@ -645,7 +647,9 @@ struct BatteryPopoverView: View {
 							dragState = CardDragState(
 								card: id.layoutID,
 								translation: drag.translation,
-								originFrame: frameTable.frames[id.layoutID] ?? .zero
+								originFrame: frameTable.frames[id.layoutID] ?? .zero,
+								// 起拖点=把手处的真实指针位置：落点跟手，不再偏到卡片中心
+								startPoint: drag.startLocation
 							)
 						} else if dragState?.card != id.layoutID {
 							// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖（如卡死残留态），本把手的

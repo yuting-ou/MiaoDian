@@ -8,18 +8,22 @@ nonisolated struct CardDragState {
 	var card: String
 	// 手势位移（窗口坐标增量）
 	var translation: CGSize = .zero
-	// 拖动开始瞬间该卡的窗口坐标 frame——落点计算的固定基准，
-	// 预览重排后探针会刷新 frame 表，但不能回灌落点计算（防反馈振荡）
+	// 拖动开始瞬间该卡的窗口坐标 frame——预览重排后探针会刷新 frame 表，
+	// 但不能回灌落点计算（防反馈振荡）
 	var originFrame: CGRect = .zero
+	// 起拖那一刻指针的真实位置（把手长在卡片顶部中央，卡片中心≠手的位置：
+	// 旧实现用"卡中心+位移"当落点，拖一张 200pt 高的图表卡，系统算的点在手下方 ~100pt，
+	// 用户看到的就是"才拖一点就跳好几格"——v2.1.2 人体工学修正）
+	var startPoint: CGPoint = .zero
 
 	/// 激活判定：位移超过 6pt 才算真拖（纯按住不动=悬停预览态）
 	var isDragging: Bool {
 		hypot(translation.width, translation.height) > 6
 	}
 
-	/// 指针当前位置（窗口坐标）= 起始卡中心 + 位移
+	/// 指针当前位置（窗口坐标）= 起拖点 + 位移，即手指真正所在处
 	var pointer: CGPoint {
-		CGPoint(x: originFrame.midX + translation.width, y: originFrame.midY + translation.height)
+		CGPoint(x: startPoint.x + translation.width, y: startPoint.y + translation.height)
 	}
 }
 
@@ -31,6 +35,10 @@ nonisolated enum CardDropResolver {
 		var frames: [String: CGRect] = [:]
 	}
 
+	/// 横向容差：板面水平范围外扩半列宽。旧值 30pt 太窄——往边上甩一下想换列，
+	/// 反而被判"出界丢弃回弹"，像面板在拒绝用户
+	nonisolated static let horizontalSlack: CGFloat = 140
+
 	/// 落点判定：返回插到某卡之前 / 追加末尾；nil = 落点在板面横向范围之外（丢弃回弹）。
 	/// excluding 排除被拖卡片自身——它的预览 frame 不参与锚定，否则"锚点是自己"
 	/// 会在摘除后失配、被误判为追加末尾。
@@ -39,28 +47,44 @@ nonisolated enum CardDropResolver {
 		table: FrameTable,
 		excluding: String? = nil
 	) -> PanelFlow.DropTarget? {
-		let sorted = table.frames
-			.filter { $0.key != excluding }
-			.sorted { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }
-		guard let first = sorted.first else { return nil }
-		// 横向出界判定：全部卡片 frame 的水平范围外扩 30pt 之外视为丢弃
-		let minX = (sorted.map { $0.value.minX }.min() ?? 0) - 30
-		let maxX = (sorted.map { $0.value.maxX }.max() ?? 0) + 30
+		let kept = table.frames.filter { $0.key != excluding }
+		guard !kept.isEmpty else { return nil }
+		// 视觉顺序：自上而下、自左而右（密铺渲染序 = flow 序）
+		let sorted = kept.sorted { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }
+		// 横向出界：外扩半列宽之外才判丢弃
+		let minX = (kept.map { $0.value.minX }.min() ?? 0) - horizontalSlack
+		let maxX = (kept.map { $0.value.maxX }.max() ?? 0) + horizontalSlack
 		guard point.x >= minX, point.x <= maxX else { return nil }
-		// 顶于首卡上沿 → 插到最前
-		if point.y < first.value.midY {
-			return .before(first.key)
+		// 首卡之上 / 末卡之下：整体前插 / 追加末尾（不必再选锚卡）
+		if point.y < (kept.map { $0.value.minY }.min() ?? 0) { return .before(sorted.first!.key) }
+		if point.y > (kept.map { $0.value.maxY }.max() ?? 0) { return .end }
+
+		// 列感知锚定：按"行差为主、列差为辅"选最近一张卡。
+		// 旧实现只沿 Y 扫描、从不看 X：指针停在右列卡的上半部，会返回"插到左列卡之前"
+		// ——用户"明明拖到右边了它跑左边"。行差用区间距离（落在卡内即 0），
+		// 列差权重压低（0.35）保证同一行内 Y 仍是主导，只有明显偏列时才改判
+		let anchor = sorted.min { lhs, rhs in
+			let a = anchorScore(point, lhs.value), b = anchorScore(point, rhs.value)
+			if a == b { return (lhs.value.minY, lhs.value.minX) < (rhs.value.minY, rhs.value.minX) }
+			return a < b
+		}!
+		guard let index = sorted.firstIndex(where: { $0.key == anchor.key }) else { return nil }
+		// 落在锚卡上半 → 插到它之前；下半 → 插到它之后（用下一张作锚点，末卡则追加）
+		if point.y < anchor.value.midY { return .before(anchor.key) }
+		return index + 1 < sorted.count ? .before(sorted[index + 1].key) : .end
+	}
+
+	/// 指针到某 frame 的锚定代价：行方向（Y）区间距离平方 + 列方向（X）区间距离平方 ×0.35。
+	/// 区间内距离记 0，故"卡在哪一行"由是否落在行带决定，"这一行的哪一列"由 X 偏差决定
+	private nonisolated static func anchorScore(_ point: CGPoint, _ frame: CGRect) -> CGFloat {
+		func gap(_ v: CGFloat, _ lo: CGFloat, _ hi: CGFloat) -> CGFloat {
+			if v < lo { return lo - v }
+			if v > hi { return v - hi }
+			return 0
 		}
-		for (index, frame) in sorted.enumerated() {
-			guard point.y <= frame.value.maxY else { continue }
-			// 落在卡片下半 → 插到它之后（返回它的下一张作锚点）
-			if point.y >= frame.value.midY {
-				return index + 1 < sorted.count ? .before(sorted[index + 1].key) : .end
-			}
-			return .before(frame.key)
-		}
-		// 超过最后一张 → 追加末尾
-		return .end
+		let dy = gap(point.y, frame.minY, frame.maxY)
+		let dx = gap(point.x, frame.minX, frame.maxX)
+		return dy * dy + dx * dx * 0.35
 	}
 }
 

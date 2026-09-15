@@ -1571,6 +1571,39 @@ do {
 	expect(CardDropResolver.resolve(point: CGPoint(x: 1000, y: 80), table: probeTable) == nil, "落点：横向出界→丢弃回弹")
 	expect(CardDropResolver.resolve(point: CGPoint(x: 100, y: 80), table: CardDropResolver.FrameTable()) == nil, "落点：空板→nil")
 
+	// —— v2.1.2 人体工学修正的两条锁 ——
+	// ①列感知：旧实现只沿 Y 扫描、从不看 X，指针停在右列卡上半会返回"插到左列卡之前"
+	//    （用户体感："明明拖到右边了，它跑左边"）。变异检验：把 anchorScore 的 dx 权重归零，前两条必红
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 400, y: 30), table: probeTable), .before("b"),
+		"落点列感知：右列上半→插到右列卡之前（不锚左列）")
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 400, y: 80), table: probeTable), .before("W"),
+		"落点列感知：右列下半→右列之后（末行下一张作锚点）")
+	// 同一行内 Y 仍主导：左列下半应插到左列之后（=右列之前），不被 X 带偏
+	expectEqual(CardDropResolver.resolve(point: CGPoint(x: 100, y: 90), table: probeTable), .before("b"),
+		"落点列感知：行内 Y 主导（左列下半→右列之前）")
+	// ②横向容差：旧值 30pt 太窄，往边上甩一下想换列就被判"出界丢弃"；现放宽到半列宽
+	expect(CardDropResolver.resolve(point: CGPoint(x: 660, y: 30), table: probeTable) != nil,
+		"落点容差：板右缘外 110pt 仍接受（甩边换列不该被拒）")
+	expect(CardDropResolver.resolve(point: CGPoint(x: 1000, y: 80), table: probeTable) == nil,
+		"落点容差：真出板面仍判丢弃（回弹语义保留）")
+
+	// ③跟手：落点用"起拖点+位移"，不是"卡片中心+位移"
+	//    （把手长在卡片顶部中央，旧模型对 200pt 高的图表卡会把手位置下方 ~100pt 处算落点）
+	let dragStateProbe = CardDragState(
+		card: "W", translation: CGSize(width: 5, height: 12),
+		originFrame: CGRect(x: 0, y: 200, width: 550, height: 50),
+		startPoint: CGPoint(x: 275, y: 214)  // 把手在卡顶中央：y=200+14
+	)
+	expectEqual(dragStateProbe.pointer, CGPoint(x: 280, y: 226),
+		"跟手：落点=起拖点+位移（变异检验：改回卡片中心必红）")
+	// 未位移时更直白：落点必须就是手按住的那一点（卡顶 y=214），不是卡片中心（y=225）
+	let zeroMove = CardDragState(card: "W",
+		originFrame: CGRect(x: 0, y: 200, width: 550, height: 50),
+		startPoint: CGPoint(x: 275, y: 214))
+	expectEqual(zeroMove.pointer, CGPoint(x: 275, y: 214), "跟手：零位移时落点=手所在（旧模型此处给卡片中心 225）")
+	expect(zeroMove.pointer.y < zeroMove.originFrame.midY,
+		"跟手：抓卡顶时落点高于卡中心（卡越高旧模型偏得越多：200pt 高的图表卡偏 ~100pt）")
+
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
 	let motherPast = ChargeSession(startDate: t0.addingTimeInterval(-7200), endDate: t0.addingTimeInterval(-7200 + 3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
