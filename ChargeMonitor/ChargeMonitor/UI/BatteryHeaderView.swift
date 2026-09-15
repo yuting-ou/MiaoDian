@@ -9,6 +9,10 @@ struct BatteryHeaderView: View {
 	var hotTemperatureThreshold: Int = 40
 	// 宽面板时传入体检评分，展在头部右侧的空白区；窄面板为 nil、体检仍走卡片
 	var checkup: BatteryCheckup? = nil
+	// 体检被用户关掉时，右侧那块空白改放"接的是哪只充电器"——
+	// 头部左半说"电源状态"，右半说"电源是谁"，不留空块（v2.1.2 观感打磨）
+	var adapterName: String? = nil
+	var adapterDetail: String? = nil
 	// 弧端流光晕的可见性把门（v1.25.0）：「减少动态效果」时光晕整层退场——
 	// 它是纯动效零信息，静态语义由波浪静面与光点承担
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -52,6 +56,21 @@ struct BatteryHeaderView: View {
 				headerCheckup(checkup)
 					.accessibilityElement(children: .ignore)
 					.accessibilityLabel("电池体检 \(checkup.score) 分，\(checkup.verdict)")
+			} else if let adapterName {
+				VStack(alignment: .trailing, spacing: 2) {
+					Text(adapterName)
+						.font(.system(size: 11, weight: .semibold))
+						.lineLimit(1)
+						.frame(maxWidth: 190, alignment: .trailing)
+					if let adapterDetail {
+						Text(adapterDetail)
+							.font(.system(size: 10))
+							.foregroundStyle(GlassTokens.labelOnGlass)
+							.lineLimit(1)
+					}
+				}
+				.accessibilityElement(children: .ignore)
+				.accessibilityLabel("当前充电器 \(adapterName)，\(adapterDetail ?? "")")
 			}
 		}
 		// 头部容器：26 上与卡片同款发丝分区（头部是内容不是控件，不单独成玻璃）；

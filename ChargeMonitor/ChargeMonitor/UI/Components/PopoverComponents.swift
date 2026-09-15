@@ -34,7 +34,7 @@ enum PopoverLayout {
 	static let rowHeight: CGFloat = 22
 	static let rowHorizontalPadding: CGFloat = 10
 	static let rowVerticalPadding: CGFloat = 3
-	static let sectionSpacing: CGFloat = 4
+	static let sectionSpacing: CGFloat = 3
 	static let rowCornerRadius: CGFloat = 8
 	// 信息行两列布局：标签列宽按最长标签（"剩余可用时间"6 字 @11.5pt）定，
 	// 值从这条线起左对齐——值列左缘不再随值长短锯齿化
@@ -114,7 +114,7 @@ struct PopoverCard<Content: View>: View {
 			content
 		}
 		.padding(.horizontal, 10)
-		.padding(.vertical, 4)   // v2.1.2：7→6→5→4，12 张卡共省 ~72pt（面板高度受屏幕可用高约束）
+		.padding(.vertical, 3)   // v2.1.2：7→6→5→4→3，12 张卡共省 ~96pt（面板必须整块落在 Dock 之上）
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.cardSection()
 	}

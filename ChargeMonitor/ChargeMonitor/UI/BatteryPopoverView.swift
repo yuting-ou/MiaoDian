@@ -107,7 +107,9 @@ struct BatteryPopoverView: View {
 				drainEstimate: monitor.drainEstimate,
 				lowBatteryThreshold: configuration.lowBatteryThresholdPercent,
 				hotTemperatureThreshold: configuration.highTemperatureThresholdC,
-				checkup: twoColumns ? checkup : nil
+				checkup: twoColumns ? checkup : nil,
+				adapterName: twoColumns && checkup == nil ? chargerHeadline?.0 : nil,
+				adapterDetail: twoColumns && checkup == nil ? chargerHeadline?.1 : nil
 			)
 			.modifier(CascadeIn(step: 0, active: didAppear))
 
@@ -1271,6 +1273,19 @@ struct BatteryPopoverView: View {
 	}
 	
 	// 当前体检评分（供头部展示与分享卡片共用）
+	// 头部右槽的兜底内容：体检关掉时显示"接的是哪只充电器"（名字 + 协议·额定）
+	private var chargerHeadline: (String, String?)? {
+		guard monitor.snapshot.powerSource == .powerAdapter else { return nil }
+		let profile = historyRecorder.currentChargerProfile
+		let name = profile?.displayName ?? monitor.snapshot.adapterName ?? "已接通电源"
+		var detailParts: [String] = []
+		if let proto = monitor.snapshot.chargingProtocol { detailParts.append(proto) }
+		if let rated = profile?.ratedWatts ?? monitor.snapshot.adapterRatedWatts, rated > 0 {
+			detailParts.append("额定\(rated)W")
+		}
+		return (name, detailParts.isEmpty ? nil : detailParts.joined(separator: " · "))
+	}
+
 	private var batteryCheckup: BatteryCheckup? {
 		guard configurationManager.configuration.enabledOptions.contains(.batteryCheckup) else { return nil }
 		return BatteryCheckup.evaluate(
