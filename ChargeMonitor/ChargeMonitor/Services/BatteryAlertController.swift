@@ -14,6 +14,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	@Published private(set) var isNotificationPermissionDenied = false
 	// 系统优化充电正在保养线附近反复暂停（与用户的保养提醒"打架"）
 	@Published private(set) var isOptimizedChargingHolding = false
+	// C2 共存确实生效过：本机读到过系统暂缓签名且电平覆盖保养线（= 我们真的静默过提醒）。
+	// 洞察文案据此二选一措辞——读不到签名的机器上我们不静默，就不能说"不再重复提醒"（诚实边界）
+	@Published private(set) var hasSilencedCareForSystemHold = false
 	
 	private var cancellables: Set<AnyCancellable> = []
 	private var configuration = AppConfiguration.default
@@ -41,6 +44,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 保养线附近的充电暂停边沿时间戳：系统优化充电的指纹
 	private var carePauseEdges: [Date] = []
 	private var wasChargingNearCareLine = false
+	// C2 系统共存：本次插电会话内系统是否已在保养线处按住充电（拔电重置）。
+	// 一旦观察到系统替用户做了"到线即停"，本会话不再重复喊"可以拔了"
+	private var didObserveSystemHoldAtLine = false
 	
 	// 阈值大多由用户在设置里调，重置线随阈值派生，避免临界抖动
 	private static let slowChargeRatio = 0.55
@@ -231,12 +237,26 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	
 	// 保养拔电提醒：想养电池的人，充到设定线（默认 80%）提醒一次可以拔了
 	private func evaluateChargeCare(_ snapshot: BatterySnapshot) {
+		// 共存标记的推进必须先于开关与 soc guard：拔电重置若无条件发生，就会出现
+		// 「关着保养提醒拔电 → 再插电 → 再开提醒」时顶着上一会话的 true 静默掉本该发的提醒
+		let wasObserved = didObserveSystemHoldAtLine
+		didObserveSystemHoldAtLine = Self.systemHoldCoveringCareLine(
+			previouslyObserved: wasObserved,
+			snapshot: snapshot,
+			threshold: configuration.chargeCareThresholdPercent
+		)
+		if didObserveSystemHoldAtLine, !wasObserved {
+			// 本机签名可读且已覆盖保养线：静默机制真的在生效，洞察才可据实措辞
+			hasSilencedCareForSystemHold = true
+		}
+		
 		guard configuration.enabledOptions.contains(.chargeCareReminder) else { return }
 		guard let soc = snapshot.stateOfChargePercent else { return }
 		let threshold = configuration.chargeCareThresholdPercent
 		
 		if snapshot.isCharging, !snapshot.isFull, soc >= threshold {
 			guard !didNotifyChargeCare else { return }
+			guard !didObserveSystemHoldAtLine else { return }
 			// 用户点过"延后"：到点前闭嘴，到点后重新提醒（didNotify 已在延后时重置）
 			guard !Self.isChargeCareSnoozed(
 				snoozeUntil: defaults.object(forKey: Self.chargeCareSnoozeKey) as? Date,
@@ -266,6 +286,33 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			let soc = snapshot.stateOfChargePercent
 		else { return false }
 		return abs(soc - threshold) <= 3
+	}
+
+	// C2 系统共存：系统暂缓电平是否覆盖保养线（纯函数，供单测）。
+	// 暂缓电平贴线 ±3% 才算"系统在做同一件事"，静默我方提醒；
+	// 电平明显高于线（系统会充过线）→ 提醒必须保留；
+	// 明显低于线（系统比用户要求更严）→ 提醒本就够不着，静默与否无行为差，按"不覆盖"处理保守不误伤
+	nonisolated static let systemHoldCareTolerance = 3
+	nonisolated static func isHoldCoveringCareLine(heldSoc: Int?, threshold: Int) -> Bool {
+		guard let heldSoc else { return false }
+		return abs(heldSoc - threshold) <= systemHoldCareTolerance
+	}
+
+	// 「本插电会话内系统已在保养线处按住」标记的状态转移（纯函数供单测）。
+	// 拔电一律清零（重置不得被保养提醒开关挡住，否则跨会话陈旧置位会吞掉本该发的提醒）；
+	// 插电且系统按住且电平贴线→置位；其余保持——恢复充电后本会话不再重复喊，
+	// 是这条共存逻辑的既定语义（置位是锁存的，不是逐帧现算）
+	nonisolated static func systemHoldCoveringCareLine(
+		previouslyObserved: Bool,
+		snapshot: BatterySnapshot,
+		threshold: Int
+	) -> Bool {
+		guard snapshot.powerSource == .powerAdapter else { return false }
+		if snapshot.isSystemChargeHeld,
+			isHoldCoveringCareLine(heldSoc: snapshot.stateOfChargePercent, threshold: threshold) {
+			return true
+		}
+		return previouslyObserved
 	}
 
 	// 检测"系统优化充电在保养线附近反复暂停"：6 小时内 ≥3 次边沿即认定系统在替你

@@ -152,13 +152,19 @@ nonisolated enum UsagePatternAnalyzer {
 		careHolding: Bool,
 		careThresholdPercent: Int,
 		heatOverlap: ChargingHabitInsight?,
-		chargerInsight: ChargingHabitInsight?
+		chargerInsight: ChargingHabitInsight?,
+		// 我方静默是否真的在生效（本机读到过系统暂缓签名且电平覆盖保养线）
+		careSilencedBySystemHold: Bool = false
 	) -> [ChargingHabitInsight] {
 		var result: [ChargingHabitInsight] = []
 		if let habitBase { result.append(habitBase) }
 		if careHolding {
+			// 文案与机制对账：静默生效时不许再让用户以为"不选就会被反复提醒"；
+			// 静默未生效（读不到签名的机器）时不许承诺"不再重复提醒"
 			result.append(ChargingHabitInsight(
-				message: "系统优化充电正在 \(careThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事，二选一即可（信系统就关掉提醒）",
+				message: careSilencedBySystemHold
+					? "系统优化充电正在 \(careThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事：暂停期间我们已不再重复提醒你拔电，想彻底交给系统也可以关掉这条提醒"
+					: "系统优化充电正在 \(careThresholdPercent)% 附近反复暂停——这和你的保养提醒是同一件事，二选一即可（信系统就关掉提醒）",
 				symbol: "gearshape.2.fill"
 			))
 		}

@@ -105,6 +105,10 @@ struct IOKitBatteryReader {
 			if let voltage = props.int64("Voltage"), voltage > 0, voltage < 100_000 {
 				snapshot.batteryVoltageMV = Int(voltage)
 			}
+			// 系统充电暂缓签名：无条件读，语义过滤交给判定（插电/在充/充满门）
+			if let chargerData = props.dictionary("ChargerData") {
+				snapshot.notChargingReason = chargerData.int("NotChargingReason")
+			}
 		}
 		snapshot.timeToFullChargeMinutes = timeToFull
 		snapshot.timeToEmptyMinutes = timeToEmpty

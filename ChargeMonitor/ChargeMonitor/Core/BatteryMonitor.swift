@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import IOKit.ps
+import os
 
 @MainActor
 final class BatteryMonitor: ObservableObject {
@@ -99,6 +100,7 @@ final class BatteryMonitor: ObservableObject {
 	private func refresh() async {
 		let nextSnapshot = await batteryReader.readSnapshot()
 		if nextSnapshot != snapshot {
+			logChargeHoldTransition(to: nextSnapshot)
 			snapshot = nextSnapshot
 		}
 		
@@ -122,6 +124,33 @@ final class BatteryMonitor: ObservableObject {
 		recordTemperatureSample(from: nextSnapshot)
 		updateDrainEstimate(from: nextSnapshot)
 		refreshBluetoothDevicesIfNeeded()
+	}
+	
+	// C2 机会性采样：只在状态迁移时记一行。本机的"充电中该位清零"负例已在 macOS 27.0
+	// 实测（91% charging、reason=0、8 帧连续），日志的职责随之变为长期反例守望：
+	// 若哪天出现 charging=true 且 reason 含 0x01000000 的行，说明"充电中清零"不能外推
+	// （判定有 isCharging 门兜底不会误报，但事实要落档）。验证法：
+	// log show --predicate 'category == "SystemChargeHold"' 两周抽查一次
+	// 零成本：不新增定时器，搭既有轮询的迁移边沿
+	private static let holdLogger = Logger(
+		subsystem: Bundle.main.bundleIdentifier ?? "fun.crashsystem.ChargeMonitor",
+		category: "SystemChargeHold"
+	)
+	
+	// 迁移边沿判定（纯函数供单测）。必须把原始 notChargingReason 本身算作边沿：
+	// 充电中 held 恒为 false（被 isCharging 门挡掉），若只看派生态，"充电中该位被置起"
+	// 这个我们最想抓的反例永远不会触发日志——埋点会沉默地失去它存在的理由
+	nonisolated static func shouldLogHoldTransition(
+		from previous: BatterySnapshot, to next: BatterySnapshot
+	) -> Bool {
+		previous.isCharging != next.isCharging
+			|| previous.isSystemChargeHeld != next.isSystemChargeHeld
+			|| previous.notChargingReason != next.notChargingReason
+	}
+	
+	private func logChargeHoldTransition(to next: BatterySnapshot) {
+		guard Self.shouldLogHoldTransition(from: snapshot, to: next) else { return }
+		Self.holdLogger.info("charging=\(next.isCharging, privacy: .public) held=\(next.isSystemChargeHeld, privacy: .public) reason=\(next.notChargingReason ?? -1, privacy: .public) soc=\(next.stateOfChargePercent ?? -1, privacy: .public)")
 	}
 	
 	// 把一轮采样结果映射回展示模型：图标等 AppKit 侧信息留在主线程生成

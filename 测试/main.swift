@@ -1021,6 +1021,24 @@ do {
 	expectEqual(withoutCare.count, 3, "洞察收集：保养不在线则少一条（变异：恒真必红）")
 	expect(UsagePatternAnalyzer.chargingInsights(habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil).isEmpty, "洞察收集：全空返回空")
 
+	// 打架洞察文案与 C2 静默机制对账（v2.1.0 对抗审查）：静默真的生效才许说"不再重复提醒"；
+	// 没生效（读不到系统暂缓签名的机器）就不许承诺。变异检验：三元两分支写反，两组断言同时必红
+	let careLine = { (silenced: Bool) in
+		UsagePatternAnalyzer.chargingInsights(
+			habitBase: nil, careHolding: true, careThresholdPercent: 80,
+			heatOverlap: nil, chargerInsight: nil, careSilencedBySystemHold: silenced
+		).first?.message ?? ""
+	}
+	expect(careLine(true).contains("已不再重复提醒"), "打架洞察：静默生效→据实说不再重复提醒")
+	expect(!careLine(true).contains("二选一"), "打架洞察：静默生效→不再要用户二选一（机制已替他做了那半件事）")
+	expect(careLine(false).contains("二选一"), "打架洞察：静默未生效→保留二选一建议")
+	expect(!careLine(false).contains("已不再重复提醒"), "打架洞察：静默未生效→不得承诺不再提醒（读不到签名的机器）")
+	expect(careLine(true).contains("80%") && careLine(false).contains("80%"), "打架洞察：两种措辞都点明保养线电平")
+	expectEqual(UsagePatternAnalyzer.chargingInsights(
+		habitBase: base, careHolding: true, careThresholdPercent: 80,
+		heatOverlap: heat, chargerInsight: charger, careSilencedBySystemHold: true).count, 4,
+		"打架洞察：措辞分支不改变收集条数（只改文字）")
+
 	// —— 华容网格 PanelFlow（v4 显式行存储，纯函数）——
 	// renderSegments：宽卡（单张行）独占整行、双张行并排、条件卡跳过后剩单卡自动拉通
 	let rowSegs = PanelFlow.renderSegments(
@@ -1584,6 +1602,31 @@ do {
 		// 防未来把 tint 色相/浓度调到"对比度恰好过线但面亮度语义翻反"的脆态
 		expect(isDark ? pillStack.max < 0.35 : pillStack.min > 0.45,
 			"药丸证明[\(isDark ? "深" : "浅")]：药丸亮度区间守住文字语义（深=暗面/浅=亮面，档位无关恒成立）")
+	}
+
+	// —— 控制行文字色锁（v2.1.0 对抗审查立规）——
+	// 彩色小字直接坐玻璃药丸面，任意壁纸最坏对比度远低于 AA 4.5（蓝 2.0~2.4、橙 1.3~3.6、红 2.1~2.2），
+	// 而控制行/警示行共用同一药丸底（GlassRow=controlPillGlass），所以规范组件的文字一律 .primary
+	// （上方 12.3/8.0:1 已证）。这几条锁的是"禁令的数值依据"：哪天药丸 tint 改到彩色文字也过线，
+	// 这里会先变红，届时再显式决定是否解禁——不是默认允许。
+	// 语义色只交给图标承担（图形按 1.4.11 判，且同一行的文字已把语义说清）。
+	for isDark in [false, true] {
+		let pillGlass = GlassTokens.clearGlass(isDark: isDark)
+		let pillTint = GlassTokens.controlPillTint(isDark: isDark)
+		let colorStack = proof.stackedLuminanceRange(layers: [
+			(luminance: pillTint.luminance, alpha: pillTint.alpha),
+			(luminance: pillGlass.luminance, alpha: pillGlass.alpha),
+		])
+		let semanticColors: [(String, Double)] = [
+			("accent蓝", proof.relativeLuminance(r: isDark ? 10.0 / 255 : 0, g: isDark ? 132.0 / 255 : 122.0 / 255, b: 1)),
+			("橙", proof.relativeLuminance(r: 1, g: 149.0 / 255, b: 0)),
+			("红", proof.relativeLuminance(r: 1, g: 59.0 / 255, b: 48.0 / 255)),
+		]
+		for (colorName, colorLum) in semanticColors {
+			let c = proof.contrast(textLuminance: colorLum, against: (min: colorStack.min, max: colorStack.max))
+			print(String(format: "文字色锁[%@] %@ 最坏 %.2f:1", isDark ? "深" : "浅", colorName, c))
+			expect(c < 4.5, "控制行文字色锁[\(isDark ? "深" : "浅")]：\(colorName)坐药丸面不达 AA → 行文字必须 .primary")
+		}
 	}
 
 	// —— 降低透明度（不透明纯色底）——
@@ -2708,6 +2751,83 @@ do {
 
 	let resumed = batterySnap(percent: 80, charging: true, onBattery: false)
 	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
+}
+
+// MARK: - C2 系统充电暂缓（M1：确定性只读判定，v2.1.0）
+
+do {
+	// 正例：本机 80% 按住时实测签名（NotChargingReason=16777216，35 分钟 2000+ 帧稳定）
+	expect(BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: false, isFull: false, notChargingReason: 16_777_216),
+		"系统暂缓：插电不在充未充满+暂缓位置位=暂缓")
+	// 位与判定（变异检验：写成 ==16777216 这条必红——其他位同置时仍要认）
+	expect(BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: false, isFull: false, notChargingReason: 16_777_216 | 0x02),
+		"系统暂缓：其他位同置仍认（位与非等值）")
+	expect(!BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: false, isFull: false, notChargingReason: 0x02),
+		"系统暂缓：仅其他位不算暂缓")
+	// 充电中不算：本机负例已实测（macOS 27.0，91% charging，NotChargingReason=0 连续 8 帧）。
+	// 这条断言锁的仍是"脏位也不误报"——Apple 不承诺该位语义，判定不依赖本机外推
+	expect(!BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: true, isFull: false, notChargingReason: 16_777_216),
+		"系统暂缓：充电中不算（负例本机实测清零；门保留防跨机型脏位）")
+	expect(!BatterySnapshot.isSystemChargeHeld(powerSource: .battery, isCharging: false, isFull: false, notChargingReason: 16_777_216),
+		"系统暂缓：电池供电不算")
+	expect(!BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: false, isFull: true, notChargingReason: 16_777_216),
+		"系统暂缓：已充满不算（充满不是暂缓）")
+	expect(!BatterySnapshot.isSystemChargeHeld(powerSource: .powerAdapter, isCharging: false, isFull: false, notChargingReason: nil),
+		"系统暂缓：读不到签名不算（数据缺失不下结论）")
+	// 快照计算属性与静态判定同源
+	var held = batterySnap(percent: 80, onBattery: false)
+	held.notChargingReason = 16_777_216
+	expect(held.isSystemChargeHeld, "系统暂缓：快照计算属性等价静态判定")
+}
+
+do {
+	// 保养提醒共存：暂缓电平贴线 ±3 才算"系统在做同一件事"，静默我方提醒
+	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 80, threshold: 80), "暂缓覆盖线：正贴线=覆盖")
+	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 83, threshold: 80), "暂缓覆盖线：+3 边缘=覆盖")
+	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 77, threshold: 80), "暂缓覆盖线：-3 边缘=覆盖")
+	expect(!BatteryAlertController.isHoldCoveringCareLine(heldSoc: 84, threshold: 80), "暂缓覆盖线：高于线 4 不覆盖（系统会充过线，提醒必须保留）")
+	expect(!BatteryAlertController.isHoldCoveringCareLine(heldSoc: nil, threshold: 80), "暂缓覆盖线：电平缺失不覆盖（保守）")
+}
+
+do {
+	// 共存标记的会话状态转移（v2.1.0 对抗审查补：重置曾被保养提醒开关的 guard 挡在门外，
+	// 于是「关着提醒拔电→再插电→再开提醒」会顶着上一会话的置位吞掉本该发的提醒）
+	var heldAtLine = batterySnap(percent: 80, onBattery: false)
+	heldAtLine.notChargingReason = 16_777_216
+	expect(BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldAtLine, threshold: 80),
+		"共存标记：插电+贴线按住→置位")
+	var unplugged = batterySnap(percent: 80, onBattery: true)
+	unplugged.notChargingReason = 16_777_216
+	expect(!BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: unplugged, threshold: 80),
+		"共存标记：拔电一律清零（回归锁：重置不许被提醒开关的 guard 挡住）")
+	var resumedCharging = batterySnap(percent: 85, charging: true, onBattery: false)
+	expect(BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: resumedCharging, threshold: 80),
+		"共存标记：恢复充电仍保持本会话置位（不再重复喊；变异检验：逐帧现算的写法必红）")
+	var heldFarBelowLine = batterySnap(percent: 60, onBattery: false)
+	heldFarBelowLine.notChargingReason = 16_777_216
+	expect(!BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldFarBelowLine, threshold: 80),
+		"共存标记：按住电平离保养线远（60 vs 80）不置位（系统做的事与用户要求不同）")
+}
+
+do {
+	// 采样埋点的边沿判定：原始 reason 本身必须算边沿。
+	// 充电中 held 恒为 false（被 isCharging 门挡掉），只看派生态的话
+	// "充电中该位被置起"这个最想抓的反例永远不触发日志。变异检验：去掉 reason 项，第一条必红
+	var previous = batterySnap(percent: 91, charging: true, onBattery: false)
+	previous.notChargingReason = 0
+	var dirtyWhileCharging = previous
+	dirtyWhileCharging.notChargingReason = 16_777_216
+	expect(BatteryMonitor.shouldLogHoldTransition(from: previous, to: dirtyWhileCharging),
+		"采样埋点：充电中 reason 置起也记（反例守望的唯一触发路径）")
+	var unplugged = batterySnap(percent: 91, charging: false, onBattery: true)
+	unplugged.notChargingReason = 0
+	expect(BatteryMonitor.shouldLogHoldTransition(from: previous, to: unplugged),
+		"采样埋点：在充→停充（拔电）记")
+	expect(!BatteryMonitor.shouldLogHoldTransition(from: previous, to: previous),
+		"采样埋点：三态全无变化不记（零成本轮询不刷屏）")
+	var noSignature = batterySnap(percent: 50, charging: false, onBattery: false)
+	expect(BatteryMonitor.shouldLogHoldTransition(from: noSignature, to: previous),
+		"采样埋点：reason 从读不到变读到值要留痕")
 }
 
 // MARK: - 应用活跃时段归因

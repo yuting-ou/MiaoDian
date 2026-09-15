@@ -859,7 +859,9 @@ struct BatteryPopoverView: View {
 			careHolding: careHolding,
 			careThresholdPercent: configurationManager.configuration.chargeCareThresholdPercent,
 			heatOverlap: heat,
-			chargerInsight: charger
+			chargerInsight: charger,
+			// 静默真的生效过才用"已不再重复提醒"的措辞（读不到签名的机器不承诺）
+			careSilencedBySystemHold: alertController.hasSilencedCareForSystemHold
 		)
 	}
 	
@@ -1054,6 +1056,11 @@ struct BatteryPopoverView: View {
 			   alertController.isNotificationPermissionDenied {
 				notificationPermissionWarning
 			}
+			// C2 系统共存：系统「优化电池充电」正在按住充电——解释"插着电为何不在充"，
+			// 并给一键通道去系统电池页（用户想接管/想立刻充满时知道门在哪）
+			if monitor.snapshot.isSystemChargeHeld {
+				systemChargeHoldRow
+			}
 			// 设置已迁到独立设置窗口，这里只负责打开它；
 			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多。
 			// 必须用 SettingsLink：sendAction(showSettingsWindow:) 在 NSHostingView 宿主里被系统
@@ -1125,6 +1132,18 @@ struct BatteryPopoverView: View {
 		NSWorkspace.shared.open(url)
 	}
 	
+	// 系统暂缓状态行：复用规范控制行组件 PopoverActionRow——文字/图标走证明过的 label 色。
+	// 手写彩色小字坐玻璃药丸面在任意壁纸最坏只有 2.2~2.4:1（远低 AA 4.5，见测试「控制行文字色锁」），
+	// 语义由 pause.circle 图标与文字本身承担，不靠颜色承担。
+	// 悬停说明把归因留余地：该位只证到"系统在暂停充电"，最常见原因是优化电池充电，
+	// 但温度保护/充电上限同样会让系统停充——不把原因说死（诚实边界）
+	private var systemChargeHoldRow: some View {
+		PopoverActionRow("系统正在暂缓充电 · 点按打开电池设置", systemImageName: "pause.circle") {
+			openBatterySettings()
+		}
+		.help("插着电但没在充电：通常是 macOS「优化电池充电」把你按在 80% 附近；电池温度保护或你设的充电上限也会让系统暂停充电。想立刻充满：系统设置 → 电池，临时关闭「优化电池充电」。")
+	}
+	
 	private var notificationPermissionWarning: some View {
 		Button(action: openNotificationSettings) {
 			GlassRow {
@@ -1135,7 +1154,7 @@ struct BatteryPopoverView: View {
 						.frame(width: 16)
 					Text("通知权限未开启，提醒收不到 · 点此开启")
 						.font(.system(size: 11))
-						.foregroundStyle(Color.orange)
+						.foregroundStyle(.primary)  // 文字走证明过的色，紧迫性由橙色图标承担（彩色小字坐药丸面不达 AA）
 						.lineLimit(1)
 						.minimumScaleFactor(0.8)
 				}

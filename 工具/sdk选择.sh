@@ -1,4 +1,5 @@
-#!/bin/sh
+# 共享片段：只被 source（build.sh / 测试/预览/run_preview.sh），不单独执行；
+# 内部用到数组，宿主须为 bash 或 zsh（两脚本均是）。
 # SDK 能力探测（供 build.sh 与 测试/预览/run_preview.sh source 共用，bash/zsh 通用写法）
 #
 # 为什么探测而不猜路径名：SDK 27 起 SwiftUI 的属性包装器（@State 等）改为宏实现，
