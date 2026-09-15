@@ -93,7 +93,7 @@ struct BatteryHeaderView: View {
 					.rotationEffect(.degrees(-90))
 				Text("\(checkup.score)")
 					.font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-					.foregroundStyle(checkupColor(checkup.score))
+					.foregroundStyle(.primary)
 			}
 			.frame(width: 34, height: 34)
 			

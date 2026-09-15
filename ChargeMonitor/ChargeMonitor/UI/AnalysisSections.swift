@@ -71,7 +71,7 @@ struct SignificantEnergySection: View {
 							if let window = entry.window {
 								Text("集中在 \(window)")
 									.font(.system(size: 9))
-									.foregroundStyle(.tertiary)
+									.foregroundStyle(GlassTokens.labelOnGlass)
 							}
 						}
 
@@ -128,7 +128,7 @@ struct HourlyDrainSection: View {
 					Text("23点")
 				}
 				.font(.system(size: 8))
-				.foregroundStyle(.tertiary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 				.monospacedDigit()
 				.padding(.top, 3)
 			}
@@ -188,7 +188,7 @@ struct RuntimeScenarioSection: View {
 			if !isCollapsed {
 				Text(String(format: "按当前掉电速度 %.1f%%/小时换算", estimate.percentPerHour))
 					.font(.system(size: 9))
-					.foregroundStyle(.tertiary)
+					.foregroundStyle(GlassTokens.labelOnGlass)
 					.padding(.top, 2)
 
 				ForEach(scenarioRows, id: \.scenario) { row in

@@ -131,7 +131,7 @@ struct UsageCalendarSection: View {
 				HStack(spacing: 4) {
 					Text("少")
 						.font(.system(size: 9))
-						.foregroundStyle(.tertiary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 					ForEach([0.0, 0.3, 0.6, 1.0], id: \.self) { level in
 						RoundedRectangle(cornerRadius: 2, style: .continuous)
 							.fill(HeatmapPalette.cellColor(level))
@@ -139,7 +139,7 @@ struct UsageCalendarSection: View {
 					}
 					Text("多")
 						.font(.system(size: 9))
-						.foregroundStyle(.tertiary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 					Spacer()
 				}
 				.padding(.top, 6)
@@ -208,7 +208,7 @@ struct HealthTrendSection: View {
 						? "稳定在 \(last.healthPercent)%"
 						: "\(first.healthPercent)% → \(last.healthPercent)%")
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())
-						.foregroundStyle(last.healthPercent < first.healthPercent ? Color.orange : Color.green)
+						.foregroundStyle(.primary)
 				}
 			}
 			
@@ -226,7 +226,7 @@ struct HealthTrendSection: View {
 					Text(Self.dayText(samples.last?.date))
 				}
 				.font(.system(size: 9))
-				.foregroundStyle(.tertiary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 				.padding(.top, 2)
 				
 				// 数据跨度够长且确实在掉时，外推一句寿命预测；

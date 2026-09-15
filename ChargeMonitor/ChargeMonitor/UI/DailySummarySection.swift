@@ -32,7 +32,7 @@ struct DailySummarySection: View {
 				if let share = usage.acShare {
 					Text(String(format: "今天 %.0f%% 的时间插着电源", share * 100))
 						.font(.system(size: 9))
-						.foregroundStyle(.tertiary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 						.padding(.top, 1)
 				}
 
@@ -40,7 +40,7 @@ struct DailySummarySection: View {
 				if let dwellMinutes = usage.dwell80PlusMinutes {
 					Text("高电量（80%+）驻留 \(DurationFormatter.chinese(minutes: dwellMinutes))")
 						.font(.system(size: 9))
-						.foregroundStyle(.tertiary)
+						.foregroundStyle(GlassTokens.labelOnGlass)
 						.padding(.top, 1)
 				}
 				

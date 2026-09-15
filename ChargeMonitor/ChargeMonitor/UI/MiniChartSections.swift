@@ -72,10 +72,10 @@ struct TemperatureChartSection: View {
 	var body: some View {
 		PopoverCard {
 			CollapsibleSectionHeader(title: "温度曲线", isCollapsed: isCollapsed, onToggle: onToggle) {
-				// 当前温度超警示线时整个数字变红，不只是淡淡染色
-				Text(currentText)
+				// 超警示线由文案说「偏高」——彩色小字坐玻璃面实测只有 1.1~2.2:1，语义不能靠一个看不见的颜色
+				Text(isOverThreshold ? currentText + "（偏高）" : currentText)
 					.font(.system(size: 10, weight: .semibold).monospacedDigit())
-					.foregroundStyle(isOverThreshold ? Color.red : Color.orange)
+					.foregroundStyle(.primary)
 					.contentTransition(.opacity)
 					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
@@ -140,7 +140,7 @@ struct BatteryCheckupSection: View {
 						.rotationEffect(.degrees(-90))
 					Text("\(checkup.score)")
 						.font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
-						.foregroundStyle(color)
+						.foregroundStyle(.primary)
 				}
 				.frame(width: 30, height: 30)
 				
@@ -154,7 +154,7 @@ struct BatteryCheckupSection: View {
 					if !checkup.estimatedInputs.isEmpty {
 						Text("含估计项：\(checkup.estimatedInputs.joined(separator: "、"))")
 							.font(.system(size: 9))
-							.foregroundStyle(.tertiary)
+							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 				}
 
@@ -231,7 +231,7 @@ struct SOCChartSection: View {
 					Text("现在")
 				}
 				.font(.system(size: 9))
-				.foregroundStyle(.tertiary)
+				.foregroundStyle(GlassTokens.labelOnGlass)
 				.padding(.top, 2)
 			}
 		}

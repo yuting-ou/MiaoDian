@@ -306,7 +306,7 @@ struct ChargeCurveDetailView: View {
 			Text("\(DurationFormatter.chinese(minutes: lastOffset))")
 		}
 		.font(.system(size: 9))
-		.foregroundStyle(.tertiary)
+		.foregroundStyle(GlassTokens.labelOnGlass)
 		.monospacedDigit()
 	}
 

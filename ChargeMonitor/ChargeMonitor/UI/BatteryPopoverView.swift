@@ -229,7 +229,7 @@ struct BatteryPopoverView: View {
 			if ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_OPEN_PANEL"] != nil {
 				Text("调试")
 					.font(.system(size: 8, weight: .bold))
-					.foregroundStyle(.white)
+					.foregroundStyle(.black.opacity(0.85))  // 调试标记：白字坐实橙底只有 2.2:1，改深字（实心底，非玻璃）
 					.padding(.horizontal, 5)
 					.padding(.vertical, 2)
 					.background(Capsule().fill(.orange))
