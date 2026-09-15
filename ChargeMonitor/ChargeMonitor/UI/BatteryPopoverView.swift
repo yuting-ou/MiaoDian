@@ -1277,7 +1277,9 @@ struct BatteryPopoverView: View {
 	private var chargerHeadline: (String, String?)? {
 		guard monitor.snapshot.powerSource == .powerAdapter else { return nil }
 		let profile = historyRecorder.currentChargerProfile
-		let name = profile?.displayName ?? monitor.snapshot.adapterName ?? "已接通电源"
+		// 认不出是哪只充电器时宁可留空：兜底写"已接通电源"会和头部左侧那行
+		// "已接通电源 · 未充电"在同一行里重复两遍（自查抓出）
+		guard let name = profile?.displayName ?? monitor.snapshot.adapterName, !name.isEmpty else { return nil }
 		var detailParts: [String] = []
 		if let proto = monitor.snapshot.chargingProtocol { detailParts.append(proto) }
 		if let rated = profile?.ratedWatts ?? monitor.snapshot.adapterRatedWatts, rated > 0 {
