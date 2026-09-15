@@ -263,7 +263,7 @@ struct BatteryInfoFormatter {
 	
 	// 充电器档案：认识的充电器打个招呼，第一次见的标出来；
 	// 有名字（用户起的或系统识别的）先亮名字，认不出的标"未命名"引导去设置认领；
-	// 有历史统计时附上"平均协商功率"，疑似慢充染橙提醒可能是线材/接口问题
+	// 有历史统计时附上"平均协商功率"；疑似慢充（多半线材/接口不行）写在文字里，不靠字色
 	private var chargerProfileItem: BatteryInfoItem? {
 		guard enabledOptions.contains(.chargerProfile) else { return nil }
 		guard snapshot.powerSource == .powerAdapter, let profile = chargerProfile else { return nil }
