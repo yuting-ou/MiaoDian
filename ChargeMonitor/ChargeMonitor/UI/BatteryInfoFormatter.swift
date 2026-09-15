@@ -12,7 +12,9 @@ struct BatteryInfoItem: Identifiable {
 	let label: String
 	let value: String
 	var iconTint: Color? = nil
-	var valueTint: Color? = nil
+	// 值文字不再有"染色"通道（v2.1.x 用户裁决：玻璃优先）——彩色小字坐透玻璃面
+	// 在多数壁纸下只有 1~2.4:1，异常语义改由 value 文案直说（"（偏低）/（偏高）/（偏快）"），
+	// 颜色只留给图标（图形，且与文字冗余）
 	// 悬停 tooltip：充电功率行用它解释"为什么功率小"这类读数疑惑
 	var helpText: String? = nil
 
@@ -149,21 +151,21 @@ struct BatteryInfoFormatter {
 		
 		let watts = Double(voltageMV) * Double(currentMA) / 1_000_000.0
 		var value = "\(formatVoltage(voltageMV)) \(formatCurrent(currentMA))（\(formatTierWatts(watts))）"
-		// 协商明显低于额定 → 染橙提示可能是线材/接口问题（与"充电器偏慢"洞察同一套语言）
-		var tint: Color? = nil
+		// 协商明显低于额定 → 文案直说"偏低"（与"充电器偏慢"洞察同一套语言）；
+		// 以前靠染橙警示，但彩色小字坐透玻璃面在多数壁纸下不达 AA，语义不能靠一个看不见的颜色承担
+		var isUnderRated = false
 		if let rated = snapshot.adapterRatedWatts, rated > 0, watts < Double(rated) * 0.6 {
-			tint = .orange
-			value += " · 额定\(rated)W"
-		} else if let rated = snapshot.adapterRatedWatts, rated > 0 {
-			value += " · 额定\(rated)W"
+			isUnderRated = true
+		}
+		if let rated = snapshot.adapterRatedWatts, rated > 0 {
+			value += isUnderRated ? " · 额定\(rated)W（偏低）" : " · 额定\(rated)W"
 		}
 		return BatteryInfoItem(
 			group: .power,
 			symbol: "speedometer",
 			label: "当前档位",
 			value: value,
-			iconTint: .blue,
-			valueTint: tint
+			iconTint: .blue
 		)
 	}
 	
@@ -268,8 +270,6 @@ struct BatteryInfoFormatter {
 			value = "\(profile.displayName) · \(isNew ? "第一次见" : "见过 \(profile.connectCount) 次")"
 		}
 		let tint: Color? = isNew ? .orange : .green
-		var valueTint: Color? = nil
-
 		if let stats = chargerStats, let avg = stats.avgWatts, stats.sampleCount >= 5 {
 			value += " · 平均\(formatTierWatts(avg))"
 			// 峰值协商功率一直在采集却从未露出——诊断线材/接口时"最高能冲到多少"
@@ -278,8 +278,7 @@ struct BatteryInfoFormatter {
 				value += "·峰值\(formatTierWatts(stats.maxWatts))"
 			}
 			if stats.isSuspiciouslySlow {
-				value += "「疑似慢充」"  // 平均协商远低于额定，多半线材/接口不行
-				valueTint = .orange
+				value += "「疑似慢充」"  // 平均协商远低于额定，多半线材/接口不行（语义在字里，不靠字色）
 			}
 		}
 		return BatteryInfoItem(
@@ -288,7 +287,6 @@ struct BatteryInfoFormatter {
 			label: "充电器",
 			value: value,
 			iconTint: tint,
-			valueTint: valueTint,
 			// 识别 v2：多口分功率/协议降档时同一只头会协商出不同瓦数——观察档位进悬停提示，
 			// 用户追问"这只头到底多大"时答案就在手上
 			helpText: helpText(isUnnamed: isUnnamed, profile: profile)
@@ -351,13 +349,14 @@ struct BatteryInfoFormatter {
 	private var temperatureItem: BatteryInfoItem? {
 		guard enabledOptions.contains(.batteryTemperature) else { return nil }
 		guard let temperature = snapshot.temperatureC else { return nil }
+		// 过阈值由文案说"偏高"（与高温提醒、头部警示边框同一判定），不再靠字色
+		let isHot = temperature >= Double(configuration.highTemperatureThresholdC)
 		return BatteryInfoItem(
 			group: .battery,
 			symbol: "thermometer.medium",
 			label: "电池温度",
-			value: String(format: "%.1f°C", temperature),
-			iconTint: .orange,
-			valueTint: temperature >= Double(configuration.highTemperatureThresholdC) ? .orange : nil
+			value: String(format: "%.1f°C", temperature) + (isHot ? "（偏高）" : ""),
+			iconTint: .orange
 		)
 	}
 	
@@ -429,9 +428,10 @@ struct BatteryInfoFormatter {
 		guard let record = sleepDrain, record.droppedPercent >= 1 else { return nil }
 		guard Date().timeIntervalSince(record.wakeDate) < 24 * 3600 else { return nil }
 
-		// 跟提醒同一套判定：掉得偏快的把数字染橙警示
+		// 跟提醒同一套判定：掉得偏快的在文案里说"偏快"（字色承担语义的时代结束了）
 		let isHeavy = record.durationMinutes >= 60 && record.dropPerHour >= 2
 		var value = String(format: "合盖%@ 掉了%d%%（%.1f%%/小时）", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
+		if isHeavy { value += "（偏快）" }
 		// 元凶留档后，面板也能复述"谁在阻止睡眠"
 		if let culprits = record.culpritNames, !culprits.isEmpty {
 			value += "（元凶：\(culprits.prefix(2).joined(separator: "、"))\(culprits.count > 2 ? "等" : "")）"
@@ -441,8 +441,7 @@ struct BatteryInfoFormatter {
 			symbol: "moon.zzz.fill",
 			label: "睡眠掉电",
 			value: value,
-			iconTint: .indigo,
-			valueTint: isHeavy ? .orange : nil
+			iconTint: .indigo
 		)
 	}
 	

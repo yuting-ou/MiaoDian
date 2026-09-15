@@ -6,8 +6,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 
 ## 功能一览
 
-- **液态玻璃界面**：macOS 26 Tahoe 的 Liquid Glass 设计语言——外壳玻璃板真正采样桌面、卡片为发丝分区、控件/徽章/仪表可交互；自适应 label 色的文字（正文、标签、数值）可读性以 WCAG 对比度纯函数**可证明**——任意壁纸最坏情况达标，锁进测试门；并适配「降低透明度 / 增加对比度 / 减少动态」三个系统辅助开关。macOS 15–25 自动降级为原质感，不牺牲覆盖面。
-  > 已知例外：少数**语义色数值**（当前功率、高峰时点、充电记录终值等）目前不达 AA（实测最坏 1.1~2.4:1），正在整改。
+- **液态玻璃界面**：macOS 26 Tahoe 的 Liquid Glass 设计语言——外壳玻璃板真正采样桌面、卡片为发丝分区、控件/徽章/仪表可交互；**面板上每一处文字**（正文、标签、数值、徽章）的可读性都以 WCAG 对比度纯函数**可证明**——任意壁纸最坏情况达标，锁进测试门；语义色只交给图标、曲线与参考线这些图形承担。并适配「降低透明度 / 增加对比度 / 减少动态」三个系统辅助开关。macOS 15–25 自动降级为原质感，不牺牲覆盖面。
 
 - **菜单栏显示**：电量图标（精确到 1% 的自绘填充）/ 温度 / 功耗 / 剩余时间 / 24 小时走势图 / 三页轮换，充电时图标播放流光动画
 
@@ -42,7 +41,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 只需 Command Line Tools，无需完整 Xcode：
 
 ```bash
-bash build.sh    # 先跑单元测试（821 项断言），全过才编译打包
+bash build.sh    # 先跑单元测试（842 项断言），全过才编译打包
 ```
 
 > SDK 27 起 SwiftUI 的属性包装器（`@State` 等）改为宏实现，而 CLT 27 的工具链不带 SwiftUIMacros 插件——build.sh 不猜你在什么环境，直接拿探针实测当前工具链能编哪个 SDK：能编就用默认 SDK，不能就自动回落到最新的可编译旧 SDK（26.x 的 SwiftUI 尚不依赖宏插件），全都编不动就停下来告诉你缺什么。装完整 Xcode 后自动走默认 SDK，无需手工配置。
@@ -61,7 +60,7 @@ bash build.sh    # 先跑单元测试（821 项断言），全过才编译打包
 
 ## English
 
-MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 15 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); 821 unit tests run first as a build gate.
+MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 15 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); 842 unit tests run first as a build gate.
 
 ## 致谢与许可
 

@@ -9,11 +9,12 @@ struct PowerChartSection: View {
 	var body: some View {
 		PopoverCard {
 			CollapsibleSectionHeader(title: "功耗曲线", isCollapsed: isCollapsed, onToggle: onToggle) {
-				// 当前功率是最受关注的数字，用主色突出；峰值作为参照置于后
+				// 当前功率是最受关注的数字，用字重突出（彩色小字坐玻璃面不达 AA，见证明表文字色锁）；
+				// 峰值作为参照置于后
 				// 此值每 2 秒刷新，转场用淡入淡出而非 numericText，避免插值字形位图持续堆积
 				Text(currentText)
 					.font(.system(size: 10, weight: .semibold).monospacedDigit())
-					.foregroundStyle(Color.accentColor)
+					.foregroundStyle(.primary)
 					.contentTransition(.opacity)
 					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
@@ -198,7 +199,7 @@ struct SOCChartSection: View {
 				if let hoverText {
 					Text(hoverText)
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())
-						.foregroundStyle(Color.accentColor)
+						.foregroundStyle(.primary)
 				} else if let last = samples.last {
 					Text("现在 \(last.percent)%")
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())

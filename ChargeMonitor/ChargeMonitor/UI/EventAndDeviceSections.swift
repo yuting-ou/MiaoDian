@@ -107,7 +107,7 @@ struct BluetoothDevicesSection: View {
 					
 					Text("\(device.percent)%")
 						.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium).monospacedDigit())
-						.foregroundStyle(device.percent <= lowThreshold ? Color.red : Color.primary)
+						.foregroundStyle(Color.primary)  // 低电由电量条图形与提醒承担，文字不靠颜色分级
 						.frame(width: 34, alignment: .trailing)
 				}
 				.padding(.vertical, 3)
@@ -203,7 +203,7 @@ struct ChargeHistorySection: View {
 
 							// 两行式：第一行电量变化（核心信息不可被截），第二行时长·峰值·时间
 							VStack(alignment: .leading, spacing: 1) {
-								Text("\(session.startPercent)% → \(Text("\(session.endPercent)%").foregroundStyle(Color.green))")
+								Text("\(session.startPercent)% → \(session.endPercent)%")
 									.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
 									.lineLimit(1)
 								Text(ChargeSessionText.detail(session, chargerName: session.chargerKey.flatMap { chargerNames[$0] }))

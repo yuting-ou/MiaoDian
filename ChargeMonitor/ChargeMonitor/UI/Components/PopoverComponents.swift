@@ -139,7 +139,7 @@ struct PopoverInfoRow: View {
 			// 实测内存会以每分钟几十 MB 的速度持续膨胀；淡入淡出没有逐帧插值字形
 			Text(item.value)
 				.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium).monospacedDigit())
-				.foregroundStyle(item.valueTint ?? Color.primary)
+				.foregroundStyle(.primary)  // 值文字恒走已证明的自适应色；异常语义在文案里（v2.1.x 玻璃优先裁决）
 				.lineLimit(1)
 				.minimumScaleFactor(0.7)
 				.contentTransition(.opacity)

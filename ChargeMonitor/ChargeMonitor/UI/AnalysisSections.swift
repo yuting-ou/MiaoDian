@@ -60,7 +60,7 @@ struct SignificantEnergySection: View {
 					HStack(spacing: 8) {
 						Text("\(index + 1)")
 							.font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-							.foregroundStyle(index == 0 ? Color.orange : Color.secondary)
+							.foregroundStyle(index == 0 ? Color.primary : GlassTokens.labelOnGlass)
 							.frame(width: 12)
 
 						VStack(alignment: .leading, spacing: 1) {
@@ -101,7 +101,7 @@ struct HourlyDrainSection: View {
 				if let peak = UsagePatternAnalyzer.peakDrainHour(stats) {
 					Text("高峰 \(peak) 点")
 						.font(.system(size: 10, weight: .semibold).monospacedDigit())
-						.foregroundStyle(Color.orange)
+						.foregroundStyle(.primary)  // "高峰 X 点"的语义在字里，颜色不承担（玻璃优先裁决）
 				} else if isCollapsed {
 					Text("统计中")
 						.font(.system(size: 10))
@@ -291,7 +291,7 @@ struct BatteryIdentitySection: View {
 				.padding(.top, 1)
 			Text(jumpText)
 				.font(.system(size: 9.5))
-				.foregroundStyle(needsCalibration ? Color.orange : Color.secondary)
+				.foregroundStyle(needsCalibration ? Color.primary : GlassTokens.labelOnGlass)
 				.fixedSize(horizontal: false, vertical: true)
 		}
 	}

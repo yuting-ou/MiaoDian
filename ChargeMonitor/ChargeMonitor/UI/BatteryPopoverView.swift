@@ -146,7 +146,7 @@ struct BatteryPopoverView: View {
 					} label: {
 						Text("完成")
 							.font(.system(size: 11, weight: .semibold))
-							.foregroundStyle(Color.accentColor)
+							.foregroundStyle(.primary)  // 可供性由玻璃药丸材质承担，不靠字色
 					}
 					.buttonStyle(.plain)
 				}

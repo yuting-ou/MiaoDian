@@ -210,7 +210,10 @@ do {
 	expectEqual(value("电池健康"), "95%（4500/4720 mAh）", "信息行：健康度带容量明细")
 	expectEqual(value("当前档位"), "20V 3A（60W） · 额定100W", "信息行：协商档位格式化")
 	expectEqual(value("输入功率"), "12.50W", "信息行：功率数字与单位之间不加空格")
-	expect(items.first { $0.label == "电池温度" }?.valueTint == Color.orange, "信息行：40°C 应染橙色")
+	// 玻璃优先裁决（v2.1.x）：异常语义从字色迁到文案——彩色小字坐透玻璃面多数壁纸不达 AA
+	expect(value("电池温度")?.contains("（偏高）") == true, "信息行：40°C 文案直说偏高（不再染橙）")
+	// 变异检验：把 isHot 判定写反或阈值取错，下面这条必红
+	expectEqual(value("当前档位"), "20V 3A（60W） · 额定100W", "信息行：恰好 60% 额定不算偏低（边界不含）")
 	
 	let omitted = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, omitsTimeEstimates: true).makeItems()
 	expect(!omitted.contains { $0.label == "充满还需" }, "信息行：面板模式不重复展示充满还需")
@@ -218,7 +221,13 @@ do {
 	var cool = s
 	cool.temperatureC = 39.9
 	let coolItems = BatteryInfoFormatter(snapshot: cool, configuration: fullConfig).makeItems()
-	expect(coolItems.first { $0.label == "电池温度" }?.valueTint == nil, "信息行：39.9°C 不应染色")
+	expect(coolItems.first { $0.label == "电池温度" }?.value.contains("偏高") == false, "信息行：39.9°C 不写偏高（迟滞边界外）")
+	// 明显低于额定 → 文案说偏低（原来靠染橙）
+	var weak = s
+	weak.negotiatedCurrentMA = 1500  // 20V 1.5A = 30W < 额定100W 的 60%
+	let weakItems = BatteryInfoFormatter(snapshot: weak, configuration: fullConfig).makeItems()
+	expect(weakItems.first { $0.label == "当前档位" }?.value.contains("（偏低）") == true,
+		"信息行：协商 30W/额定 100W 文案说偏低（变异检验：删掉 isUnderRated 分支必红）")
 }
 
 do {
@@ -388,6 +397,15 @@ do {
 	let noDrop = SleepDrainRecord(sleepDate: Date().addingTimeInterval(-9 * 3600), wakeDate: Date().addingTimeInterval(-600), startPercent: 80, endPercent: 80)
 	let items3 = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, sleepDrain: noDrop).makeItems()
 	expect(!items3.contains { $0.label == "睡眠掉电" }, "睡眠掉电行：没掉电不展示")
+
+	// 「偏快」语义迁移锁（v2.1.1 玻璃优先）：以前靠把数字染橙警示，彩色小字坐玻璃面不达 AA
+	let heavy = SleepDrainRecord(sleepDate: Date().addingTimeInterval(-10 * 3600), wakeDate: Date().addingTimeInterval(-600), startPercent: 80, endPercent: 45)
+	let heavyValue = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, sleepDrain: heavy)
+		.makeItems().first { $0.label == "睡眠掉电" }?.value ?? ""
+	expect(heavyValue.contains("（偏快）"), "睡眠掉电行：≥60 分钟且 ≥2%/小时 时文案说偏快（变异检验：isHeavy 恒假必红）")
+	// 同一条记录的慢版对照：时长够但速率不够 → 不许说偏快
+	let mildValue = items.first { $0.label == "睡眠掉电" }?.value ?? ""
+	expect(!mildValue.contains("偏快"), "睡眠掉电行：0.75%/小时 不算偏快（阈值边界锁）")
 }
 
 // MARK: - 充电器档案信息行
@@ -1473,6 +1491,18 @@ do {
 	let primaryLight = 0.0
 	let primaryDark = 1.0
 
+	// 语义色（Apple 系统色，浅/深外观各一版）的 WCAG 相对亮度——供"彩色文字禁令"负向锁用
+	func cardFaceSemanticColors(_ isDark: Bool) -> [(String, Double)] {
+		func lum(_ r: Double, _ g: Double, _ b: Double) -> Double {
+			proof.relativeLuminance(r: r / 255, g: g / 255, b: b / 255)
+		}
+		return [
+			("accent蓝", lum(isDark ? 10 : 0, isDark ? 132 : 122, 255)),
+			("橙", lum(255, isDark ? 159 : 149, isDark ? 10 : 0)),
+			("绿", lum(isDark ? 48 : 52, isDark ? 209 : 199, isDark ? 88 : 89)),
+		]
+	}
+
 	// —— 壳层直露文字证明（v1.24.0 移除）——
 	// v1.20 时代壳层承载控制行/编辑条文字，壳层对比度是硬证明；v1.24.0 起这些文字全部
 	// 改坐卡纱（卡面对比度由下方逐档证明锁死），壳层只剩分隔线等非文字元素。
@@ -1617,15 +1647,23 @@ do {
 			(luminance: pillTint.luminance, alpha: pillTint.alpha),
 			(luminance: pillGlass.luminance, alpha: pillGlass.alpha),
 		])
-		let semanticColors: [(String, Double)] = [
-			("accent蓝", proof.relativeLuminance(r: isDark ? 10.0 / 255 : 0, g: isDark ? 132.0 / 255 : 122.0 / 255, b: 1)),
-			("橙", proof.relativeLuminance(r: 1, g: 149.0 / 255, b: 0)),
-			("红", proof.relativeLuminance(r: 1, g: 59.0 / 255, b: 48.0 / 255)),
-		]
+		let semanticColors = cardFaceSemanticColors(isDark)
 		for (colorName, colorLum) in semanticColors {
 			let c = proof.contrast(textLuminance: colorLum, against: (min: colorStack.min, max: colorStack.max))
 			print(String(format: "文字色锁[%@] %@ 最坏 %.2f:1", isDark ? "深" : "浅", colorName, c))
 			expect(c < 4.5, "控制行文字色锁[\(isDark ? "深" : "浅")]：\(colorName)坐药丸面不达 AA → 行文字必须 .primary")
+		}
+	}
+
+	// 同一禁令扩到卡面（六组材质×双外观 × 三色）：彩色小字在**任意档材质**的卡面上都不达 AA，
+	// 所以"数值染橙/染绿"这条路整体封死——异常语义只能进文案（v2.1.x 玻璃优先裁决）
+	for material in PanelMaterial.allCases {
+		for isDark in [false, true] {
+			let face = proof.stackedLuminanceRange(layers: materialLayers(material, isDark: isDark))
+			for (colorName, colorLum) in cardFaceSemanticColors(isDark) {
+				let c = proof.contrast(textLuminance: colorLum, against: face)
+				expect(c < 4.5, "卡面文字色锁[\(material.title)·\(isDark ? "深" : "浅")]：\(colorName)最坏 \(String(format: "%.2f", c)):1 不达 AA")
+			}
 		}
 	}
 
@@ -1819,7 +1857,9 @@ do {
 	expect(row?.value.contains("平均20W") == true, "充电器信息行：附平均协商功率")
 	expect(row?.value.contains("峰值") == true, "充电器信息行：峰值协商功率露出（诊断线材用得上）")
 	expect(row?.value.contains("疑似慢充") == true, "充电器信息行：慢充标出")
-	expect(row?.valueTint == .orange, "充电器信息行：慢充电量染橙")
+	// 慢充语义只在文字里；图标色仍专职表"新旧"，不许被拿来当第二套告警色
+	expect(row?.value.hasSuffix("「疑似慢充」") == true, "充电器信息行：慢充语义落在文案末尾")
+	expect(row?.iconTint == Color.green, "充电器信息行：图标色只表新旧，慢充不借颜色（变异：把橙挪到图标必红）")
 
 	// 样本不足不标慢充
 	var few = ChargerPowerStats(key: "a|b|65", ratedWatts: 65)

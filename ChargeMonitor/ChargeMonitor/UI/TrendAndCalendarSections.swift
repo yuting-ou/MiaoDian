@@ -61,7 +61,8 @@ struct HealthTrendChart: View {
 				
 				let ring = Path(ellipseIn: CGRect(x: endPoint.x - 3, y: endPoint.y - 3, width: 6, height: 6))
 				context.stroke(ring, with: .color(.orange), lineWidth: 1.3)
-				let label = context.resolve(Text("80%").font(.system(size: 8, weight: .semibold)).foregroundStyle(Color.orange))
+				// 标注文字走已证明的自适应色；它归属哪条线由紧邻的橙色虚线与圆点（图形）说明
+				let label = context.resolve(Text("80%").font(.system(size: 8, weight: .semibold)).foregroundStyle(.primary))
 				let ls = label.measure(in: size)
 				context.draw(label, at: CGPoint(x: size.width - ls.width / 2 - 1, y: max(endPoint.y - 9, ls.height / 2)), anchor: .center)
 			}

@@ -91,7 +91,7 @@ struct DailySummarySection: View {
 					
 					Text(Self.dayLabel(day.dayKey))
 						.font(.system(size: 8))
-						.foregroundStyle(day.dayKey == days.last?.dayKey ? Color.primary : Color.secondary)
+						.foregroundStyle(day.dayKey == days.last?.dayKey ? Color.primary : GlassTokens.labelOnGlass)
 				}
 				.frame(maxWidth: .infinity)
 				// 悬停某天的柱子看具体数值（系统原生 tooltip）

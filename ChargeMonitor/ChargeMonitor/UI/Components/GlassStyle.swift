@@ -106,6 +106,8 @@ struct GlassBadge: View {
 	}
 
 	var body: some View {
+		// 徽章的语义色只落在胶囊底（图形）上；文字走已证明的自适应色——
+		// 彩色小字坐着色玻璃上同样不达 AA（见测试「控制行文字色锁」）
 		HStack(spacing: 3) {
 			if let systemImage {
 				Image(systemName: systemImage)
@@ -114,7 +116,7 @@ struct GlassBadge: View {
 			Text(text)
 				.font(.system(size: 10.5, weight: .medium))
 		}
-		.foregroundStyle(color)
+		.foregroundStyle(.primary)
 		.padding(.horizontal, 7)
 		.padding(.vertical, 2.5)
 		.modifier(BadgeBackground(color: color))

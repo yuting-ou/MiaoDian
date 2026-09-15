@@ -278,10 +278,11 @@ struct ChargeCurveDetailView: View {
 			line.addLine(to: CGPoint(x: size.width, y: y))
 			context.stroke(line, with: .color(Color.orange.opacity(0.28)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
+			// 标注文字走已证明的自适应色；归属哪条线由紧邻的橙色虚线（图形）说明
 			let resolved = context.resolve(
 				Text(label)
 					.font(.system(size: 8, weight: .medium).monospacedDigit())
-					.foregroundStyle(Color.orange.opacity(0.85))
+					.foregroundStyle(.primary)
 			)
 			// 标注放线上方右端，不挡曲线主体
 			let textSize = resolved.measure(in: size)
