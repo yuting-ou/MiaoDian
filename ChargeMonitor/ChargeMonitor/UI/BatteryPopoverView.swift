@@ -608,9 +608,12 @@ struct BatteryPopoverView: View {
 	private func dragHandle(_ id: CardID) -> some View {
 		Image(systemName: "line.3.horizontal")
 			.font(.system(size: 9, weight: .semibold))
-			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.6))
+			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.45))
 			.padding(5)
-			.background(Capsule().fill(.ultraThinMaterial))
+			// v2.1.2 观感：常驻白色胶囊底让每张图片上顶着一个浮块、还压在首行"标签与值之间"，
+			// 读起来像卡片内容。底改成 hover/拖动时才出现，常态只剩一枚淡符号——
+			// 位置与可抓取性不变（v1.13 的回归是"常态无处可抓"，不是"常态可见"）
+			.background(Capsule().fill(.ultraThinMaterial).opacity(isHandleHovering == id.layoutID || dragState?.card == id.layoutID ? 1 : 0))
 			.padding(3)
 			.contentShape(Circle())
 			.opacity(dragState?.card == id.layoutID ? 0 : 1)
@@ -1048,6 +1051,18 @@ struct BatteryPopoverView: View {
 		playCascade ? step : 0
 	}
 
+	// 状态行是否存在：决定"状态 vs 动作"那条分节线画不画
+	private var hasControlStateRows: Bool {
+		(configurationManager.configuration.enabledOptions.contains(.alerts)
+			&& alertController.isNotificationPermissionDenied)
+			|| monitor.snapshot.isSystemChargeHeld
+	}
+
+	// 动作组之间的小间距（不加文字标题：控制行栈已占近 1/4 面板高，再加标题只会更长）
+	private var controlGroupGap: some View {
+		Spacer().frame(height: 6)
+	}
+
 	private var controlRows: some View {
 		// v1.24.1 行距 4：药丸各自成件后留出玻璃缝隙（贴死会连成一条，失去"浮在玻璃上"的节奏）
 		VStack(spacing: 4) {
@@ -1060,6 +1075,12 @@ struct BatteryPopoverView: View {
 			// 并给一键通道去系统电池页（用户想接管/想立刻充满时知道门在哪）
 			if monitor.snapshot.isSystemChargeHeld {
 				systemChargeHoldRow
+			}
+			// v2.1.2 观感：状态行（权限未开 / 系统暂缓充电）与动作行分组——
+			// 前者是"现在发生了什么"，后者是"你可以做什么"，同形同权重时状态行读起来像第 8 个按钮
+			if hasControlStateRows {
+				Divider()
+					.padding(.vertical, 3)
 			}
 			// 设置已迁到独立设置窗口，这里只负责打开它；
 			// 30+ 开关在窗口里按组分区（可搜索、带帮助），比面板子菜单好用得多。
@@ -1096,6 +1117,7 @@ struct BatteryPopoverView: View {
 				NSApp.activate(ignoringOtherApps: true)
 			})
 			
+			controlGroupGap
 			PopoverActionRow("导出报告", systemImageName: "square.and.arrow.up") {
 				exportReport()
 			}
@@ -1116,6 +1138,7 @@ struct BatteryPopoverView: View {
 				}
 			}
 			
+			controlGroupGap
 			PopoverActionRow("电池设置", systemImageName: "slider.horizontal.3") {
 				openBatterySettings()
 			}

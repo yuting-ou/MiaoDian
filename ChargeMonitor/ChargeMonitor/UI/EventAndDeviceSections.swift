@@ -20,25 +20,31 @@ struct PowerEventTimelineSection: View {
 			.padding(.bottom, isCollapsed ? 0 : 2)
 			
 			if !isCollapsed {
-				ForEach(events.suffix(Self.maxVisible).reversed()) { event in
-					let style = Self.style(event.kind)
+				// 相邻同类且间隔 ≤30 分钟的事件折成一行「接上电源 ×4 · 11:34–11:52」：
+				// 实测 18 分钟里四条"接上电源"逐条列出既占满卡高又零信息增量，
+				// 而折叠只是显示层的折叠——逐条时刻留在悬停说明里，数据一条没丢
+				let rows = PowerEventTimeline.coalesce(events).prefix(Self.maxVisible)
+				ForEach(Array(rows), id: \.latest) { row in
+					let style = Self.style(row.kind)
+					let times = PowerEventTimeline.times(in: events, of: row)
 					HStack(spacing: 8) {
 						Image(systemName: style.symbol)
 							.font(.system(size: 10, weight: .medium))
 							.symbolRenderingMode(.hierarchical)
 							.foregroundStyle(style.color)
 							.frame(width: 16)
-						
-						Text(style.title)
+
+						Text(row.count > 1 ? "\(style.title) ×\(row.count)" : style.title)
 							.font(.system(size: PopoverLayout.bodyFontSize))
-						
+
 						Spacer(minLength: 8)
-						
-						Text(Self.timeText(event.date))
+
+						Text(PowerEventTimeline.timeText(row, dateText: Self.timeText(_:)))
 							.font(.system(size: 10).monospacedDigit())
 							.foregroundStyle(GlassTokens.labelOnGlass)
 					}
 					.padding(.vertical, 2)
+					.help(PowerEventTimeline.helpText(row, times: times, dateText: Self.timeText(_:)))
 				}
 			}
 		}

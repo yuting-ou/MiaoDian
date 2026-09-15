@@ -271,14 +271,14 @@ struct BatteryInfoFormatter {
 		}
 		let tint: Color? = isNew ? .orange : .green
 		if let stats = chargerStats, let avg = stats.avgWatts, stats.sampleCount >= 5 {
+			// 判断前置：结论紧跟名字，均值/峰值这些明细排在尾部——值过长被截时先掉的是明细，
+			// 不是"疑似慢充"这个结论（测试「截断守卫」锁这条顺序）
+			if stats.isSuspiciouslySlow { value += "「疑似慢充」" }
 			value += " · 平均\(formatTierWatts(avg))"
 			// 峰值协商功率一直在采集却从未露出——诊断线材/接口时"最高能冲到多少"
 			// 比平均值更能说明问题（均值会被整机负载波动摊平）
 			if stats.maxWatts >= 1 {
 				value += "·峰值\(formatTierWatts(stats.maxWatts))"
-			}
-			if stats.isSuspiciouslySlow {
-				value += "「疑似慢充」"  // 平均协商远低于额定，多半线材/接口不行（语义在字里，不靠字色）
 			}
 		}
 		return BatteryInfoItem(
@@ -430,8 +430,10 @@ struct BatteryInfoFormatter {
 
 		// 跟提醒同一套判定：掉得偏快的在文案里说"偏快"（字色承担语义的时代结束了）
 		let isHeavy = record.durationMinutes >= 60 && record.dropPerHour >= 2
-		var value = String(format: "合盖%@ 掉了%d%%（%.1f%%/小时）", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
-		if isHeavy { value += "（偏快）" }
+		var value = String(format: "合盖%@ 掉了%d%%（%.1f%%/小时%@）",
+			DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour,
+			isHeavy ? "·偏快" : "")  // 判断在速率括号里，前缀短→截断切不到它
+
 		// 元凶留档后，面板也能复述"谁在阻止睡眠"
 		if let culprits = record.culpritNames, !culprits.isEmpty {
 			value += "（元凶：\(culprits.prefix(2).joined(separator: "、"))\(culprits.count > 2 ? "等" : "")）"

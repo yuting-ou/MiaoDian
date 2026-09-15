@@ -51,7 +51,9 @@ nonisolated enum GlassTokens {
 	/// 浅色白 0.5（黑字最坏 12:1 AAA）、深色黑 0.9（白字最坏 8:1 AAA，证明见测试）。
 	/// 药丸本体仍是 clear interactive 玻璃（控件=玻璃件，浮在壳层上，与材质档位无关）
 	nonisolated static func controlPillTint(isDark: Bool) -> (luminance: Double, alpha: Double) {
-		isDark ? (luminance: 0.0, alpha: 0.9) : (luminance: 1.0, alpha: 0.5)
+		// v2.1.2：浅色档 0.5 压不住高对比壁纸（实拍出现一行深一行浅的条带），提到 0.62；
+		// 黑字最坏对比度随之从 12.3 升到 ~14.4，证明表「药丸证明[浅] ≥7」与亮度语义锁仍成立
+		isDark ? (luminance: 0.0, alpha: 0.9) : (luminance: 1.0, alpha: 0.62)
 	}
 
 	/// 降低透明度时的不透明底（自适应外观），替代全部玻璃与地板

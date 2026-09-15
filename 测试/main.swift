@@ -402,7 +402,7 @@ do {
 	let heavy = SleepDrainRecord(sleepDate: Date().addingTimeInterval(-10 * 3600), wakeDate: Date().addingTimeInterval(-600), startPercent: 80, endPercent: 45)
 	let heavyValue = BatteryInfoFormatter(snapshot: s, configuration: fullConfig, sleepDrain: heavy)
 		.makeItems().first { $0.label == "睡眠掉电" }?.value ?? ""
-	expect(heavyValue.contains("（偏快）"), "睡眠掉电行：≥60 分钟且 ≥2%/小时 时文案说偏快（变异检验：isHeavy 恒假必红）")
+	expect(heavyValue.contains("·偏快"), "睡眠掉电行：≥60 分钟且 ≥2%/小时 时文案说偏快（变异检验：isHeavy 恒假必红）")
 	// 同一条记录的慢版对照：时长够但速率不够 → 不许说偏快
 	let mildValue = items.first { $0.label == "睡眠掉电" }?.value ?? ""
 	expect(!mildValue.contains("偏快"), "睡眠掉电行：0.75%/小时 不算偏快（阈值边界锁）")
@@ -853,6 +853,110 @@ do {
 	expectEqual(capped.count, 50, "事件合并：总数封顶 50")
 	expectEqual(capped.first?.date, t0.addingTimeInterval(300), "事件合并：超出挤掉最旧")
 	expectEqual(capped.last?.kind, .chargedFull, "事件合并：最新一条在末尾")
+}
+
+// MARK: - 值不被截断（语义标记必须看得见）
+
+do {
+	// 半宽卡里值列可用宽 = 卡内容 252 - 图标 16 - 间距 8 - 标签列 64 - 间距 8 = 156pt；
+	// 值字号 12.5 semibold，两行上限。凡是把语义写进文案的值（偏低/偏高/偏快/疑似慢充），
+	// 标记必须落在两行之内——否则"文案说了"是假的（这正是撤掉染色后新引入的风险）
+	let avail: CGFloat = 156
+	let font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+	func width(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }
+	func markerFits(_ value: String, _ marker: String, _ label: String) {
+		guard let at = value.range(of: marker) else {
+			print("❌ \(label)：值里没有标记「\(marker)」——守卫前提失效，检查文案是否改了写法")
+			failedNames.append("\(label)：值里没有标记（前提失效）"); return
+		}
+		// 标记起点之前的字符数决定它落在第几行；两行的容量是 2×avail
+		let prefixWidth = width(String(value[..<at.lowerBound]))
+		expect(prefixWidth + width(marker) <= avail * 2,
+			"截断守卫：\(label) 的「\(marker)」落在两行内（实测 \(Int(prefixWidth + width(marker)))pt ≤ \(Int(avail * 2))pt）")
+	}
+	var hot = batterySnap(percent: 60, onBattery: false)
+	hot.temperatureC = 41
+	let hotValue = BatteryInfoFormatter(snapshot: hot, configuration: fullConfig).makeItems()
+		.first { $0.label == "电池温度" }?.value ?? ""
+	markerFits(hotValue, "（偏高）", "电池温度")
+
+	hot.negotiatedVoltageMV = 20000
+	hot.negotiatedCurrentMA = 1500
+	hot.adapterRatedWatts = 100
+	let tierValue = BatteryInfoFormatter(snapshot: hot, configuration: fullConfig).makeItems()
+		.first { $0.label == "当前档位" }?.value ?? ""
+	markerFits(tierValue, "（偏低）", "当前档位")
+
+	// 用新鲜时间：formatter 会过滤"醒来自 24 小时前"的旧记录，拿 t0 造会整行都不出现
+	let heavySleep = SleepDrainRecord(sleepDate: Date().addingTimeInterval(-11 * 3600),
+	                                   wakeDate: Date().addingTimeInterval(-300),
+	                                   startPercent: 80, endPercent: 45)
+	let sleepValue = BatteryInfoFormatter(snapshot: batterySnap(percent: 45), configuration: fullConfig, sleepDrain: heavySleep)
+		.makeItems().first { $0.label == "睡眠掉电" }?.value ?? ""
+	markerFits(sleepValue, "·偏快", "睡眠掉电")
+
+	let slowProfile = ChargerProfile(key: "a|b|65", name: "65W 氮化镓", ratedWatts: 65, firstSeen: t0, lastSeen: t0, connectCount: 12)
+	var slowStats = ChargerPowerStats(key: "a|b|65", ratedWatts: 65)
+	slowStats.sampleCount = 10
+	slowStats.sumWatts = 10 * 20
+	slowStats.maxWatts = 22
+	let chargerValue = BatteryInfoFormatter(snapshot: hot, configuration: fullConfig, chargerProfile: slowProfile, chargerStats: slowStats)
+		.makeItems().first { $0.label == "充电器" }?.value ?? ""
+	markerFits(chargerValue, "疑似慢充", "充电器")
+}
+
+// MARK: - 电源事件显示折叠（v2.1.2 观感整改：相邻同类折成 ×N，卡高不再被重复噪声占满）
+
+do {
+	func ev(_ offsetMin: Double, _ kind: PowerEventKind) -> PowerEvent {
+		PowerEvent(date: t0.addingTimeInterval(offsetMin * 60), kind: kind)
+	}
+	let fmt = DateFormatter()
+	fmt.dateFormat = "HH:mm"
+	let dateText = { (d: Date) -> String in fmt.string(from: d) }
+
+	// 四条"接上电源"间隔 2–5 分钟（实测就是这个形态）→ 折成一行
+	let burst: [PowerEvent] = [ev(0, .pluggedIn), ev(6, .pluggedIn), ev(8, .pluggedIn), ev(18, .pluggedIn)]
+	let rows = PowerEventTimeline.coalesce(burst)
+	expectEqual(rows.count, 1, "显示折叠：相邻同类密集插电折成一行")
+	expectEqual(rows.first?.count, 4, "显示折叠：计数如实反映条数")
+	expectEqual(rows.first?.earliest, t0, "显示折叠：最早时刻外扩到簇首")
+	expectEqual(rows.first?.latest, t0.addingTimeInterval(18 * 60), "显示折叠：最近时刻取最新一条")
+	expectEqual(PowerEventTimeline.timeText(rows[0], dateText: dateText).contains("–"), true,
+		"显示折叠：多条写时间跨度（变异检验：只写单时刻必红）")
+	// 单条不谎称"×1"，也不写跨度
+	let single = PowerEventTimeline.coalesce([ev(0, .sleep)])
+	expectEqual(single.first?.count, 1, "显示折叠：单条计数为 1")
+	expectEqual(PowerEventTimeline.timeText(single[0], dateText: dateText).contains("–"), false,
+		"显示折叠：单条不写跨度（没有跨度可言）")
+
+	// 跨类型绝不合并——插拔插折成"接上×2+拔掉×1"会抹掉事件顺序，而顺序就是这张卡的意义
+	// 变异检验：把"相邻同类"写成"全局按类型分组"，这组断言必红
+	let flip: [PowerEvent] = [ev(0, .pluggedIn), ev(5, .unplugged), ev(9, .pluggedIn)]
+	let flipRows = PowerEventTimeline.coalesce(flip)
+	expectEqual(flipRows.count, 3, "显示折叠：插拔插保持三条，不跨类型合并")
+	expectEqual(flipRows.first?.kind, .pluggedIn, "显示折叠：最新一条排最前")
+	expectEqual(flipRows.last?.kind, .pluggedIn, "显示折叠：最早一条排最后")
+
+	// 间隔超过 30 分钟是两个独立事件（相隔几小时的两插不能看着像"插了一次很久"）
+	// 变异检验：去掉间隔闸门，这组必红
+	let far: [PowerEvent] = [ev(0, .pluggedIn), ev(120, .pluggedIn)]
+	let farRows = PowerEventTimeline.coalesce(far)
+	expectEqual(farRows.count, 2, "显示折叠：相隔 2 小时的同类不合并（防抹成一次长插）")
+	let near: [PowerEvent] = [ev(0, .pluggedIn), ev(29, .pluggedIn)]
+	expectEqual(PowerEventTimeline.coalesce(near).count, 1, "显示折叠：29 分钟内仍合并（阈值内侧）")
+
+	// 折叠是显示折叠，不是数据删除：逐条时刻留在悬停说明里
+	let help = PowerEventTimeline.helpText(rows[0], times: PowerEventTimeline.times(in: burst, of: rows[0]), dateText: dateText)
+	expect(help.contains("共 4 次"), "显示折叠：悬停说明给出真实条数")
+	expect(help.split(separator: "：").count == 2 && help.components(separatedBy: "、").count == 4,
+		"显示折叠：悬停说明逐条列出时刻（合并没丢信息）")
+	expectEqual(PowerEventTimeline.helpText(single[0], times: PowerEventTimeline.times(in: [ev(0, .sleep)], of: single[0]), dateText: dateText), "",
+		"显示折叠：单条不需要悬停补充")
+	// 折叠不丢数据：簇的真实时刻能原样取回（变异检验：times 若漏掉同类过滤/区间，条数必错）
+	expectEqual(PowerEventTimeline.times(in: burst, of: rows[0]).count, 4, "显示折叠：四条时刻都能追回（折叠只是显示层）")
+	expectEqual(PowerEventTimeline.times(in: flip, of: flipRows[0]).count, 1,
+		"显示折叠：取回时刻只属于本簇（最新那条插电，不含更早的同类）")
 }
 
 // MARK: - 充电器档案
@@ -1858,7 +1962,12 @@ do {
 	expect(row?.value.contains("峰值") == true, "充电器信息行：峰值协商功率露出（诊断线材用得上）")
 	expect(row?.value.contains("疑似慢充") == true, "充电器信息行：慢充标出")
 	// 慢充语义只在文字里；图标色仍专职表"新旧"，不许被拿来当第二套告警色
-	expect(row?.value.hasSuffix("「疑似慢充」") == true, "充电器信息行：慢充语义落在文案末尾")
+	// 不变式是"结论在明细之前"，不是具体位置（名字后还跟着"见过N次"）
+	if let slow = row?.value.range(of: "疑似慢充"), let avg = row?.value.range(of: "平均") {
+		expect(slow.lowerBound < avg.lowerBound, "充电器信息行：判断在均值/峰值明细之前（截断先掉明细）")
+	} else {
+		expect(false, "充电器信息行：判断与明细都在值里")
+	}
 	expect(row?.iconTint == Color.green, "充电器信息行：图标色只表新旧，慢充不借颜色（变异：把橙挪到图标必红）")
 
 	// 样本不足不标慢充

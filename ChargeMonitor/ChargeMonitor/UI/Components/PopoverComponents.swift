@@ -36,6 +36,10 @@ enum PopoverLayout {
 	static let rowVerticalPadding: CGFloat = 3
 	static let sectionSpacing: CGFloat = 4
 	static let rowCornerRadius: CGFloat = 8
+	// 信息行两列布局：标签列宽按最长标签（"剩余可用时间"6 字 @11.5pt）定，
+	// 值从这条线起左对齐——值列左缘不再随值长短锯齿化
+	static let infoLabelColumnWidth: CGFloat = 64
+	static let infoValueFontSize: CGFloat = 12.5
 }
 
 struct PopoverInfoLine: View {
@@ -116,10 +120,13 @@ struct PopoverCard<Content: View>: View {
 	}
 }
 
-// 图标 + 标签 + 右对齐值的信息行
+// 图标 + 标签列 + 值列左对齐的信息行（v2.1.2 观感整改）
+// 撤掉彩色后，"标签 vs 值"和"值 vs 值"都失去了区分手段——右对齐的长短值还会把值列左缘
+// 撕成锯齿，眼睛没法纵向扫描。改法：标签固定列宽左对齐、值从固定列起点左对齐，
+// 层次靠字重与列位置而不是颜色承担（彩色小字坐玻璃面不达 AA，见测试「文字色锁」）。
 struct PopoverInfoRow: View {
 	let item: BatteryInfoItem
-	
+
 	var body: some View {
 		HStack(spacing: 8) {
 			Image(systemName: item.symbol)
@@ -127,21 +134,26 @@ struct PopoverInfoRow: View {
 				.symbolRenderingMode(.hierarchical)
 				.foregroundStyle(item.iconTint ?? Color.secondary)
 				.frame(width: 16)
-			
+
 			Text(item.label)
-				.font(.system(size: PopoverLayout.bodyFontSize))
+				.font(.system(size: 11.5))
 				.foregroundStyle(GlassTokens.labelOnGlass)
-			
-			Spacer(minLength: 12)
-			
+				.lineLimit(1)
+				.minimumScaleFactor(0.8)
+				.frame(width: PopoverLayout.infoLabelColumnWidth, alignment: .leading)
+
 			// 等宽数字避免刷新时左右跳动。转场用淡入淡出而非 numericText 数字滚动：
 			// 这些值每 2 秒就变，numericText 会不断生成插值字形位图，
 			// 实测内存会以每分钟几十 MB 的速度持续膨胀；淡入淡出没有逐帧插值字形
 			Text(item.value)
-				.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium).monospacedDigit())
-				.foregroundStyle(.primary)  // 值文字恒走已证明的自适应色；异常语义在文案里（v2.1.x 玻璃优先裁决）
-				.lineLimit(1)
-				.minimumScaleFactor(0.7)
+				.font(.system(size: PopoverLayout.infoValueFontSize, weight: .semibold).monospacedDigit())
+				.foregroundStyle(.primary)  // 值文字恒走已证明的自适应色；异常语义在文案里（玻璃优先裁决）
+				// 两行上限：值里带语义标记（「（偏低）」「疑似慢充」等）时，
+				// 单行截断会把标记切掉——等于"文案说了但看不见"，比原来的染色更糟
+				.lineLimit(2)
+				.minimumScaleFactor(0.85)
+				.fixedSize(horizontal: false, vertical: true)
+				.frame(maxWidth: .infinity, alignment: .leading)
 				.contentTransition(.opacity)
 				.animation(.easeInOut(duration: 0.3), value: item.value)
 		}
