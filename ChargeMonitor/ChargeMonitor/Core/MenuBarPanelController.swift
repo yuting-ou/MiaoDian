@@ -170,11 +170,8 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// 会"拿到 key 又立刻失去"触发失焦秒关；orderFrontRegardless 不依赖 key 状态也能显示
 		panel.orderFrontRegardless()
 		panel.makeKey()
-		DiagnosticLog.failureOnce("dbg-panel-frame", category: "glass", "诊断：frame=\(NSStringFromRect(panel.frame)) visible=\(panel.isVisible)")
-		DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-			guard let self, let p = self.panel else { return }
-			DiagnosticLog.failureOnce("dbg-panel-later", category: "glass", "诊断：2秒后 frame=\(NSStringFromRect(p.frame))")
-		}
+		// 位置漂移的临时帧诊断已撤（adb540b 提交信息写着"清理"，实际是把这两条加了进来，
+		// 于是每次开面板都往 error 级日志写一行"诊断：frame=…"，污染用户日志与健康检查）
 		installOutsideClickMonitor()
 	}
 
