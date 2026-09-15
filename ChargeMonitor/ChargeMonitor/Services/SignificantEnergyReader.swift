@@ -269,8 +269,20 @@ actor SignificantEnergyReader {
 	private func processPath(pid: pid_t) -> String? {
 		var buffer = [CChar](repeating: 0, count: 4096)
 		let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-		guard count > 0 else { return nil }
-		return String(cString: buffer)
+		return Self.decodePathBuffer(buffer, byteCount: count)
+	}
+
+	// proc_pidpath 缓冲区解码。SDK 27 弃用 String(cString:)，改为按返回长度显式解码：
+	// 以 byteCount 为上界、首个 NUL 截断——两种长度约定（含/不含终止 NUL）都不越界；
+	// 单个坏字节按 UTF-8 替换字符处理，不因局部损坏丢掉整条路径（宁可显示怪字符也不丢大户）
+	nonisolated static func decodePathBuffer(_ buffer: [CChar], byteCount: Int32) -> String? {
+		guard byteCount > 0 else { return nil }
+		let limit = min(Int(byteCount), buffer.count)
+		var end = 0
+		while end < limit, buffer[end] != 0 { end += 1 }
+		guard end > 0 else { return nil }
+		let bytes = buffer[0..<end].map { UInt8(bitPattern: $0) }
+		return String(decoding: bytes, as: UTF8.self)
 	}
 
 	private func readProcessMetrics(pid: pid_t) -> ProcessMetrics? {

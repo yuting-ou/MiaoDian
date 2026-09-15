@@ -2869,6 +2869,44 @@ do {
 	expect(!SignificantEnergyReader.isWarmupComplete(framesObserved: 0, minFrames: 50), "冷启动：零帧必在暖机")
 }
 
+// MARK: - macOS 27 适配：proc_pidpath 缓冲区解码（替换弃用 String(cString:) 的等价性）
+
+do {
+	// 造缓冲：字符串字节 + 终止 NUL + 尾部填充。填充不许被读出来，否则路径会串味
+	func cbuf(_ s: String, pad: Int = 8) -> [CChar] {
+		Array(s.utf8).map { CChar(bitPattern: $0) } + [0] + Array(repeating: CChar(0), count: pad)
+	}
+	let path = "/Applications/妙电.app"
+	let pathBytes = Int32(path.utf8.count)
+	expectEqual(SignificantEnergyReader.decodePathBuffer(cbuf(path), byteCount: pathBytes + 1) ?? "",
+		path, "解码：长度含终止 NUL 时按 NUL 截断")
+	expectEqual(SignificantEnergyReader.decodePathBuffer(cbuf(path), byteCount: pathBytes) ?? "",
+		path, "解码：长度不含终止 NUL 时同样得完整路径（两种约定同源）")
+	// 变异检验：实现若无视 byteCount（一路扫到 NUL），这条必红——byteCount 内没有 NUL，
+	// 越界就会把缓冲区后半段（下一个进程的数据）拼进路径
+	var crowded = Array("/usr/bin/alpha".utf8).map { CChar(bitPattern: $0) }
+	crowded += Array("/usr/bin/beta".utf8).map { CChar(bitPattern: $0) }
+	expectEqual(SignificantEnergyReader.decodePathBuffer(crowded, byteCount: 8) ?? "",
+		"/usr/bin", "解码：绝不越 byteCount 读（后半段是别人的数据）")
+	// 变异检验：实现若不认 NUL（只按 byteCount 截），这条必红——复用缓冲时残渣会进路径
+	var stale = Array(path.utf8).map { CChar(bitPattern: $0) } + [0]
+	stale += Array("stale-garbage".utf8).map { CChar(bitPattern: $0) }
+	expectEqual(SignificantEnergyReader.decodePathBuffer(stale, byteCount: Int32(stale.count)) ?? "",
+		path, "解码：终止 NUL 之后的残渣不进门")
+	// 读失败不得冒充"有路径"：proc_pidpath 对已退出进程返回 0 或 -1
+	expect(SignificantEnergyReader.decodePathBuffer(cbuf(path), byteCount: 0) == nil, "解码：byteCount=0（读失败）判 nil")
+	expect(SignificantEnergyReader.decodePathBuffer(cbuf(path), byteCount: -1) == nil, "解码：byteCount 为负判 nil")
+	expect(SignificantEnergyReader.decodePathBuffer([0, 0, 0], byteCount: 3) == nil, "解码：首字节即 NUL 判 nil（空路径不谎报）")
+	// 坏字节：单个非法 UTF-8 走替换字符，整条路径照留——丢一行大户比多一个怪字符更糟
+	// 变异检验：若改用可失败解码（String(validating:)/return nil），前两条必红
+	var dirty = Array("/Applications/probe.app".utf8)
+	dirty[14] = 0xC0  // 非法 UTF-8 起始字节
+	let decoded = SignificantEnergyReader.decodePathBuffer(dirty.map { CChar(bitPattern: $0) }, byteCount: Int32(dirty.count)) ?? ""
+	expect(decoded.hasPrefix("/Applications/"), "解码：坏字节不丢路径前缀")
+	expect(decoded.hasSuffix(".app"), "解码：坏字节不丢路径后缀")
+	expectEqual(decoded.count, "/Applications/probe.app".count, "解码：坏字节替换为单字符（长度不膨胀、不吞字符）")
+}
+
 // MARK: - 自身成本：蓝牙轮询按面板状态降频
 
 do {

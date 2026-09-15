@@ -41,10 +41,10 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 只需 Command Line Tools，无需完整 Xcode：
 
 ```bash
-bash build.sh    # 先跑单元测试（772 项断言），全过才编译打包
+bash build.sh    # 先跑单元测试（788 项断言），全过才编译打包
 ```
 
-> CLT 27.0.0 起工具链不带 SwiftUI 宏插件而 SDK 27 的 SwiftUI 属性包装器已宏化——build.sh 在 CLT-only 环境自动钉住 MacOSX26.5 SDK 规避，装了完整 Xcode 后自动回落，无需手工配置。
+> SDK 27 起 SwiftUI 的属性包装器（`@State` 等）改为宏实现，而 CLT 27 的工具链不带 SwiftUIMacros 插件——build.sh 不猜你在什么环境，直接拿探针实测当前工具链能编哪个 SDK：能编就用默认 SDK，不能就自动回落到最新的可编译旧 SDK（26.x 的 SwiftUI 尚不依赖宏插件），全都编不动就停下来告诉你缺什么。装完整 Xcode 后自动走默认 SDK，无需手工配置。
 
 产物输出到 `输出/妙电.app`。`bash 打包.sh` 额外生成可分发的 DMG。
 

@@ -8,6 +8,9 @@ on:
 jobs:
   test:
     # 测试编译用 -default-isolation MainActor，需要 Swift 6.2+（Xcode 26，macos-26 镜像自带）
+    # 已知边界（2026-09-15）：macos-27 镜像尚不存在（其 README 404），所以 UI 层在
+    # SDK 27 下的编译在这条门上拿不到信号；镜像出现后把 runs-on 换成 macos-27 即补上
+    # ——本仓库开发机已在 macOS 27 + CLT 27（缺 SwiftUIMacros 插件），本地也补不了这一路。
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4

@@ -37,7 +37,12 @@ if [ ${#EXCLUDED_MACRO[@]} -gt 0 ]; then
 	printf '    %s\n' "${EXCLUDED_MACRO[@]}"
 fi
 
-echo "==> 编译测试（源文件 ${#SOURCES[@]} 个 + 测试用例）..."
+# 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
+# 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
+# 钉的旧 SDK 是两条独立证据，回显版本免得把两者的结论混着读。
+TEST_SDK_PATH="$(xcrun --show-sdk-path --sdk macosx 2>/dev/null || true)"
+TEST_SDK_VERSION="$(plutil -extract Version raw "$TEST_SDK_PATH/SDKSettings.plist" 2>/dev/null || echo '?')"
+echo "==> 编译测试（源文件 ${#SOURCES[@]} 个 + 测试用例；SDK：默认 macOS $TEST_SDK_VERSION）..."
 swiftc \
 	-swift-version 5 \
 	-default-isolation MainActor \
