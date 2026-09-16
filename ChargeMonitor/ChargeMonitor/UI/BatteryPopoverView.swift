@@ -6,10 +6,14 @@ struct BatteryPopoverView: View {
 	@ObservedObject var configurationManager: ConfigurationManager
 	@ObservedObject var historyRecorder: BatteryHistoryRecorder
 	@ObservedObject var alertController: BatteryAlertController
-	/// 卡片本体整卡拖拽。面板被包进 ScrollView 时必须关掉：竖向滚动手势与
+	/// 卡片本体整卡拖拽。卡片区内部滚动时必须关掉：竖向滚动手势与
 	/// simultaneousGesture 的 DragGesture 抢同一段 pan，用户想滚却把卡提起来。
-	/// 滚动宿主下只保留把手（minimumDistance=0）作为明示抓取点。
+	/// 滚动模式下只保留把手（minimumDistance=0）作为明示抓取点。
 	var allowsCardDrag: Bool = true
+	/// 非 nil = 面板总高预算（可视区扣 chrome 后）。卡片区在内部 ScrollView 里滚，
+	/// **外壳/头部/控制行固定**——整块玻璃跟着滚会每帧重采样材质，是掉帧大户。
+	/// nil = 装得下，不启内部滚动。
+	var cardBudgetHeight: CGFloat? = nil
 	// 「减少动态效果」安全网：入场动画直接终态（见 CascadeIn 与容器淡入分支）
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	
@@ -164,57 +168,40 @@ struct BatteryPopoverView: View {
 				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
 			}
 
-			if twoColumns {
-				// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
-				// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
-				if usingRows {
-					// 华容网格 v5（v1.17.3 丝滑重排）：卡片以自身为身份平铺进自定义密铺
-					// Layout——预览重排 = 坐标重算 + 容器弹簧全员滑行。此前行栈以段落内容
-					// 为身份，重排一改行形态，段内卡片连树销毁、新视图在终点凭空出现
-					// （无位移动画），用户看到的就是跳格子卡顿。
-					// 把手仍走独立浮层（handleLayer，v1.17.1 不死手结构）。
-					// v1.18.3 绘制序保证：拖动中被拖卡排到源序列末尾——id 不变只换序，
-					// 视图平移不重建（身份法则）；Layout 不重排子视图语义序（按 plan 对号），
-					// 但 SwiftUI 绘制按子视图声明序，被拖卡因此恒在最上层，滑行交叉不穿帮。
-					let orderedIDs = PanelFlow.dragTopmost(
-						PanelFlow.flatCardIDs(segments), dragging: dragState?.card
+			// 卡片区：装不下时包一层内部 ScrollView（外壳/头/控仍在外面固定）。
+			// BoardSpace 必须挂在**滚动内容**上：挂在 ScrollView 外的祖先时，
+			// 滚动仍会改内容相对该系的 frame，探针每帧写 @State，掉帧照旧。
+			if cardBudgetHeight != nil {
+				ScrollView(.vertical, showsIndicators: true) {
+					cardRegion(
+						twoColumns: twoColumns,
+						usingRows: usingRows,
+						segments: segments,
+						rowSource: rowSource,
+						split: split,
+						cardIDs: cardIDs,
+						configuration: configuration,
+						powerItems: powerItems,
+						batteryItems: batteryItems,
+						showsHealthCurve: showsHealthCurve
 					)
-					PanelMasonryLayout(segments: segments, emptyHeight: isEditingLayout ? 40 : 0) {
-						ForEach(orderedIDs, id: \.self) { cardID in
-							if let card = CardID(rawValue: cardID) {
-								cardSlot(
-									card,
-									layoutValue: rowSource,
-									powerItems: powerItems,
-									batteryItems: batteryItems,
-									configuration: configuration,
-									showsHealthCurve: showsHealthCurve
-								)
-								.frame(maxWidth: .infinity, alignment: .leading)
-								.masonryCard(cardID)
-							}
-						}
-					}
-					.animation(.spring(response: 0.32, dampingFraction: 0.82), value: rowSource)
-					.overlay { handleLayer(segments) }
-				} else {
-					HStack(alignment: .top, spacing: 10) {
-						cardColumn(true, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-						cardColumn(false, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-					}
+					.coordinateSpace(name: BoardSpace.name)
 				}
+				.frame(maxHeight: .infinity)
 			} else {
-				ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
-					cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-						.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
-				}
-			}
-
-			// 编辑模式的隐藏托盘：被藏起的卡片在这里，点 + 放回右列
-			// v1.24.0 坐卡纱（壳层无直露文字）
-			if isEditingLayout, !layoutDraft.hidden.isEmpty {
-				hiddenTray
-					.cardSection()
+				cardRegion(
+					twoColumns: twoColumns,
+					usingRows: usingRows,
+					segments: segments,
+					rowSource: rowSource,
+					split: split,
+					cardIDs: cardIDs,
+					configuration: configuration,
+					powerItems: powerItems,
+					batteryItems: batteryItems,
+					showsHealthCurve: showsHealthCurve
+				)
+				.coordinateSpace(name: BoardSpace.name)
 			}
 
 			// v1.24.1 控制行回归玻璃家族：去掉 v1.24.0 的整块卡纱垫板——板下壁纸亮部幽灵穿透，
@@ -226,7 +213,7 @@ struct BatteryPopoverView: View {
 		.padding(.horizontal, 12)
 		.padding(.top, 12)
 		.padding(.bottom, 8)
-		.frame(width: twoColumns ? 584 : 292)
+		.frame(width: twoColumns ? 584 : 292, height: cardBudgetHeight, alignment: .top)
 		// 面板外壳：ultraThinMaterial+亮度地板（见 GlassStyle）。ignoresSafeArea 让外壳
 		// 顶满窗口——否则 SwiftUI 会避让隐形标题栏的安全区，面板顶部出现约 28pt 空档
 		.panelShell()
@@ -291,6 +278,77 @@ struct BatteryPopoverView: View {
 			}
 	}
 	
+	// MARK: - 卡片区（可选包在内部 ScrollView 里）
+
+	/// 卡片 + 编辑隐藏托盘。高度不够时由 body 外面的 ScrollView 包住；
+	/// 这里不感知滚动，只负责布局本身（与非滚动路径同一份代码）。
+	@ViewBuilder
+	private func cardRegion(
+		twoColumns: Bool,
+		usingRows: Bool,
+		segments: [PanelFlow.Segment],
+		rowSource: PanelLayout,
+		split: (left: [CardID], right: [CardID]),
+		cardIDs: [CardID],
+		configuration: AppConfiguration,
+		powerItems: [BatteryInfoItem],
+		batteryItems: [BatteryInfoItem],
+		showsHealthCurve: Bool
+	) -> some View {
+		if twoColumns {
+			// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
+			// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
+			if usingRows {
+				// 华容网格 v5（v1.17.3 丝滑重排）：卡片以自身为身份平铺进自定义密铺
+				// Layout——预览重排 = 坐标重算 + 容器弹簧全员滑行。此前行栈以段落内容
+				// 为身份，重排一改行形态，段内卡片连树销毁、新视图在终点凭空出现
+				// （无位移动画），用户看到的就是跳格子卡顿。
+				// 把手仍走独立浮层（handleLayer，v1.17.1 不死手结构）。
+				// v1.18.3 绘制序保证：拖动中被拖卡排到源序列末尾——id 不变只换序，
+				// 视图平移不重建（身份法则）；Layout 不重排子视图语义序（按 plan 对号），
+				// 但 SwiftUI 绘制按子视图声明序，被拖卡因此恒在最上层，滑行交叉不穿帮。
+				let orderedIDs = PanelFlow.dragTopmost(
+					PanelFlow.flatCardIDs(segments), dragging: dragState?.card
+				)
+				PanelMasonryLayout(segments: segments, emptyHeight: isEditingLayout ? 40 : 0) {
+					ForEach(orderedIDs, id: \.self) { cardID in
+						if let card = CardID(rawValue: cardID) {
+							cardSlot(
+								card,
+								layoutValue: rowSource,
+								powerItems: powerItems,
+								batteryItems: batteryItems,
+								configuration: configuration,
+								showsHealthCurve: showsHealthCurve
+							)
+							.frame(maxWidth: .infinity, alignment: .leading)
+							.masonryCard(cardID)
+						}
+					}
+				}
+				.animation(.spring(response: 0.32, dampingFraction: 0.82), value: rowSource)
+				.overlay { handleLayer(segments) }
+			} else {
+				HStack(alignment: .top, spacing: 10) {
+					cardColumn(true, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					cardColumn(false, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+				}
+			}
+		} else {
+			ForEach(Array(cardIDs.enumerated()), id: \.element) { index, id in
+				cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
+					.modifier(CascadeIn(step: cascadeStep(index + 1), active: didAppear))
+			}
+		}
+
+		// 编辑模式的隐藏托盘：被藏起的卡片在这里，点 + 放回右列
+		// v1.24.0 坐卡纱（壳层无直露文字）
+		if isEditingLayout, !layoutDraft.hidden.isEmpty {
+			hiddenTray
+				.cardSection()
+		}
+	}
+
 	// MARK: - 卡片枚举与自适应分列
 	
 	private enum CardID: String, Hashable, CaseIterable {
@@ -521,16 +579,17 @@ struct BatteryPopoverView: View {
 	/// 拖拽把手浮层（v1.17.1 拖拽不死手）：平铺一层把手浮在卡片上，身份恒等于卡自身，
 	/// 位置由 frameTable 探针实时驱动——预览重排只改坐标、永不销毁视图，挂在把手上的
 	/// 进行中 DragGesture 全程存活（此前把手随卡片进行结构，行/段身份一翻手势即死）。
-	/// 卡 frame 是 .global 坐标，减去浮层容器原点换算成层内坐标；y+14 = 把手胶囊中心
-	/// 与卡顶的视觉间距（对齐旧版 ZStack(.top) + padding(3) 的落点）。
+	/// 卡 frame 是**板面坐标系**，减去浮层容器在同一坐标系的原点换算成层内坐标；
+	/// y+14 = 把手胶囊中心与卡顶的视觉间距（对齐旧版 ZStack(.top) + padding(3) 的落点）。
 	private func handleLayer(_ segments: [PanelFlow.Segment]) -> some View {
 		GeometryReader { geo in
-			let origin = geo.frame(in: .global).origin
+			let origin = geo.frame(in: .named(BoardSpace.name)).origin
 			ZStack(alignment: .topLeading) {
 				ForEach(PanelFlow.flatCardIDs(segments), id: \.self) { cardID in
 					if let frame = frameTable.frames[cardID], let card = CardID(rawValue: cardID) {
 						dragHandle(card)
 							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
+							// 仅布局重排（拖拽/折叠）时跟手弹簧；滚动时 frame 表不变，不会触发
 							.animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameTable.frames[cardID])
 					}
 				}
@@ -596,12 +655,13 @@ struct BatteryPopoverView: View {
 	}
 
 	/// 拖拽手势（把手与卡片本体共用一套状态机）。
+	/// 坐标空间 = BoardSpace（与探针一致）：pointer 与 frame 表同系，resolve 才对得上。
 	/// 把手 minimumDistance=0：按住即拖，它是明示的"抓取点"；
 	/// 卡片本体 minimumDistance=10 且走 simultaneousGesture（v2.1.2 人体工学）：
 	/// 直觉是抓住卡片拖而不是去瞄小把手，但 10pt 阈值 + 不抢零位移点击，
 	/// 保证卡片内的折叠箭头、按钮、图表 hover 照常响应——只有真拖起来才归它
 	private func dragGesture(for id: CardID, minimumDistance: CGFloat) -> some Gesture {
-		DragGesture(minimumDistance: minimumDistance, coordinateSpace: .global)
+		DragGesture(minimumDistance: minimumDistance, coordinateSpace: .named(BoardSpace.name))
 			.onChanged { drag in
 				if dragState == nil {
 					// 拖动开始：播种工作副本（自定义布局或会话冻结双列）并固化起始 frame

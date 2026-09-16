@@ -153,25 +153,28 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else { return }
 		// 每次打开重建内容视图：@State 全新 → 入场级联动画重播、onAppear 驱动 startPolling，
 		// 与 MenuBarExtra"面板每次打开销毁重建"的既有行为一致。
-		// allowsCardDrag 先按默认 true 建，滚动判定后再重建关闭——见下方 fit.scrolls 分支
-		let makeRoot: (Bool) -> BatteryPopoverView = { [services] allowsCardDrag in
+		// allowsCardDrag：滚动模式关掉整卡拖（与内部 ScrollView 抢 pan）
+		// cardBudgetHeight：非 nil 时卡片区在视图内部滚，外壳/头/控固定
+		let makeRoot: (Bool, CGFloat?) -> BatteryPopoverView = { [services] allowsCardDrag, budget in
 			BatteryPopoverView(
 				monitor: services.monitor,
 				configurationManager: services.configurationManager,
 				historyRecorder: services.historyRecorder,
 				alertController: services.alertController,
-				allowsCardDrag: allowsCardDrag
+				allowsCardDrag: allowsCardDrag,
+				cardBudgetHeight: budget
 			)
 		}
 		// 高度预算：可视区（菜单栏与 Dock 之后）。实测用户卡片集下面板自然高 1101pt
 		// 而可视区只有 987pt——底部约 4 行控制项压在 Dock 下点不到，间距压缩已救不动。
-		// 两遍布局：先量自然高度，**只有真装不下时**才包一层滚动容器（判定在
+		// 两遍布局：先量自然高度，**只有真装不下时**才启用卡片区内部滚动（判定在
 		// PanelFit 纯函数、测试面锁死）——卡片少的用户走原路径，零行为变化
 		let screen = buttonWindow.screen ?? NSScreen.main
 		// chrome=窗口"隐形标题栏"那一条：.titled + fullSizeContentView 下 setContentSize
 		// 给的是内容矩形，窗口框还会再高 ~28pt——不扣的话底部仍压进 Dock
 		let chrome = panel.frame.height - panel.contentRect(forFrameRect: panel.frame).height
-		let probe = NSHostingView(rootView: makeRoot(true))
+		// 探针必须用无预算的根量自然高——带 budget 会量成钳制后的高度，判定失真
+		let probe = NSHostingView(rootView: makeRoot(true, nil))
 		probe.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
 		probe.layoutSubtreeIfNeeded()
 		let natural = probe.fittingSize
@@ -181,19 +184,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 			chromeHeight: chrome
 		)
 
-		let hosting: NSHostingView<AnyView>
+		// 装不下：卡片区内部滚动（外壳/头部/控制行固定，玻璃不跟滚重采样）。
+		// 不再用外层 ScrollView 包整个 BatteryPopoverView——那会把玻璃壳一起卷进去。
+		let hosting = NSHostingView(rootView: AnyView(
+			makeRoot(!fit.scrolls, fit.scrolls ? fit.availableHeight : nil)
+		))
 		if fit.scrolls {
-			// 滚动宿主：关掉整卡拖拽（allowsCardDrag=false），只留把手——
-			// simultaneousGesture 与 ScrollView 抢 pan，想滚却把卡提起来
-			hosting = NSHostingView(rootView: AnyView(
-				ScrollView(.vertical, showsIndicators: true) {
-					makeRoot(false)
-				}
-				.frame(width: natural.width, height: fit.availableHeight)
-			))
-			Self.panelLogger.info("panel natural=\(Int(natural.height), privacy: .public)pt > visible=\(Int(fit.availableHeight), privacy: .public)pt → card area scrolls")
-		} else {
-			hosting = NSHostingView(rootView: AnyView(makeRoot(true)))
+			Self.panelLogger.info("panel natural=\(Int(natural.height), privacy: .public)pt > visible=\(Int(fit.availableHeight), privacy: .public)pt → card region scrolls internally")
 		}
 		panel.contentView = hosting
 

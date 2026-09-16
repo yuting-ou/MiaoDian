@@ -109,7 +109,16 @@ nonisolated enum CardDropResolver {
 	}
 }
 
-/// frame 采集探针：卡片背景里安静地把自己在窗口坐标系的 frame 写进共享表
+/// 板面坐标空间名：frame 探针与拖拽手势共用。
+/// **必须用内容坐标系而不是 .global**——面板卡片区滚动时，每张卡的 global frame
+/// 每帧变化，探针 onChange 写回视图状态表 → 整棵面板跟着重算 → 滑动掉帧。
+/// 内容系下卡片相对位置在滚动时不变，探针只在真正重排（拖拽预览/折叠/列变更）时写表。
+/// 注意：本文件进单元测试面，注释里不要写属性包装器字面量（run_tests.sh 会按字面排除宏宿主）。
+enum BoardSpace {
+	static let name = "MiaoDianBoard"
+}
+
+/// frame 采集探针：卡片背景里安静地把自己在**板面坐标系**的 frame 写进共享表
 struct CardFrameProbe: View {
 	let id: String
 	@Binding var table: CardDropResolver.FrameTable
@@ -118,9 +127,9 @@ struct CardFrameProbe: View {
 		GeometryReader { geo in
 			Color.clear
 				.onAppear {
-					table.frames[id] = geo.frame(in: .global)
+					table.frames[id] = geo.frame(in: .named(BoardSpace.name))
 				}
-				.onChange(of: geo.frame(in: .global)) { _, new in
+				.onChange(of: geo.frame(in: .named(BoardSpace.name))) { _, new in
 					table.frames[id] = new
 				}
 		}
