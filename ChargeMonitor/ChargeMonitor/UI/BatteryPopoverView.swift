@@ -32,6 +32,8 @@ struct BatteryPopoverView: View {
 	@State private var dragState: CardDragState? = nil
 	// 每张卡的实时 frame（落点计算用），由卡片背景 GeometryReader 采集
 	@State private var frameTable = CardDropResolver.FrameTable()
+	// 拖动中的落点指示线（全局坐标；nil=不显示）
+	@State private var dropIndicator: (x: CGFloat, y: CGFloat, width: CGFloat)? = nil
 	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
 	@State private var previewLayout: PanelLayout? = nil
 	// 悬停中的把手（微放大反馈）
@@ -525,9 +527,18 @@ struct BatteryPopoverView: View {
 					if let frame = frameTable.frames[cardID], let card = CardID(rawValue: cardID) {
 						dragHandle(card)
 							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
-							.animation(.spring(response: 0.32, dampingFraction: 0.82), value: frameTable.frames[cardID])
+							.animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameTable.frames[cardID])
 					}
 				}
+			}
+			// 落点指示线：拖动中画在将要插入的缝隙上（全局坐标换算到层内，同把手一套算法）
+			if dragState != nil, let ind = dropIndicator {
+				Capsule()
+					.fill(Color.accentColor)
+					.frame(width: max(24, ind.width), height: 2)
+					.position(x: ind.x - origin.x + ind.width / 2, y: ind.y - origin.y)
+					.allowsHitTesting(false)
+				.transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
 			}
 		}
 		// 编辑模式隐藏把手浮层：控制条（眼睛/宽窄）也在卡顶居中，旧版把手被控制条盖住
@@ -560,7 +571,9 @@ struct BatteryPopoverView: View {
 		.offset(x: isDragged ? (dragState?.translation.width ?? 0) : 0,
 				y: isDragged ? (dragState?.translation.height ?? 0) : 0)
 		.zIndex(isDragged ? 10 : 0)
-		.animation(.spring(response: 0.32, dampingFraction: 0.82), value: layoutValue)
+		// 抓住卡片任意处即可拖（10pt 阈值避开误触；把手保留，作为"这里可以拖"的明示）
+		.simultaneousGesture(dragGesture(for: id, minimumDistance: 10))
+		.animation(.spring(response: 0.24, dampingFraction: 0.92), value: layoutValue)
 		// 抓起/放下动效（v1.17.2）：scale/shadow 随 isDragged 翻转平滑过渡——
 		// 旧版没有值驱动动画，提起是瞬跳、放下是瞬落，没有"拿起一张卡"的实体感
 		.animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
@@ -573,12 +586,48 @@ struct BatteryPopoverView: View {
 		.animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: configuration.collapsedCards)
 	}
 
+	/// 拖拽手势（把手与卡片本体共用一套状态机）。
+	/// 把手 minimumDistance=0：按住即拖，它是明示的"抓取点"；
+	/// 卡片本体 minimumDistance=10 且走 simultaneousGesture（v2.1.2 人体工学）：
+	/// 直觉是抓住卡片拖而不是去瞄小把手，但 10pt 阈值 + 不抢零位移点击，
+	/// 保证卡片内的折叠箭头、按钮、图表 hover 照常响应——只有真拖起来才归它
+	private func dragGesture(for id: CardID, minimumDistance: CGFloat) -> some Gesture {
+		DragGesture(minimumDistance: minimumDistance, coordinateSpace: .global)
+			.onChanged { drag in
+				if dragState == nil {
+					// 拖动开始：播种工作副本（自定义布局或会话冻结双列）并固化起始 frame
+					let known = Set(CardID.allCases.map(\.layoutID))
+					layoutSeed = PanelFlow.normalize(
+						configurationManager.configuration.panelLayout ?? PanelLayout(
+							rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
+						),
+						known: known
+					)
+					layoutDraft = layoutSeed ?? PanelLayout()
+					dragState = CardDragState(
+						card: id.layoutID,
+						translation: drag.translation,
+						originFrame: frameTable.frames[id.layoutID] ?? .zero,
+						// 起拖点=手指真实位置：落点跟手（旧实现用卡片中心，200pt 高的卡偏 ~100pt）
+						startPoint: drag.startLocation
+					)
+				} else if dragState?.card != id.layoutID {
+					// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖时，本手势不得改写它的 translation
+					return
+				}
+				dragState?.translation = drag.translation
+				updatePreview()
+			}
+			.onEnded { _ in finishDrag(from: id) }
+	}
+
 	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（行插入点预览）。
 	/// 位移始终以拖动开始瞬间的 frame 为基准（拖动开始时已固化进 originFrame），
 	/// 预览重排刷新 frame 表也不回灌落点计算——防反馈振荡
 	private func updatePreview() {
 		guard let drag = dragState, drag.isDragging else { return }
 		guard let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
+		dropIndicator = CardDropResolver.indicatorLine(for: target, table: frameTable, excluding: drag.card)
 		let base = previewLayout ?? layoutDraft
 		let candidate = PanelFlow.insertLayout(base, card: drag.card, target: target)
 		if candidate != base { previewLayout = candidate }
@@ -593,6 +642,7 @@ struct BatteryPopoverView: View {
 			if id == nil || dragState?.card == id?.layoutID {
 				dragState = nil
 				previewLayout = nil
+				dropIndicator = nil
 			}
 		}
 		guard let drag = dragState, drag.isDragging,
@@ -631,38 +681,7 @@ struct BatteryPopoverView: View {
 			}
 			.scaleEffect(isHandleHovering == id.layoutID && dragState == nil ? 1.3 : 1.0)
 			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID && dragState == nil)
-			.gesture(
-				DragGesture(minimumDistance: 0, coordinateSpace: .global)
-					.onChanged { drag in
-						if dragState == nil {
-							// 拖动开始：播种工作副本（自定义布局或会话冻结双列）并固化起始 frame
-							let known = Set(CardID.allCases.map(\.layoutID))
-							layoutSeed = PanelFlow.normalize(
-								configurationManager.configuration.panelLayout ?? PanelLayout(
-									rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
-								),
-								known: known
-							)
-							layoutDraft = layoutSeed ?? PanelLayout()
-							dragState = CardDragState(
-								card: id.layoutID,
-								translation: drag.translation,
-								originFrame: frameTable.frames[id.layoutID] ?? .zero,
-								// 起拖点=把手处的真实指针位置：落点跟手，不再偏到卡片中心
-								startPoint: drag.startLocation
-							)
-						} else if dragState?.card != id.layoutID {
-							// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖（如卡死残留态），本把手的
-							// 手势不得改写它的 translation——否则一按到处乱跳、雪上加霜
-							return
-						}
-						dragState?.translation = drag.translation
-						updatePreview()
-					}
-					.onEnded { _ in
-						finishDrag(from: id)
-					}
-			)
+			.gesture(dragGesture(for: id, minimumDistance: 0))
 			.help("拖动调整这张卡片的位置")
 	}
 

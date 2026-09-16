@@ -1604,6 +1604,79 @@ do {
 	expect(zeroMove.pointer.y < zeroMove.originFrame.midY,
 		"跟手：抓卡顶时落点高于卡中心（卡越高旧模型偏得越多：200pt 高的图表卡偏 ~100pt）")
 
+	// —— 落点指示线几何 CardDropResolver.indicatorLine（纯函数）——
+	// 让位预览已说明插在哪，但指针快移时空隙不好盯；线画在缝隙上，不是卡内
+	// 变异检验：把 −4/+4 改成 0（画进卡里）→ y 断言红；去掉 excluding → 排除断言红
+	func expectLine(
+		_ actual: (x: CGFloat, y: CGFloat, width: CGFloat)?,
+		_ expected: (x: CGFloat, y: CGFloat, width: CGFloat)?,
+		_ name: String
+	) {
+		switch (actual, expected) {
+			case (nil, nil): passed += 1
+			case let (.some(a), .some(e)) where a.x == e.x && a.y == e.y && a.width == e.width:
+				passed += 1
+			default:
+				failedNames.append(name)
+				print("❌ \(name)：得到 \(String(describing: actual))，期望 \(String(describing: expected))")
+		}
+	}
+	expectLine(
+		CardDropResolver.indicatorLine(for: .before("a"), table: probeTable),
+		(0, -4, 270),
+		"指示线：插最前→首卡上沿外 4pt（变异：画进卡内 y=0 必红）")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .before("W"), table: probeTable),
+		(0, 196, 550),
+		"指示线：插宽卡前→宽卡上沿外 4pt")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .end, table: probeTable),
+		(280, 364, 270),
+		"指示线：追加末尾→末卡（按阅读序）下沿外 4pt")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .end, table: probeTable, excluding: "d"),
+		(0, 364, 270),
+		"指示线：排除被拖卡后末卡变 c（变异：忽略 excluding 仍取 d 必红）")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .before("a"), table: probeTable, excluding: "a"),
+		nil,
+		"指示线：锚点=被拖卡自身→nil（线不该画在原位）")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .before("不存在"), table: probeTable),
+		nil,
+		"指示线：锚点不在表→nil")
+	expectLine(
+		CardDropResolver.indicatorLine(for: .end, table: CardDropResolver.FrameTable()),
+		nil,
+		"指示线：空板→nil")
+	// 线必须画在被排除后的阅读序末卡上：a|b 一行、W 独占、c|d 一行时，
+	// 排除 W 后 end 应落到 d（y=360），不是空表逻辑
+	expectLine(
+		CardDropResolver.indicatorLine(for: .end, table: probeTable, excluding: "W"),
+		(280, 364, 270),
+		"指示线：中间卡被拖走后 end 仍锚定末卡")
+
+	// —— 面板高度预算 PanelFit（纯函数）——
+	// 可视区 987、chrome 28、topMargin 8 → available=951；实测自然高 1101 → 必须滚
+	// 变异检验：scrolls 写成恒 false / 把 chrome 当可忽略 → 下列断言红
+	let tall = PanelFit.budget(naturalHeight: 1101, visibleFrameHeight: 987, chromeHeight: 28)
+	expect(tall.scrolls, "高度预算：自然高 1101 > 可用 951 → 滚动")
+	expectEqual(tall.availableHeight, 951, "高度预算：可用=可视区−topMargin−chrome")
+	expectEqual(tall.contentHeight, 951, "高度预算：滚动时内容高钳到可用")
+	let short = PanelFit.budget(naturalHeight: 800, visibleFrameHeight: 987, chromeHeight: 28)
+	expect(!short.scrolls, "高度预算：装得下不滚（卡片少的用户走原路径）")
+	expectEqual(short.contentHeight, 800, "高度预算：不滚时内容高=自然高")
+	expectEqual(short.availableHeight, 951, "高度预算：available 与自然高无关")
+	let chromeIgnored = PanelFit.budget(naturalHeight: 960, visibleFrameHeight: 987, chromeHeight: 28)
+	expect(chromeIgnored.scrolls, "高度预算：扣 chrome 后 960>951 仍滚（不扣 chrome 会误判装得下）")
+	let floor = PanelFit.budget(naturalHeight: 500, visibleFrameHeight: 200, chromeHeight: 10)
+	expectEqual(floor.availableHeight, PanelFit.floorHeight, "高度预算：可视区异常矮时踩地板 360")
+	expect(floor.scrolls, "高度预算：踩地板后自然高 500>360 → 滚动（宁可短面板滚，不要点不到的控制项）")
+	expectEqual(
+		PanelFit.budget(naturalHeight: 300, visibleFrameHeight: 200, chromeHeight: 10).contentHeight,
+		300,
+		"高度预算：自然高低于地板时不滚、内容高=自然高")
+
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
 	let motherPast = ChargeSession(startDate: t0.addingTimeInterval(-7200), endDate: t0.addingTimeInterval(-7200 + 3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)

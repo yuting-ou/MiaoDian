@@ -1,4 +1,5 @@
 import AppKit
+import os
 import Combine
 import SwiftUI
 
@@ -11,6 +12,12 @@ import SwiftUI
 @MainActor
 final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	private let services = AppServices.shared
+	// 滚动是否启用属于"值得知道但不出错"的事实：用 info 级 Logger，
+	// 不走 DiagnosticLog.failureOnce（那是 error 级，会把健康检查的"零错误日志"变成噪声源）
+	private static let panelLogger = Logger(
+		subsystem: Bundle.main.bundleIdentifier ?? "fun.crashsystem.ChargeMonitor",
+		category: "PanelScroll"
+	)
 	private var statusItem: NSStatusItem?
 	private var panel: NSPanel?
 	// 面板因失焦刚关闭的时间戳：点菜单栏图标会先触发失焦关闭、再触发点击动作，
@@ -152,20 +159,48 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 			historyRecorder: services.historyRecorder,
 			alertController: services.alertController
 		)
-		let hosting = NSHostingView(rootView: root)
+		// 高度预算：可视区（菜单栏与 Dock 之后）。实测用户卡片集下面板自然高 1101pt
+		// 而可视区只有 987pt——底部约 4 行控制项压在 Dock 下点不到，间距压缩已救不动。
+		// 两遍布局：先量自然高度，**只有真装不下时**才包一层滚动容器（判定在
+		// PanelFit 纯函数、测试面锁死）——卡片少的用户走原路径，零行为变化
+		let screen = buttonWindow.screen ?? NSScreen.main
+		// chrome=窗口"隐形标题栏"那一条：.titled + fullSizeContentView 下 setContentSize
+		// 给的是内容矩形，窗口框还会再高 ~28pt——不扣的话底部仍压进 Dock
+		let chrome = panel.frame.height - panel.contentRect(forFrameRect: panel.frame).height
+		let probe = NSHostingView(rootView: root)
+		probe.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+		probe.layoutSubtreeIfNeeded()
+		let natural = probe.fittingSize
+		let fit = PanelFit.budget(
+			naturalHeight: natural.height,
+			visibleFrameHeight: screen?.visibleFrame.height ?? 900,
+			chromeHeight: chrome
+		)
+
+		let hosting: NSHostingView<AnyView>
+		if fit.scrolls {
+			hosting = NSHostingView(rootView: AnyView(
+				ScrollView(.vertical, showsIndicators: true) {
+					root
+				}
+				.frame(width: natural.width, height: fit.availableHeight)
+			))
+			Self.panelLogger.info("panel natural=\(Int(natural.height), privacy: .public)pt > visible=\(Int(fit.availableHeight), privacy: .public)pt → card area scrolls")
+		} else {
+			hosting = NSHostingView(rootView: AnyView(root))
+		}
 		panel.contentView = hosting
 
 		let size = hosting.fittingSize
 		// 宽度防御钳制：内容宽度只会是 292（单列）/584（双列），异常 fitting（布局中捕捉）不采信
 		let width: CGFloat = size.width >= 450 ? 584 : 292
-		panel.setContentSize(NSSize(width: width, height: size.height))
+		panel.setContentSize(NSSize(width: width, height: min(size.height, fit.availableHeight)))
 		// 定位与状态项图标解耦：iBar 会把图标收进隐藏区，其窗口位置随收纳状态漂移
 		// （实测面板曾跟着漂到菜单栏下 50pt/屏幕中部）。锚定屏幕本身：
 		// 顶边=菜单栏下缘（visibleFrame.maxY），右缘=**可视区**右缘留 12pt。
 		// 右缘必须用 visibleFrame 而不是 frame：Dock 停在右侧时，按整屏右缘摆放会被
 		// AppKit 的 constrainFrameRect 当场挤窄（实测 584→526 并往下挪 52pt），
 		// 卡片被压窄、值被迫折行、底部"退出"挤出屏幕——看着像排版丑，其实是窗口被裁
-		let screen = buttonWindow.screen ?? NSScreen.main
 		let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 		let originX = visible.maxX - 12 - width
 		panel.setFrameTopLeftPoint(NSPoint(x: originX, y: visible.maxY - 4))

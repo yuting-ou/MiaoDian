@@ -74,6 +74,27 @@ nonisolated enum CardDropResolver {
 		return index + 1 < sorted.count ? .before(sorted[index + 1].key) : .end
 	}
 
+	/// 落点指示线几何：插到某卡之前 → 该卡上沿外 4pt；追加末尾 → 末卡下沿外 4pt。
+	/// 让位预览已说明"会插在哪"，但指针快速移动时那一格空隙不好盯——2pt 线更确定。
+	/// 与 resolve 同一套排除规则：被拖卡自身不参与锚定（线不该画在它原位）。
+	/// 返回 (左缘 x, 线的 y, 线宽)；nil = 锚点不在表里（如空板）
+	nonisolated static func indicatorLine(
+		for target: PanelFlow.DropTarget,
+		table: FrameTable,
+		excluding: String? = nil
+	) -> (x: CGFloat, y: CGFloat, width: CGFloat)? {
+		let kept = table.frames.filter { $0.key != excluding }
+			.sorted { ($0.value.minY, $0.value.minX) < ($1.value.minY, $1.value.minX) }
+		switch target {
+			case .before(let key):
+				guard let f = kept.first(where: { $0.key == key })?.value else { return nil }
+				return (f.minX, f.minY - 4, f.width)
+			case .end:
+				guard let last = kept.last?.value else { return nil }
+				return (last.minX, last.maxY + 4, last.width)
+		}
+	}
+
 	/// 指针到某 frame 的锚定代价：行方向（Y）区间距离平方 + 列方向（X）区间距离平方 ×0.35。
 	/// 区间内距离记 0，故"卡在哪一行"由是否落在行带决定，"这一行的哪一列"由 X 偏差决定
 	private nonisolated static func anchorScore(_ point: CGPoint, _ frame: CGRect) -> CGFloat {
