@@ -1,14 +1,25 @@
 ---
 feature: panel-scroll-drag
-status: in-progress
+status: delivered
 updated: 2026-09-16
 branch: panel-scroll-drag
-commits: 0dd1365c279dada9927e5126014e757c9137ee04..HEAD
+commits: 0dd1365c279dada9927e5126014e757c9137ee04..bde522b
 ---
 
 # 面板高度滚动 + 拖拽人体工学收尾
 
 ## Report
+
+**What was built** — 面板在自然高超出可视预算时才把卡片区包进竖向 `ScrollView`（`PanelFit` 纯函数判定，扣隐形标题栏，地板 360pt）；装得下的用户走原路径。拖拽侧：整卡 10pt 阈值可拖（滚动宿主下关闭，只留把手——审查发现 simultaneousGesture 与 ScrollView 抢 pan）、落点指示线（几何唯一来源 `CardDropResolver.indicatorLine`，出界即清）、弹簧收紧。视图层去掉 indicator 私有副本。
+
+**Verification** — `bash 测试/run_tests.sh` PASS 893；Swift 6 全量 typecheck PASS（SDK 26.5，68 文件）；`bash build.sh` PASS（universal）；离屏高度门 1101 vs 可用 951 → 滚动；变异 4 组全抓红（scrolls 恒 false / 忽略 chrome / 指示线 offset0 / 忽略 excluding）。首次审查 1 CRITICAL（滚动×整卡拖拽）+ 2 minor（陈旧指示线、contentHeight 双源）均已修；复审子代理两次 UnknownError，CRITICAL 改由代码路径自核关闭。**实拍未做**（用户在场未抢屏）——滚动宿主观感待第一眼。
+
+**Journey log**
+1. 半成品从 main stash 进 worktree 再 pop，主工作区保持干净。
+2. 审查抓到的 CRITICAL 藏在「看起来只是加滚动」里：手势层与宿主滚动手势结构性冲突。
+3. 指示线 excluding 变异第一次假通过——sed/replace 只改到 `resolve` 里同文案的 filter，必须带上下文定位 `indicatorLine`。
+4. README 断言数 867 相对 HEAD 真实基线 875 已漂 8；门面数字以实测 `passed` 为准。
+5. 复审子代理连续失败两次，不阻塞收口：关键修复走读代码路径确认（scrolls→makeRoot(false)→mask .none；把手独立 gesture 不受影响）。
 
 ## [S1] Problem
 
