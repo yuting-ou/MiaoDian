@@ -6,6 +6,10 @@ struct BatteryPopoverView: View {
 	@ObservedObject var configurationManager: ConfigurationManager
 	@ObservedObject var historyRecorder: BatteryHistoryRecorder
 	@ObservedObject var alertController: BatteryAlertController
+	/// 卡片本体整卡拖拽。面板被包进 ScrollView 时必须关掉：竖向滚动手势与
+	/// simultaneousGesture 的 DragGesture 抢同一段 pan，用户想滚却把卡提起来。
+	/// 滚动宿主下只保留把手（minimumDistance=0）作为明示抓取点。
+	var allowsCardDrag: Bool = true
 	// 「减少动态效果」安全网：入场动画直接终态（见 CascadeIn 与容器淡入分支）
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	
@@ -571,8 +575,13 @@ struct BatteryPopoverView: View {
 		.offset(x: isDragged ? (dragState?.translation.width ?? 0) : 0,
 				y: isDragged ? (dragState?.translation.height ?? 0) : 0)
 		.zIndex(isDragged ? 10 : 0)
-		// 抓住卡片任意处即可拖（10pt 阈值避开误触；把手保留，作为"这里可以拖"的明示）
-		.simultaneousGesture(dragGesture(for: id, minimumDistance: 10))
+		// 抓住卡片任意处即可拖（10pt 阈值避开误触；把手保留，作为"这里可以拖"的明示）。
+		// 滚动宿主下把 mask 收成 .none：simultaneousGesture 与 ScrollView 抢同一段 pan，
+		// 用户想滚却把卡提起来；把手仍用独立 gesture（minDistance=0）可拖
+		.simultaneousGesture(
+			dragGesture(for: id, minimumDistance: 10),
+			including: allowsCardDrag ? .all : .none
+		)
 		.animation(.spring(response: 0.24, dampingFraction: 0.92), value: layoutValue)
 		// 抓起/放下动效（v1.17.2）：scale/shadow 随 isDragged 翻转平滑过渡——
 		// 旧版没有值驱动动画，提起是瞬跳、放下是瞬落，没有"拿起一张卡"的实体感
@@ -626,7 +635,11 @@ struct BatteryPopoverView: View {
 	/// 预览重排刷新 frame 表也不回灌落点计算——防反馈振荡
 	private func updatePreview() {
 		guard let drag = dragState, drag.isDragging else { return }
-		guard let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
+		guard let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else {
+			// 出界/无锚点：清指示线，否则线会冻在上一次合法缝隙上
+			dropIndicator = nil
+			return
+		}
 		dropIndicator = CardDropResolver.indicatorLine(for: target, table: frameTable, excluding: drag.card)
 		let base = previewLayout ?? layoutDraft
 		let candidate = PanelFlow.insertLayout(base, card: drag.card, target: target)

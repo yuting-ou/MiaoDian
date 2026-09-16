@@ -32,8 +32,14 @@ commits: 0dd1365c279dada9927e5126014e757c9137ee04..HEAD
 **拖拽指示线**
 
 - 几何唯一来源：`CardDropResolver.indicatorLine(for:table:excluding:)`——`before(key)` 画在锚卡上沿外 4pt，`.end` 画在末卡下沿外 4pt；排除被拖卡；空表/锚点缺失返回 nil。
-- 视图层只消费该函数，不得再维护第二份几何。
+- 视图层只消费该函数，不得再维护第二份几何。`resolve` 返回 nil 时清空 `dropIndicator`，避免线冻在上一合法缝隙。
 - 把手与卡片本体共用 `dragGesture(for:minimumDistance:)` 状态机；幽灵拖拽守卫保留。
+
+**滚动 × 整卡拖拽仲裁（审查 CRITICAL）**
+
+- `simultaneousGesture(DragGesture)` 与竖向 `ScrollView` 争同一段 pan：想滚却把卡提起来。
+- 契约：`BatteryPopoverView.allowsCardDrag`（默认 true）；滚动宿主建根时传 false，卡片本体手势 `including: .none`，把手手势不受影响。
+- 非滚动路径保持整卡可拖。
 
 **滚动宿主风险**
 

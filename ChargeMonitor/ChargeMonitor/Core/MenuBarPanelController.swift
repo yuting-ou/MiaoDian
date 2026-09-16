@@ -152,13 +152,17 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	private func showPanel() {
 		guard let panel, let button = statusItem?.button, let buttonWindow = button.window else { return }
 		// 每次打开重建内容视图：@State 全新 → 入场级联动画重播、onAppear 驱动 startPolling，
-		// 与 MenuBarExtra"面板每次打开销毁重建"的既有行为一致
-		let root = BatteryPopoverView(
-			monitor: services.monitor,
-			configurationManager: services.configurationManager,
-			historyRecorder: services.historyRecorder,
-			alertController: services.alertController
-		)
+		// 与 MenuBarExtra"面板每次打开销毁重建"的既有行为一致。
+		// allowsCardDrag 先按默认 true 建，滚动判定后再重建关闭——见下方 fit.scrolls 分支
+		let makeRoot: (Bool) -> BatteryPopoverView = { [services] allowsCardDrag in
+			BatteryPopoverView(
+				monitor: services.monitor,
+				configurationManager: services.configurationManager,
+				historyRecorder: services.historyRecorder,
+				alertController: services.alertController,
+				allowsCardDrag: allowsCardDrag
+			)
+		}
 		// 高度预算：可视区（菜单栏与 Dock 之后）。实测用户卡片集下面板自然高 1101pt
 		// 而可视区只有 987pt——底部约 4 行控制项压在 Dock 下点不到，间距压缩已救不动。
 		// 两遍布局：先量自然高度，**只有真装不下时**才包一层滚动容器（判定在
@@ -167,7 +171,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		// chrome=窗口"隐形标题栏"那一条：.titled + fullSizeContentView 下 setContentSize
 		// 给的是内容矩形，窗口框还会再高 ~28pt——不扣的话底部仍压进 Dock
 		let chrome = panel.frame.height - panel.contentRect(forFrameRect: panel.frame).height
-		let probe = NSHostingView(rootView: root)
+		let probe = NSHostingView(rootView: makeRoot(true))
 		probe.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
 		probe.layoutSubtreeIfNeeded()
 		let natural = probe.fittingSize
@@ -179,22 +183,25 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 
 		let hosting: NSHostingView<AnyView>
 		if fit.scrolls {
+			// 滚动宿主：关掉整卡拖拽（allowsCardDrag=false），只留把手——
+			// simultaneousGesture 与 ScrollView 抢 pan，想滚却把卡提起来
 			hosting = NSHostingView(rootView: AnyView(
 				ScrollView(.vertical, showsIndicators: true) {
-					root
+					makeRoot(false)
 				}
 				.frame(width: natural.width, height: fit.availableHeight)
 			))
 			Self.panelLogger.info("panel natural=\(Int(natural.height), privacy: .public)pt > visible=\(Int(fit.availableHeight), privacy: .public)pt → card area scrolls")
 		} else {
-			hosting = NSHostingView(rootView: AnyView(root))
+			hosting = NSHostingView(rootView: AnyView(makeRoot(true)))
 		}
 		panel.contentView = hosting
 
 		let size = hosting.fittingSize
 		// 宽度防御钳制：内容宽度只会是 292（单列）/584（双列），异常 fitting（布局中捕捉）不采信
 		let width: CGFloat = size.width >= 450 ? 584 : 292
-		panel.setContentSize(NSSize(width: width, height: min(size.height, fit.availableHeight)))
+		// 高度单一来源走 PanelFit.contentHeight（滚动=预算钳制，不滚=自然高）
+		panel.setContentSize(NSSize(width: width, height: fit.contentHeight))
 		// 定位与状态项图标解耦：iBar 会把图标收进隐藏区，其窗口位置随收纳状态漂移
 		// （实测面板曾跟着漂到菜单栏下 50pt/屏幕中部）。锚定屏幕本身：
 		// 顶边=菜单栏下缘（visibleFrame.maxY），右缘=**可视区**右缘留 12pt。
