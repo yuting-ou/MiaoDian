@@ -36,11 +36,20 @@ struct DailySummarySection: View {
 						.padding(.top, 1)
 				}
 
-				// 高电量驻留：80%+ 停留时长是电化学应力的直接度量
-				if let dwellMinutes = usage.dwell80PlusMinutes {
-					Text("高电量（80%+）驻留 \(DurationFormatter.chinese(minutes: dwellMinutes))")
+				// 高电量驻留：80%+ 停留时长是电化学应力的直接度量（C3：扩展周聚合，不新建卡）
+				ForEach(
+					Array(
+						DwellTracking.summaryLines(
+							todayUsage: usage,
+							history: history
+						).enumerated()
+					),
+					id: \.offset
+				) { _, line in
+					Text(line)
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
+						.fixedSize(horizontal: false, vertical: true)
 						.padding(.top, 1)
 				}
 				

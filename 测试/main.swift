@@ -3673,6 +3673,94 @@ do {
 	expectEqual(ok.saveCount, 1, "配置纪律：好档允许回写 normalized")
 }
 
+// MARK: - C3 驻留效果追踪 DwellTracking
+
+do {
+	func usage(_ key: String, dwellMin: Int?, acHours: Double = 8) -> DailyUsage {
+		var u = DailyUsage(dayKey: key)
+		if let dwellMin {
+			u.soc80to90Seconds = Double(dwellMin) * 60 * 0.4
+			u.soc90to100Seconds = Double(dwellMin) * 60 * 0.6
+			u.acSeconds = acHours * 3600
+			u.batterySeconds = 4 * 3600
+		} else {
+			// 采样不足：总时长 < 30min → acShare/dwell80Plus 为 nil（无有效样本）
+			u.acSeconds = 0
+			u.batterySeconds = 0
+		}
+		return u
+	}
+	// dwell80PlusMinutes 需要 acShare 门（总时长≥0.5h）——上面已给足
+
+	let h = [
+		usage("2026-09-01", dwellMin: 120),
+		usage("2026-09-02", dwellMin: 60),
+		usage("2026-09-03", dwellMin: 90),
+		usage("2026-09-04", dwellMin: nil), // 无有效驻留样本
+		usage("2026-09-05", dwellMin: 30),
+		usage("2026-09-06", dwellMin: 45),
+		usage("2026-09-07", dwellMin: 15),
+	]
+	let keys3 = ["2026-09-05", "2026-09-06", "2026-09-07"]
+	let week = DwellTracking.weekAggregate(history: h, dayKeys: keys3)
+	expect(week != nil, "驻留周聚合：3 个有效日应给结论")
+	if let week {
+		expectEqual(week.daysWithSample, 3, "驻留周聚合：有效日计数")
+		expectEqual(week.totalMinutes, 30 + 45 + 15, "驻留周聚合：合计分钟")
+		expectEqual(week.averageMinutesPerDay, 30, "驻留周聚合：日均=90/3")
+	}
+
+	// 样本不足：只有 2 个有效日 → nil（诚实空态）
+	let weak = DwellTracking.weekAggregate(history: h, dayKeys: ["2026-09-06", "2026-09-07"])
+	expect(weak == nil, "驻留周聚合：有效日不足门槛应 nil")
+
+	// 含无样本日：keys 含 09-04，有效日仍为 3
+	let withGap = DwellTracking.weekAggregate(
+		history: h,
+		dayKeys: ["2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07"]
+	)
+	expectEqual(withGap?.daysWithSample, 3, "驻留周聚合：无样本日不计入有效日")
+
+	// 对比：recent 09-05..07 日均 30；prior 09-01..03 日均 90 → delta=-60
+	let cmp = DwellTracking.careResponseComparison(
+		history: h,
+		recentKeys: keys3,
+		priorKeys: ["2026-09-01", "2026-09-02", "2026-09-03"]
+	)
+	expect(cmp != nil, "驻留对比：两侧样本足应给结论")
+	if let cmp {
+		expectEqual(cmp.recentAvgMinutes, 30, "驻留对比：近窗日均")
+		expectEqual(cmp.priorAvgMinutes, 90, "驻留对比：前窗日均")
+		expectEqual(cmp.deltaMinutes, -60, "驻留对比：下降 60 分钟/日")
+	}
+
+	// 单侧不足 → nil
+	let oneSide = DwellTracking.careResponseComparison(
+		history: h,
+		recentKeys: ["2026-09-07"],
+		priorKeys: ["2026-09-01", "2026-09-02"]
+	)
+	expect(oneSide == nil, "驻留对比：单侧样本不足应 nil")
+
+	// dayKey 生成：截止日包含自身
+	let keys = DwellTracking.dayKeys(endingOn: Date(timeIntervalSinceReferenceDate: 700_000_000), count: 3)
+	expectEqual(keys.count, 3, "驻留 dayKeys：条数")
+	_ = keys
+
+	// 文案：无今日驻留且周样本不足时不应瞎编结论
+	var noData = DailyUsage(dayKey: "2026-09-10")
+	noData.acSeconds = 3600
+	noData.batterySeconds = 3600
+	// acShare 有值但 dwell 为 0 也算有效分钟
+	let emptyLines = DwellTracking.summaryLines(
+		todayUsage: noData,
+		history: [usage("2026-09-08", dwellMin: 10)],
+		today: Date(timeIntervalSinceReferenceDate: 800_000_000)
+	)
+	// 可能有今日 0 分钟一行 + 周聚合 nil → 至少不出现「较前7日」
+	expect(!emptyLines.contains(where: { $0.contains("较前7日") }), "驻留文案：对比缺失时不编造对比句")
+}
+
 // MARK: - 汇总
 
 print("")
