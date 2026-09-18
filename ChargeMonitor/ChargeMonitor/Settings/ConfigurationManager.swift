@@ -72,6 +72,11 @@ final class ConfigurationManager: ObservableObject {
         update { $0.panelLayout = nil }
     }
 
+    // H3：循环里程碑已见值
+    func setHealthCycleMilestoneSeen(_ seen: Int) {
+        update { $0.lastCycleMilestoneSeen = seen }
+    }
+
     // 后悔药（v1.16/v1.17）：破坏性布局操作前留存上一状态；一键撤销写回并清空（纯函数语义在 CardEligibility.swift）
     func snapshotLayoutForUndo() {
         update { $0 = $0.snapshotLayoutForUndo() }

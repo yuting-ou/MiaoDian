@@ -124,6 +124,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			}
 			.store(in: &cancellables)
 
+		// H3：健康样本更新时评估降幅/循环异常
+		historyRecorder?.$healthSamples
+			.removeDuplicates()
+			.sink { [weak self] _ in
+				guard let self, let snap = self.monitor?.snapshot else { return }
+				self.evaluateHealthAnomalies(snapshot: snap)
+			}
+			.store(in: &cancellables)
+
 		// 电量跳变攒够阈值时提醒校准电量计
 		historyRecorder?.$socJumpEvents
 			.removeDuplicates()
@@ -176,6 +185,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		evaluateChargeCare(snapshot)
 		evaluateFullForecast(snapshot)
 		evaluateHealthMilestone(snapshot)
+		evaluateHealthAnomalies(snapshot: snapshot)
 		checkWeeklyDigest()
 		checkMonthlyDigest()
 	}
@@ -490,6 +500,56 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		) {
 			defaults.set(stored, forKey: Self.healthMilestoneKey)
 		}
+	}
+
+	// MARK: - H3 健康异常（降幅 + 循环里程碑；与 90/85/80 里程碑分键）
+
+	private static let healthDeclineDedupKey = "healthDeclineLastNotifiedDay"
+
+	nonisolated static func healthDeclineDayKey(date: Date, calendar: Calendar = .current) -> String {
+		let c = calendar.dateComponents([.year, .month, .day], from: date)
+		return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+	}
+
+	func evaluateHealthAnomalies(snapshot: BatterySnapshot) {
+		guard alertEnabled(.alertHealthMilestone) else { return }
+		let config = configuration
+
+		// 30 天降幅：同一天只提醒一次
+		if let finding = HealthAnomalyDetector.healthDeclineFinding(
+			samples: historyRecorder?.healthSamples ?? [],
+			thresholdPoints: config.healthDeclineThresholdPoints,
+			windowDays: HealthAnomalyDetector.defaultDeclineWindowDays,
+			now: Date()
+		) {
+			let dayKey = Self.healthDeclineDayKey(date: Date())
+			if defaults.string(forKey: Self.healthDeclineDedupKey) != dayKey {
+				if send(id: finding.notificationID, title: finding.title, body: finding.body) {
+					defaults.set(dayKey, forKey: Self.healthDeclineDedupKey)
+				}
+			}
+		}
+
+		// 循环里程碑：配置里的 lastCycleMilestoneSeen 做跨过检测
+		if let finding = HealthAnomalyDetector.cycleMilestoneFinding(
+			cycleCount: snapshot.cycleCount,
+			lastSeenCycles: config.lastCycleMilestoneSeen,
+			milestones: config.cycleMilestoneThresholds
+		) {
+			if send(id: finding.notificationID, title: finding.title, body: finding.body) {
+				// 成功才推进 seen，免打扰吞掉后下轮可补
+				var cfg = config
+				cfg.lastCycleMilestoneSeen = snapshot.cycleCount ?? cfg.lastCycleMilestoneSeen
+				// 经 ConfigurationManager 同源写入
+				applyCycleMilestoneSeen(cfg.lastCycleMilestoneSeen)
+			}
+		}
+	}
+
+	private func applyCycleMilestoneSeen(_ seen: Int) {
+		// AlertController 持有 configurationManager 时可 update；否则仅 defaults 记忆
+		// 这里用 ConfigurationManager.shared 保持与设置页同源
+		ConfigurationManager.shared.setHealthCycleMilestoneSeen(seen)
 	}
 	
 	private func evaluateSlowCharge(_ snapshot: BatterySnapshot) {

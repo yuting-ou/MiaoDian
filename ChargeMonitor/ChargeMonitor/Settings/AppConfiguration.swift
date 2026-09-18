@@ -38,6 +38,10 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 	// 面板材质三档（v1.20.0 引入；v1.24.2 clear 档显示名更「液态玻璃」）：液态玻璃/均衡/厚重，用户可选。旧档缺字段解码为 .balanced
 	// （与 v1.19.3 观感一致，升级无感）；纯 UI 偏好，不进电池数据档案
 	var panelMaterial: PanelMaterial = .balanced
+	// H3：健康异常阈值（复用 alertHealthMilestone 开关族）
+	var healthDeclineThresholdPoints: Int = 5
+	var cycleMilestoneThresholds: [Int] = [800, 1000]
+	var lastCycleMilestoneSeen: Int = 0
 
 	static let `default` = AppConfiguration()
 	
@@ -82,6 +86,11 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		// 折叠状态只保留仍然存在的卡片选项
 		let validCardIDs = Set(DisplayOption.allCases.map(\.rawValue))
 		copy.collapsedCards = copy.collapsedCards.intersection(validCardIDs)
+		copy.healthDeclineThresholdPoints = min(max(copy.healthDeclineThresholdPoints, 2), 20)
+		copy.cycleMilestoneThresholds = copy.cycleMilestoneThresholds.filter { $0 >= 200 && $0 <= 2000 }.sorted()
+		if copy.cycleMilestoneThresholds.isEmpty {
+			copy.cycleMilestoneThresholds = HealthAnomalyDetector.defaultCycleMilestones
+		}
 		return copy
 	}
 	
@@ -102,6 +111,9 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		case lastCustomLayout
 		case undoWasAuto
 		case panelMaterial
+		case healthDeclineThresholdPoints
+		case cycleMilestoneThresholds
+		case lastCycleMilestoneSeen
 	}
 
 	init(from decoder: Decoder) throws {
@@ -186,6 +198,21 @@ nonisolated struct AppConfiguration: Codable, Equatable, Sendable {
 		if let raw = try container.decodeIfPresent(String.self, forKey: .panelMaterial),
 			let material = PanelMaterial(rawValue: raw) {
 			self.panelMaterial = material
+		} else {
+			self.panelMaterial = .balanced
 		}
+		// H3：健康异常阈值（旧档缺字段用默认）
+		self.healthDeclineThresholdPoints = try container.decodeIfPresent(
+			Int.self,
+			forKey: .healthDeclineThresholdPoints
+		) ?? 5
+		self.cycleMilestoneThresholds = try container.decodeIfPresent(
+			[Int].self,
+			forKey: .cycleMilestoneThresholds
+		) ?? [800, 1000]
+		self.lastCycleMilestoneSeen = try container.decodeIfPresent(
+			Int.self,
+			forKey: .lastCycleMilestoneSeen
+		) ?? 0
 	}
 }

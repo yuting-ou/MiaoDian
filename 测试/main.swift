@@ -4019,6 +4019,43 @@ do {
 	expect(SleepDrainAnalytics.summaryLine(nil) == nil, "睡眠分析：summary nil")
 }
 
+// MARK: - H3 健康异常检测 HealthAnomalyDetector
+
+do {
+	let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+	func hs(_ daysAgo: Double, _ hp: Int, _ cycles: Int?) -> HealthSample {
+		HealthSample(date: now.addingTimeInterval(-daysAgo * 86400), healthPercent: hp, cycleCount: cycles)
+	}
+
+	let drop = HealthAnomalyDetector.healthDeclineFinding(
+		samples: [hs(30, 95, nil), hs(0, 89, nil)],
+		thresholdPoints: 5,
+		now: now
+	)
+	expect(drop != nil, "H3：30 天降 6 点应告警")
+	expect(drop?.kind == .healthDecline, "H3：类型 healthDecline")
+	expect(drop?.body.contains("95") == true && drop?.body.contains("89") == true, "H3：文案含首尾健康度")
+
+	expect(HealthAnomalyDetector.healthDeclineFinding(
+		samples: [hs(30, 95, nil), hs(0, 92, nil)],
+		thresholdPoints: 5,
+		now: now
+	) == nil, "H3：降 3 点不告警")
+	expect(HealthAnomalyDetector.healthDeclineFinding(
+		samples: [hs(10, 95, nil), hs(0, 88, nil)],
+		thresholdPoints: 5,
+		now: now
+	) == nil, "H3：跨度不足半窗不告警")
+
+	let cycleHit = HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 820, lastSeenCycles: 700)
+	expect(cycleHit?.kind == .cycleMilestone, "H3：跨过 800 循环应告警")
+	expect(cycleHit?.body.contains("820") == true, "H3：循环文案")
+	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 750, lastSeenCycles: 700) == nil, "H3：未跨档不告警")
+	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 850, lastSeenCycles: 820) == nil, "H3：同档内不重复")
+	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 1000, lastSeenCycles: 700)?.notificationID.contains("1000") == true,
+		   "H3：优先报更高的档")
+}
+
 // MARK: - 汇总
 
 print("")

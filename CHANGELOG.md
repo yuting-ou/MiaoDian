@@ -1,3 +1,10 @@
+## v2.7.0 — 2026-09-18（循环④ H3 健康异常·诚实子集）
+
+- `HealthAnomalyDetector`：30 天健康度降幅 ≥ 阈值（默认 5 点）+ 循环里程碑（默认 800/1000）
+- **不做**持续高温新类型：现有温度画像无法诚实支撑「连续 N 天」，避免编造
+- 复用 `.alertHealthMilestone` 开关族；与 90/85/80 里程碑分 notification id；降幅按天去重；循环 seen 成功才推进
+- 计划 `docs/compose/plan-h3-health-anomaly.md`；测试 **1026**
+
 ## v2.6.0 — 2026-09-18（E1 睡眠耗电分析）
 
 - `SleepDrainAnalytics`：近 14 天合盖记录聚合（≥1h 且掉电≥1%），avg/max %/h + 元凶频次排行
