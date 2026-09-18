@@ -325,7 +325,7 @@ struct BatteryInfoFormatter {
 	private var healthItem: BatteryInfoItem? {
 		guard enabledOptions.contains(.batteryHealth) else { return nil }
 		guard let percent = snapshot.healthPercent else { return nil }
-		
+
 		var value = "\(percent)%"
 		if let max = snapshot.maxCapacityMAh, let design = snapshot.designCapacityMAh {
 			value += "（\(max)/\(design) mAh）"
@@ -335,7 +335,12 @@ struct BatteryInfoFormatter {
 			symbol: "heart.fill",
 			label: "电池健康",
 			value: value,
-			iconTint: .pink
+			iconTint: .pink,
+			// H1：与系统设置对不上时用户能问到口径（可溯源）
+			helpText: HealthCaliber.disclosure(
+				hasDesignCapacity: snapshot.designCapacityMAh != nil,
+				hasRawMaxCapacity: snapshot.maxCapacityMAh != nil
+			)
 		)
 	}
 	

@@ -1008,7 +1008,16 @@ struct BatteryPopoverView: View {
 			heatOverlap: heat,
 			chargerInsight: charger,
 			// 静默真的生效过才用"已不再重复提醒"的措辞（读不到签名的机器不承诺）
-			careSilencedBySystemHold: alertController.hasSilencedCareForSystemHold
+			careSilencedBySystemHold: alertController.hasSilencedCareForSystemHold,
+			dwellInsight: DwellTracking.trackingInsight(history: historyRecorder.dailyHistory),
+			storageInsight: StorageGuide.advice(
+				socPercent: monitor.snapshot.stateOfChargePercent,
+				isOnAC: monitor.snapshot.powerSource == .powerAdapter
+			).map { ChargingHabitInsight(message: $0, symbol: "archivebox.fill") },
+			trickleInsight: TrickleNotice.liveNotice(
+				socPercent: monitor.snapshot.stateOfChargePercent,
+				isCharging: monitor.snapshot.isCharging
+			)
 		)
 	}
 	

@@ -605,7 +605,11 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let body = Self.weeklyDigestBody(
 			history: recorder.dailyHistory,
 			sessionCount: sessionCount,
-			healthPercent: lastSnapshot.healthPercent
+			healthPercent: lastSnapshot.healthPercent,
+			dwellLine: DwellTracking.weeklyDigestLine(
+				history: recorder.dailyHistory,
+				due: due
+			)
 		)
 		guard !body.isEmpty else { return }
 		send(id: "weekly-digest", title: "本周电池小结", body: body)
@@ -625,14 +629,22 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	}
 	
 	// 周报正文；这周没产生任何用电数据就返回空串（不发也罢）
-	nonisolated static func weeklyDigestBody(history: [DailyUsage], sessionCount: Int, healthPercent: Int?) -> String {
+	nonisolated static func weeklyDigestBody(
+		history: [DailyUsage],
+		sessionCount: Int,
+		healthPercent: Int?,
+		dwellLine: String? = nil
+	) -> String {
 		let drained = history.reduce(0) { $0 + $1.drainedPercent }
 		let charged = history.reduce(0) { $0 + $1.chargedPercent }
 		guard drained > 0 || charged > 0 || sessionCount > 0 else { return "" }
-		
+
 		var parts = ["本周用电 \(drained)%、充入 \(charged)%、充电 \(sessionCount) 次"]
 		if let health = healthPercent {
 			parts.append("健康度 \(health)%")
+		}
+		if let dwellLine, !dwellLine.isEmpty {
+			parts.append(dwellLine)
 		}
 		return parts.joined(separator: "；")
 	}

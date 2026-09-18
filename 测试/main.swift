@@ -3761,6 +3761,100 @@ do {
 	expect(!emptyLines.contains(where: { $0.contains("较前7日") }), "驻留文案：对比缺失时不编造对比句")
 }
 
+// MARK: - v2.4.0 产品指引（C4 涓流 / C5 存放 / 驻留洞察 / H1 口径 / 周报驻留）
+
+do {
+	// C5 存放门控
+	expectEqual(
+		StorageGuide.advice(socPercent: 90, isOnAC: true),
+		"若要长期存放，建议充到 50–60% 再拔电",
+		"存放：插电且≥80% 给存放建议"
+	)
+	expect(StorageGuide.advice(socPercent: 79, isOnAC: true) == nil, "存放：插电 79% 不打扰")
+	expectEqual(
+		StorageGuide.advice(socPercent: 55, isOnAC: false),
+		"当前电量适合长期存放（约 50–60%）",
+		"存放：电池模式落在 45–65 带给正向确认"
+	)
+	expect(StorageGuide.advice(socPercent: 30, isOnAC: false) == nil, "存放：低电不瞎建议")
+	expect(StorageGuide.advice(socPercent: nil, isOnAC: true) == nil, "存放：SoC 缺失沉默")
+
+	// C4 涓流 live notice
+	let trickle = TrickleNotice.liveNotice(socPercent: 97, isCharging: true)
+	expect(trickle != nil, "涓流：充电且≥95% 应给出提示")
+	expect(trickle?.message.contains("涓流") == true, "涓流：文案含涓流")
+	expect(TrickleNotice.liveNotice(socPercent: 97, isCharging: false) == nil, "涓流：未充电不提示")
+	expect(TrickleNotice.liveNotice(socPercent: 85, isCharging: true) == nil, "涓流：恒压段不提示")
+	expect(TrickleNotice.liveNotice(socPercent: 50, isCharging: true) == nil, "涓流：恒流段不提示")
+
+	// H1 口径披露
+	let disclosure = HealthCaliber.disclosure(hasDesignCapacity: true, hasRawMaxCapacity: true)
+	expect(disclosure.contains("AppleRawMaxCapacity"), "健康口径：提到直读来源")
+	expect(disclosure.contains("1–2") || disclosure.contains("1-2"), "健康口径：允许小偏差不假精确")
+	expect(HealthCaliber.disclosure(hasDesignCapacity: false, hasRawMaxCapacity: false).contains("不显示"),
+		   "健康口径：无分子分母时诚实说不显示")
+
+	// 驻留洞察三态
+	func dwellDay(_ key: String, _ minutes: Int) -> DailyUsage {
+		var u = DailyUsage(dayKey: key)
+		u.soc80to90Seconds = Double(minutes) * 60 * 0.5
+		u.soc90to100Seconds = Double(minutes) * 60 * 0.5
+		u.acSeconds = 8 * 3600
+		u.batterySeconds = 4 * 3600
+		return u
+	}
+	// 用固定日历日构造：today=2026-09-14，recent 09-08..14 低驻留，prior 09-01..07 高驻留
+	var hist: [DailyUsage] = []
+	for day in 1...7 { hist.append(dwellDay("2026-09-0\(day)", 120)) }
+	for day in 8...13 { hist.append(dwellDay("2026-09-\(day)", 30)) }
+	hist.append(dwellDay("2026-09-14", 30))
+	var calendar = Calendar(identifier: .gregorian)
+	calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+	let today = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14))!
+	let down = DwellTracking.trackingInsight(history: hist, today: today, calendar: calendar)
+	expect(down != nil, "驻留洞察：明显下降应出现")
+	expect(down?.message.contains("少") == true, "驻留洞察：下降文案")
+	// 样本不足
+	let thin = DwellTracking.trackingInsight(
+		history: [dwellDay("2026-09-14", 30)],
+		today: today,
+		calendar: calendar
+	)
+	expect(thin == nil, "驻留洞察：样本不足沉默")
+
+	// 周报附句与 body 组装
+	let line = DwellTracking.weeklyDigestLine(history: hist, due: today, calendar: calendar)
+	expect(line != nil, "周报：有对比应附驻留句")
+	if let line {
+		expect(line.contains("驻留"), "周报：驻留句含关键词")
+	}
+	let body = BatteryAlertController.weeklyDigestBody(
+		history: hist,
+		sessionCount: 2,
+		healthPercent: 91,
+		dwellLine: line
+	)
+	expect(body.contains("健康度"), "周报：含健康度")
+	if let line {
+		expect(body.contains(line), "周报：组装进驻留句")
+	}
+	let bodyNoDwell = BatteryAlertController.weeklyDigestBody(history: hist, sessionCount: 2, healthPercent: 91)
+	expect(!bodyNoDwell.contains("驻留日均"), "周报：无 dwellLine 时不编造")
+
+	// 洞察顺序：驻留在慢充之前，存放/涓流在最后
+	let ordered = UsagePatternAnalyzer.chargingInsights(
+		habitBase: ChargingHabitInsight(message: "习惯", symbol: "a"),
+		careHolding: false,
+		careThresholdPercent: 80,
+		heatOverlap: ChargingHabitInsight(message: "热", symbol: "b"),
+		chargerInsight: ChargingHabitInsight(message: "慢充", symbol: "c"),
+		dwellInsight: ChargingHabitInsight(message: "驻留", symbol: "d"),
+		storageInsight: ChargingHabitInsight(message: "存放", symbol: "e"),
+		trickleInsight: ChargingHabitInsight(message: "涓流", symbol: "f")
+	)
+	expectEqual(ordered.map(\.message), ["习惯", "热", "驻留", "慢充", "存放", "涓流"], "洞察链：优先级顺序")
+}
+
 // MARK: - 汇总
 
 print("")

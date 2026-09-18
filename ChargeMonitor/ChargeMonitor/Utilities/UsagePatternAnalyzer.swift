@@ -154,7 +154,10 @@ nonisolated enum UsagePatternAnalyzer {
 		heatOverlap: ChargingHabitInsight?,
 		chargerInsight: ChargingHabitInsight?,
 		// 我方静默是否真的在生效（本机读到过系统暂缓签名且电平覆盖保养线）
-		careSilencedBySystemHold: Bool = false
+		careSilencedBySystemHold: Bool = false,
+		dwellInsight: ChargingHabitInsight? = nil,
+		storageInsight: ChargingHabitInsight? = nil,
+		trickleInsight: ChargingHabitInsight? = nil
 	) -> [ChargingHabitInsight] {
 		var result: [ChargingHabitInsight] = []
 		if let habitBase { result.append(habitBase) }
@@ -169,7 +172,11 @@ nonisolated enum UsagePatternAnalyzer {
 			))
 		}
 		if let heatOverlap { result.append(heatOverlap) }
+		// 驻留（C3 闭环）→ 慢充 → 存放/涓流（场景提示）
+		if let dwellInsight { result.append(dwellInsight) }
 		if let chargerInsight { result.append(chargerInsight) }
+		if let storageInsight { result.append(storageInsight) }
+		if let trickleInsight { result.append(trickleInsight) }
 		return result
 	}
 

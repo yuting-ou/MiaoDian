@@ -257,7 +257,9 @@ struct ChargeCurveDetailView: View {
 	private func hoverLabel(at index: Int) -> String? {
 		guard index < curve.count else { return nil }
 		let point = curve[index]
-		return "第 \(point.minuteOffset) 分钟 · \(point.percent)%"
+		let phase = UsagePatternAnalyzer.chargingPhase(socPercent: point.percent)
+		let phaseTag = phase.map { " · \($0.label)" } ?? ""
+		return "第 \(point.minuteOffset) 分钟 · \(point.percent)%\(phaseTag)"
 	}
 
 	// 三条参考横线：0% / 50% / 100%

@@ -122,4 +122,58 @@ nonisolated enum DwellTracking {
 		let m = minutes % 60
 		return m == 0 ? "\(h) 小时" : "\(h) 小时 \(m) 分钟"
 	}
+
+	/// C3→洞察：近 7 日 vs 前 7 日驻留对比。样本不足或变化不明显 → nil（不刷屏）。
+	nonisolated static func trackingInsight(
+		history: [DailyUsage],
+		today: Date = Date(),
+		calendar: Calendar = .current
+	) -> ChargingHabitInsight? {
+		let recent7 = dayKeys(endingOn: today, count: 7, calendar: calendar)
+		guard let priorStart = calendar.date(byAdding: .day, value: -7, to: calendar.startOfDay(for: today)) else {
+			return nil
+		}
+		let prior7 = dayKeys(endingOn: priorStart, count: 7, calendar: calendar)
+		guard let cmp = careResponseComparison(history: history, recentKeys: recent7, priorKeys: prior7) else {
+			return nil
+		}
+		let delta = cmp.deltaMinutes
+		if delta <= -15 {
+			return ChargingHabitInsight(
+				message: "近7日高电量驻留日均比前7日少 \(formatMinutes(abs(delta)))，方向正确",
+				symbol: "leaf.fill"
+			)
+		}
+		if delta >= 15 && cmp.recentAvgMinutes >= 90 {
+			return ChargingHabitInsight(
+				message: "近7日高电量驻留日均约 \(formatMinutes(cmp.recentAvgMinutes))，偏高——可试设置里的场景预设「办公 80%」",
+				symbol: "battery.100percent"
+			)
+		}
+		return nil
+	}
+
+	/// 周报附句：有对比结论才返回，避免周报在数据不足时瞎编
+	nonisolated static func weeklyDigestLine(
+		history: [DailyUsage],
+		due: Date,
+		calendar: Calendar = .current
+	) -> String? {
+		guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: due)?.start else { return nil }
+		// 周报在周日发出：聚合「本周一～due 日」与「上一同长度窗」
+		let recentKeys = dayKeys(endingOn: due, count: 7, calendar: calendar)
+		let priorAnchor = calendar.date(byAdding: .day, value: -7, to: calendar.startOfDay(for: due)) ?? due
+		let priorKeys = dayKeys(endingOn: priorAnchor, count: 7, calendar: calendar)
+		_ = weekStart
+		guard let cmp = careResponseComparison(history: history, recentKeys: recentKeys, priorKeys: priorKeys) else {
+			return nil
+		}
+		if cmp.deltaMinutes < 0 {
+			return "高电量驻留日均比前一周少 \(formatMinutes(abs(cmp.deltaMinutes)))"
+		}
+		if cmp.deltaMinutes > 0 {
+			return "高电量驻留日均比前一周多 \(formatMinutes(cmp.deltaMinutes))"
+		}
+		return "高电量驻留日均与前一周持平"
+	}
 }

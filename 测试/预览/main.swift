@@ -6,6 +6,7 @@ import SwiftUI
 // 这里把真面板视图装进一个半透明普通窗口，用真实 UserDefaults 数据渲染，供截图验收。
 // 注意：普通窗口 ≠ MenuBarExtra(.window) 宿主，预览通过只是必要条件，发版前仍需真实面板终验。
 
+@preconcurrency
 final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 	private var window: NSWindow?
 	// 持有依赖对象：NSHostingView 只弱引用 ObservableObject，释放了面板就空转
