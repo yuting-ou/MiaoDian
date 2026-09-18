@@ -3855,6 +3855,99 @@ do {
 	expectEqual(ordered.map(\.message), ["习惯", "热", "驻留", "慢充", "存放", "涓流"], "洞察链：优先级顺序")
 }
 
+// MARK: - H2 老化趋势置信表达 HealthAgingProjection
+
+do {
+	let t0 = Date(timeIntervalSinceReferenceDate: 700_000_000)
+	func sample(dayOffset: Int, hp: Int, cycles: Int?) -> HealthSample {
+		HealthSample(
+			date: t0.addingTimeInterval(Double(dayOffset) * 86400),
+			healthPercent: hp,
+			cycleCount: cycles
+		)
+	}
+
+	// 仅容量：95→90 用 30 天，decline=5/30，p50=(90-80)/(5/30)=60 天
+	let capOnly = [
+		sample(dayOffset: 0, hp: 95, cycles: nil),
+		sample(dayOffset: 30, hp: 90, cycles: nil),
+	]
+	let rCap = HealthAgingProjection.project(samples: capOnly)
+	expect(rCap != nil, "H2：容量斜率应出结果")
+	if let rCap {
+		expectEqual(rCap.method, .capacityOnly, "H2：无循环增量→仅容量")
+		expect(abs(rCap.remainingDaysP50 - 60) < 0.01, "H2：p50=60 天")
+		expectEqual(rCap.relativeBand, 0.30, "H2：30 天跨度相对带 0.30")
+		expect(rCap.remainingDaysLow < rCap.remainingDaysP50 && rCap.remainingDaysP50 < rCap.remainingDaysHigh,
+			   "H2：区间单调 low<p50<high")
+		expect(abs(rCap.remainingDaysLow - 60 * 0.7) < 0.01, "H2：low=p50*(1-w)")
+		expect(abs(rCap.remainingDaysHigh - 60 * 1.3) < 0.01, "H2：high=p50*(1+w)")
+		let line = HealthAgingProjection.displayLine(rCap)
+		expect(line.contains("估计"), "H2：文案必须含估计")
+		expect(line.contains("区间"), "H2：文案必须含区间")
+		expect(!line.contains("样本偏短"), "H2：30 天不算 shortSpan 文案")
+	}
+
+	// 双锚点：循环增量有效时 method=dual，decline 为两锚平均
+	// cap=5/30≈0.1667；cycles 0→30 在 30 天 → 1/天 * 0.02=0.02；avg≈0.0933；p50≈10/0.0933≈107.2
+	let dual = [
+		sample(dayOffset: 0, hp: 95, cycles: 100),
+		sample(dayOffset: 30, hp: 90, cycles: 130),
+	]
+	let rDual = HealthAgingProjection.project(samples: dual)
+	expect(rDual != nil, "H2：双锚点应出结果")
+	if let rDual {
+		expectEqual(rDual.method, .dualAnchor, "H2：有循环增量→双锚点")
+		expect(rDual.cycleDeclinePerDay != nil && rDual.cycleDeclinePerDay! > 0, "H2：记录循环斜率")
+		// 变异锁：若把双锚点写成只取 cycle，p50 会变成 10/0.02=500
+		expect(abs(rDual.remainingDaysP50 - 107.2) < 1.0, "H2：双锚点为两斜率平均")
+		expect(HealthAgingProjection.methodHelp(rDual).contains("双锚点"), "H2：help 标明双锚点")
+	}
+
+	// 循环无增长 → 回落单锚点
+	let cycleFlat = [
+		sample(dayOffset: 0, hp: 95, cycles: 200),
+		sample(dayOffset: 30, hp: 90, cycles: 200),
+	]
+	expectEqual(HealthAgingProjection.project(samples: cycleFlat)?.method, .capacityOnly, "H2：循环不增回落单锚点")
+
+	// shortSpan：14 天跨度相对带 0.45 且文案提示样本偏短
+	let short = [
+		sample(dayOffset: 0, hp: 92, cycles: nil),
+		sample(dayOffset: 14, hp: 90, cycles: nil),
+	]
+	let rShort = HealthAgingProjection.project(samples: short)
+	expect(rShort != nil, "H2：14 天门槛边界应出结果")
+	if let rShort {
+		expectEqual(rShort.relativeBand, 0.45, "H2：<30 天相对带 0.45")
+		expect(HealthAgingProjection.displayLine(rShort).contains("样本偏短"), "H2：shortSpan 文案")
+	}
+
+	// 门槛：健康未掉 / 跨度不足 / 已低于 80
+	expect(HealthAgingProjection.project(samples: [
+		sample(dayOffset: 0, hp: 90, cycles: nil),
+		sample(dayOffset: 30, hp: 90, cycles: nil),
+	]) == nil, "H2：健康未掉不预测")
+	expect(HealthAgingProjection.project(samples: [
+		sample(dayOffset: 0, hp: 92, cycles: nil),
+		sample(dayOffset: 10, hp: 90, cycles: nil),
+	]) == nil, "H2：跨度不足 14 天不预测")
+	expect(HealthAgingProjection.project(samples: [
+		sample(dayOffset: 0, hp: 82, cycles: nil),
+		sample(dayOffset: 30, hp: 78, cycles: nil),
+	]) == nil, "H2：已低于 80 不预测")
+	expect(HealthAgingProjection.project(samples: []) == nil, "H2：空样本 nil")
+
+	// 变异：相对带必须随跨度收紧
+	expect(
+		HealthAgingProjection.relativeBand(spanDays: 20) >
+		HealthAgingProjection.relativeBand(spanDays: 60) &&
+		HealthAgingProjection.relativeBand(spanDays: 60) >
+		HealthAgingProjection.relativeBand(spanDays: 120),
+		"H2：跨度越长区间越窄"
+	)
+}
+
 // MARK: - 汇总
 
 print("")

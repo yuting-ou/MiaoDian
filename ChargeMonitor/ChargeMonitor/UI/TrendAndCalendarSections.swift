@@ -214,7 +214,7 @@ struct HealthTrendSection: View {
 			
 			if !isCollapsed {
 				// 无预测时历史铺满全宽；有预测时历史占左侧，右侧接一段延伸到 80% 的虚线
-				HealthTrendChart(samples: samples, hasProjection: projection != nil)
+				HealthTrendChart(samples: samples, hasProjection: aging != nil)
 					.frame(height: 36)
 					.padding(.top, 4)
 					.accessibilityElement(children: .ignore)
@@ -229,14 +229,13 @@ struct HealthTrendSection: View {
 				.foregroundStyle(GlassTokens.labelOnGlass)
 				.padding(.top, 2)
 				
-				// 数据跨度够长且确实在掉时，外推一句寿命预测；
-				// 悬停披露方法与不确定性——这是全应用最大胆的断言，必须答得上"凭什么"
-				if let lifespanText, let projection {
+				// 数据跨度够长且确实在掉时，外推寿命；H2：估计+区间+双锚点，悬停可溯源
+				if let lifespanText, let aging {
 					Text(lifespanText)
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 						.padding(.top, 3)
-						.help(UsagePatternAnalyzer.projectionCaveat(spanDays: projection.spanDays))
+						.help(HealthAgingProjection.methodHelp(aging))
 				}
 			}
 		}
@@ -254,30 +253,23 @@ struct HealthTrendSection: View {
 		return text
 	}
 	
-	// 用首尾两点的平均掉速线性外推到 80%（苹果官方的换电池参考线）；复用 projection 避免两处公式不同步
+	// 用 H2 投影展示：估计 + 置信区间（禁止单点假精确）
 	private var lifespanText: String? {
-		guard let projection else { return nil }
-		let months = Int((projection.remainingDays / 30).rounded())
-		guard months >= 1 else {
-			return "照此趋势快到 80% 了，可以考虑检测电池"
+		guard let aging else { return nil }
+		let months = Int((aging.remainingDaysP50 / 30).rounded())
+		if months < 1 {
+			return HealthAgingProjection.displayLine(aging)
 		}
-		
-		var span = ""
-		if months / 12 > 0 { span += "\(months / 12) 年" }
-		if months % 12 > 0 { span += "\(months % 12) 个月" }
-		return "照此趋势，约 \(span)后降至 80%（官方换电池参考线）"
+		return HealthAgingProjection.displayLine(aging)
 	}
-	
-	// 老化预测：外推到 80% 还需多少天；跨度不足 14 天或健康度没掉就不预测，免得拿噪声当趋势吓人
-	private var projection: (remainingDays: Double, spanDays: Double)? {
-		guard let first = samples.first, let last = samples.last else { return nil }
-		let days = last.date.timeIntervalSince(first.date) / 86400
-		guard days >= 14, first.healthPercent > last.healthPercent, last.healthPercent > 80 else { return nil }
-		let declinePerDay = Double(first.healthPercent - last.healthPercent) / days
-		guard declinePerDay > 0 else { return nil }
-		let remainingDays = Double(last.healthPercent - 80) / declinePerDay
-		return (remainingDays, days)
+
+	// 老化预测（H2）：双锚点+区间；跨度/趋势门槛与旧行为一致
+	private var aging: HealthAgingProjection.Result? {
+		HealthAgingProjection.project(samples: samples)
 	}
+
+	// 旧字段名兼容：图表 hasProjection 仍用「有无预测」
+	private var projection: HealthAgingProjection.Result? { aging }
 	
 	private static func dayText(_ date: Date?) -> String {
 		guard let date else { return "" }
