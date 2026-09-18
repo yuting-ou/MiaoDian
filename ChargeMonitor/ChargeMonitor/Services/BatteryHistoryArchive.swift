@@ -11,6 +11,8 @@ nonisolated struct BatteryHistoryArchive: Codable {
 	var healthSamples: [HealthSample]
 	var dailyHistory: [DailyUsage]
 	var lastSleepDrain: SleepDrainRecord?
+	// E1：近两周合盖掉电滚动列表（旧档缺字段为 nil/空，导入时可并入）
+	var sleepDrainHistory: [SleepDrainRecord]? = nil
 	var chargerProfiles: [ChargerProfile]
 	var socSamples: [SOCSample]
 	var powerEvents: [PowerEvent]

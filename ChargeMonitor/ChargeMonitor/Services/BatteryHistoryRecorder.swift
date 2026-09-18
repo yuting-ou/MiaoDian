@@ -13,6 +13,10 @@ final class BatteryHistoryRecorder: ObservableObject {
 	@Published private(set) var dailyHistory: [DailyUsage] = []
 	// 上一觉合盖的掉电记录
 	@Published private(set) var lastSleepDrain: SleepDrainRecord?
+	/// E1：近两周合盖掉电滚动列表（聚合分析用）；上限 20 条
+	@Published private(set) var sleepDrainHistory: [SleepDrainRecord] = []
+	nonisolated static let sleepDrainHistoryKey = "sleepDrainHistory"
+	nonisolated static let sleepDrainHistoryLimit = 20
 	// 见过的充电器档案
 	@Published private(set) var chargerProfiles: [ChargerProfile] = []
 	// 24 小时电量曲线采样
@@ -150,6 +154,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		}
 		
 		lastSleepDrain = load(SleepDrainRecord.self, key: Self.sleepDrainKey)
+		sleepDrainHistory = load([SleepDrainRecord].self, key: Self.sleepDrainHistoryKey) ?? []
 		chargerProfiles = Self.foldingOrphanProfiles(load([ChargerProfile].self, key: Self.chargerProfilesKey) ?? [])
 		socSamples = load([SOCSample].self, key: Self.socSamplesKey) ?? []
 		powerEvents = load([PowerEvent].self, key: Self.powerEventsKey) ?? []
@@ -777,7 +782,20 @@ final class BatteryHistoryRecorder: ObservableObject {
 		) else { return }
 		lastSleepDrain = record
 		save(record, key: Self.sleepDrainKey)
+		appendSleepHistory(record)
 		fetchSleepCulprits(for: record)
+	}
+
+	/// E1：滚动追加睡眠掉电史（同一 sleepDate 替换，避免重复结算）
+	private func appendSleepHistory(_ record: SleepDrainRecord) {
+		var list = sleepDrainHistory.filter { $0.sleepDate != record.sleepDate }
+		list.append(record)
+		list.sort { $0.sleepDate > $1.sleepDate }
+		if list.count > Self.sleepDrainHistoryLimit {
+			list = Array(list.prefix(Self.sleepDrainHistoryLimit))
+		}
+		sleepDrainHistory = list
+		save(list, key: Self.sleepDrainHistoryKey)
 	}
 
 	// 醒来结算后异步抓取"谁在持有阻止睡眠断言"，回填进记录——
@@ -793,6 +811,13 @@ final class BatteryHistoryRecorder: ObservableObject {
 			updated.culpritNames = owners
 			self.lastSleepDrain = updated
 			self.save(updated, key: Self.sleepDrainKey)
+			// 同步回填历史列表，聚合排行才能看到元凶
+			if let idx = self.sleepDrainHistory.firstIndex(where: { $0.sleepDate == record.sleepDate }) {
+				var list = self.sleepDrainHistory
+				list[idx].culpritNames = owners
+				self.sleepDrainHistory = list
+				self.save(list, key: Self.sleepDrainHistoryKey)
+			}
 		}
 	}
 	
@@ -1195,6 +1220,11 @@ final class BatteryHistoryRecorder: ObservableObject {
 		healthSamples = archive.healthSamples
 		dailyHistory = archive.dailyHistory
 		lastSleepDrain = archive.lastSleepDrain
+		// E1：旧档无 sleepDrainHistory 时保留当前；有则导入
+		if let hist = archive.sleepDrainHistory {
+			sleepDrainHistory = hist
+			save(hist, key: Self.sleepDrainHistoryKey)
+		}
 		chargerProfiles = archive.chargerProfiles
 		socSamples = archive.socSamples
 		powerEvents = archive.powerEvents

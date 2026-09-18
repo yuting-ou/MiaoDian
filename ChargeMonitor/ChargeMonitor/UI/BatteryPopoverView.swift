@@ -67,6 +67,7 @@ struct BatteryPopoverView: View {
 			drainEstimate: monitor.drainEstimate,
 			healthTrend: showsHealthCurve ? nil : historyRecorder.healthTrend,
 			sleepDrain: historyRecorder.lastSleepDrain,
+			sleepDrainHistory: historyRecorder.sleepDrainHistory,
 			chargerProfile: historyRecorder.currentChargerProfile,
 			chargerStats: historyRecorder.currentChargerPowerStats,
 			omitsTimeEstimates: true

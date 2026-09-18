@@ -28,6 +28,8 @@ struct BatteryInfoFormatter {
 	var healthTrend: (earliest: HealthSample, latest: HealthSample)? = nil
 	// 上一觉合盖的掉电记录与当前充电器档案，面板传入；报告自建 formatter 走默认值
 	var sleepDrain: SleepDrainRecord? = nil
+	/// E1：近两周合盖史，供聚合悬停
+	var sleepDrainHistory: [SleepDrainRecord] = []
 	var chargerProfile: ChargerProfile? = nil
 	// 当前充电器的协商功率统计（质量诊断），面板传入
 	var chargerStats: ChargerPowerStats? = nil
@@ -450,12 +452,21 @@ struct BatteryInfoFormatter {
 		if let culprits = record.culpritNames, !culprits.isEmpty {
 			value += "（元凶：\(culprits.prefix(2).joined(separator: "、"))\(culprits.count > 2 ? "等" : "")）"
 		}
+		// E1：近两周聚合悬停（样本不足时 SleepDrainAnalytics 返回 nil，help 保持单次说明）
+		let analysis = SleepDrainAnalytics.analyze(records: sleepDrainHistory)
+		let help: String
+		if let advice = SleepDrainAnalytics.summaryLine(analysis) {
+			help = advice
+		} else {
+			help = "合盖睡眠期间的掉电折算；≥2%/小时且合盖≥1 小时可能触发提醒（只提示，不结束进程）"
+		}
 		return BatteryInfoItem(
 			group: .battery,
 			symbol: "moon.zzz.fill",
 			label: "睡眠掉电",
 			value: value,
-			iconTint: .indigo
+			iconTint: .indigo,
+			helpText: help
 		)
 	}
 	

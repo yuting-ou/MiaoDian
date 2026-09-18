@@ -3948,6 +3948,77 @@ do {
 	)
 }
 
+// MARK: - E1 睡眠耗电分析 SleepDrainAnalytics
+
+do {
+	let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+	func rec(hoursAgo: Double, start: Int, end: Int, culprits: [String]?) -> SleepDrainRecord {
+		let wake = now.addingTimeInterval(-hoursAgo * 3600)
+		return SleepDrainRecord(
+			sleepDate: wake.addingTimeInterval(-8 * 3600),
+			wakeDate: wake,
+			startPercent: start,
+			endPercent: end,
+			culpritNames: culprits
+		)
+	}
+
+	// 样本不足
+	expect(SleepDrainAnalytics.analyze(records: [rec(hoursAgo: 2, start: 80, end: 70, culprits: nil)], now: now) == nil,
+		   "睡眠分析：样本不足 nil")
+
+	// 短憩（<1h）被剔除
+	let shortOnly = [
+		rec(hoursAgo: 2, start: 80, end: 75, culprits: nil), // duration from sleepDate is 8h in helper - need short
+	]
+	// helper 固定睡 8h；构造真正短憩：
+	let shortRec = SleepDrainRecord(
+		sleepDate: now.addingTimeInterval(-3600 * 3),
+		wakeDate: now.addingTimeInterval(-3600 * 2.5),
+		startPercent: 80,
+		endPercent: 78
+	)
+	expect(SleepDrainAnalytics.eligibleRecords([shortRec], now: now).isEmpty, "睡眠分析：<60 分钟剔除")
+	_ = shortOnly
+
+	let heavy = [
+		rec(hoursAgo: 3, start: 80, end: 68, culprits: ["backupd"]),  // 12%/8h=1.5... wait duration is 8h from helper
+	]
+	// dropPerHour: helper sleep 8h → 12/8=1.5
+	// 造 3 条偏快：16%/8h=2.0
+	let fast = [
+		rec(hoursAgo: 4, start: 90, end: 74, culprits: ["backupd"]),
+		rec(hoursAgo: 28, start: 85, end: 69, culprits: ["backupd", "mds"]),
+		rec(hoursAgo: 52, start: 88, end: 72, culprits: ["mds"]),
+	]
+	let analysis = SleepDrainAnalytics.analyze(records: fast, now: now)
+	expect(analysis != nil, "睡眠分析：3 条合格应出结果")
+	if let analysis {
+		expectEqual(analysis.sampleCount, 3, "睡眠分析：样本数")
+		expect(abs(analysis.avgPercentPerHour - 2.0) < 0.01, "睡眠分析：avg=2%/h（16/8）")
+		expectEqual(analysis.topCulprits.first, "backupd", "睡眠分析：元凶频次第一")
+		expectEqual(analysis.topCulprits.count, 2, "睡眠分析：元凶去重排序")
+		expect(analysis.advice?.contains("偏快") == true, "睡眠分析：偏快文案")
+		expect(analysis.advice?.contains("不会替你结束进程") == true, "睡眠分析：诚实边界")
+		expect(analysis.advice?.contains("backupd") == true, "睡眠分析：点名元凶")
+	}
+
+	// 正常档不点名偏快
+	let mild = [
+		rec(hoursAgo: 4, start: 80, end: 76, culprits: nil), // 4/8=0.5
+		rec(hoursAgo: 28, start: 80, end: 76, culprits: nil),
+		rec(hoursAgo: 52, start: 80, end: 76, culprits: nil),
+	]
+	let okAnalysis = SleepDrainAnalytics.analyze(records: mild, now: now)
+	expect(okAnalysis?.advice?.contains("大致正常") == true, "睡眠分析：正常档文案")
+	expect(okAnalysis?.advice?.contains("结束进程") != true, "睡眠分析：正常档不提结束进程")
+
+	// 过期记录剔除
+	let stale = rec(hoursAgo: 24 * 20, start: 80, end: 60, culprits: ["x"])
+	expect(SleepDrainAnalytics.eligibleRecords([stale], now: now).isEmpty, "睡眠分析：超 maxAge 剔除")
+	expect(SleepDrainAnalytics.summaryLine(nil) == nil, "睡眠分析：summary nil")
+}
+
 // MARK: - 汇总
 
 print("")
