@@ -38,14 +38,16 @@ struct BatteryPopoverView: View {
 	@State private var trayExpanded = false
 	// 常态拖拽状态机：nil = 未在拖
 	@State private var dragState: CardDragState? = nil
-	// 每张卡的实时 frame（落点计算用），由卡片背景 GeometryReader 采集
-	@State private var frameTable = CardDropResolver.FrameTable()
 	// 拖动中的落点指示线（全局坐标；nil=不显示）
 	@State private var dropIndicator: (x: CGFloat, y: CGFloat, width: CGFloat)? = nil
 	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
 	@State private var previewLayout: PanelLayout? = nil
 	// 悬停中的把手（微放大反馈）
 	@State private var isHandleHovering: String? = nil
+	// frame 表：引用宿主；滚动期探针静默写表，拖拽期才发变更通知（120Hz 关键）
+	@ObservedObject private var frameStore = CardFrameStore()
+	// 滚动活动：头部 TimelineView 在滚动期间退静帧
+	@ObservedObject private var scrollActivity = PanelScrollActivity.shared
 	// "本会话只播一次级联"挂类型上：面板每次打开销毁重建，@State 撑不住跨打开
 	private static var hasPlayedCascade = false
 
@@ -168,11 +170,14 @@ struct BatteryPopoverView: View {
 				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
 			}
 
-			// 卡片区：装不下时包一层内部 ScrollView（外壳/头/控仍在外面固定）。
-			// BoardSpace 必须挂在**滚动内容**上：挂在 ScrollView 外的祖先时，
-			// 滚动仍会改内容相对该系的 frame，探针每帧写 @State，掉帧照旧。
+			// 卡片区：装不下时包竖向 ScrollView（外壳/头/控固定）。
+			// 触控板路径必须走 SwiftUI ScrollView——自管 NSHostingView 当 document 时
+			// 若测量高度被钳成视口，会出现「完全划不动」。120Hz 优化叠在：
+			// CardFrameStore 静默写表 + PanelScrollActivity 滚动中头部静帧 +
+			// PanelHostingView 关掉内部 ScrollView 的橡皮筋。
+			// 拖拽把手时 scrollDisabled：触控板 pan 不与 DragGesture 争位移
 			if cardBudgetHeight != nil {
-				ScrollView(.vertical, showsIndicators: true) {
+				ScrollView(.vertical) {
 					cardRegion(
 						twoColumns: twoColumns,
 						usingRows: usingRows,
@@ -186,7 +191,12 @@ struct BatteryPopoverView: View {
 						showsHealthCurve: showsHealthCurve
 					)
 					.coordinateSpace(name: BoardSpace.name)
+					// 滚动中不禁全局动画：液态玻璃/药丸/级联需要动效生命。
+					// 掉帧靠 monitor 暂缓发布 + 卸掉陪滚探针，不靠阉割动效。
 				}
+				.scrollDisabled(dragState != nil)
+				// 系统 overlay 滚动条（与橡皮筋同属苹果手感）；单一写法，勿再叠 showsIndicators
+				.scrollIndicators(.automatic)
 				.frame(maxHeight: .infinity)
 			} else {
 				cardRegion(
@@ -239,6 +249,9 @@ struct BatteryPopoverView: View {
 		.animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: didAppear)
 			.onAppear {
 				monitor.startPolling()
+				// 打开面板先复位滚动态：避免上次残留 isScrolling 让动效永久静帧
+				scrollActivity.reset()
+				monitor.defersUISnapshot = false
 				// 用户可能刚在系统设置里改过通知权限，每次打开面板重新查
 				alertController.refreshAuthorizationStatus()
 				let next = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
@@ -249,6 +262,13 @@ struct BatteryPopoverView: View {
 				Self.hasPlayedCascade = true
 				// 置 true 触发入场：容器自带淡入动画，内部各块由 CascadeIn 按档位落位
 				didAppear = true
+			}
+			.onChange(of: scrollActivity.isScrolling) { _, scrolling in
+				// 滚动中暂缓 monitor 的 @Published 快照；停手后补发
+				monitor.defersUISnapshot = scrolling
+				if !scrolling {
+					monitor.flushPendingUISnapshot()
+				}
 			}
 			.onChange(of: cardIDs) {
 				// 卡片增减时把最新分列结果固化下来，已有卡片的归属不变
@@ -269,6 +289,7 @@ struct BatteryPopoverView: View {
 				// 拖拽中直接关面板：丢弃半成品预览与拖拽态（卡死兜底恢复通道，v1.17.1）
 				dragState = nil
 				previewLayout = nil
+				frameStore.publishesChanges = false
 				monitor.stopPolling()
 				// 下次打开时重新配平，避免上一次的历史分配越积越歪
 				assignedLeft = []
@@ -326,8 +347,22 @@ struct BatteryPopoverView: View {
 						}
 					}
 				}
-				.animation(.spring(response: 0.32, dampingFraction: 0.82), value: rowSource)
-				.overlay { handleLayer(segments) }
+				.animation(
+					PanelMotionGate.allowsRepackAnimations(
+						isScrolling: scrollActivity.isScrolling,
+						isDragging: dragState != nil
+					) && !reduceMotion ? .spring(response: 0.34, dampingFraction: 0.88) : nil,
+					value: rowSource
+				)
+				// 滚动中把把手层整棵摘掉：opacity=0 的 GeometryReader 仍在布局树里陪滚
+				.overlay {
+					if PanelMotionGate.allowsRepackAnimations(
+						isScrolling: scrollActivity.isScrolling,
+						isDragging: dragState != nil
+					) && !isEditingLayout {
+						handleLayer(segments)
+					}
+				}
 			} else {
 				HStack(alignment: .top, spacing: 10) {
 					cardColumn(true, columns: split, available: Set(cardIDs), powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
@@ -577,7 +612,7 @@ struct BatteryPopoverView: View {
 	// MARK: - 华容网格：格子渲染与拖拽
 
 	/// 拖拽把手浮层（v1.17.1 拖拽不死手）：平铺一层把手浮在卡片上，身份恒等于卡自身，
-	/// 位置由 frameTable 探针实时驱动——预览重排只改坐标、永不销毁视图，挂在把手上的
+	/// 位置由 frameStore 探针实时驱动——预览重排只改坐标、永不销毁视图，挂在把手上的
 	/// 进行中 DragGesture 全程存活（此前把手随卡片进行结构，行/段身份一翻手势即死）。
 	/// 卡 frame 是**板面坐标系**，减去浮层容器在同一坐标系的原点换算成层内坐标；
 	/// y+14 = 把手胶囊中心与卡顶的视觉间距（对齐旧版 ZStack(.top) + padding(3) 的落点）。
@@ -586,11 +621,11 @@ struct BatteryPopoverView: View {
 			let origin = geo.frame(in: .named(BoardSpace.name)).origin
 			ZStack(alignment: .topLeading) {
 				ForEach(PanelFlow.flatCardIDs(segments), id: \.self) { cardID in
-					if let frame = frameTable.frames[cardID], let card = CardID(rawValue: cardID) {
+					if let frame = frameStore.frames[cardID], let card = CardID(rawValue: cardID) {
 						dragHandle(card)
 							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
 							// 仅布局重排（拖拽/折叠）时跟手弹簧；滚动时 frame 表不变，不会触发
-							.animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameTable.frames[cardID])
+							.animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameStore.frames[cardID])
 					}
 				}
 			}
@@ -622,9 +657,18 @@ struct BatteryPopoverView: View {
 		showsHealthCurve: Bool
 	) -> some View {
 		let isDragged = dragState?.card == id.layoutID
+		let allowRepack = PanelMotionGate.allowsRepackAnimations(
+			isScrolling: scrollActivity.isScrolling,
+			isDragging: dragState != nil
+		)
 		return ZStack(alignment: .top) {
 			cardView(id, powerItems: powerItems, batteryItems: batteryItems, configuration: configuration, showsHealthCurve: showsHealthCurve)
-				.background(CardFrameProbe(id: id.layoutID, table: $frameTable))
+				.background {
+					// 滚动中不挂 frame 探针（GeometryReader 陪滚）；拖拽中仍要
+					if !scrollActivity.isScrolling || dragState != nil {
+						CardFrameProbe(id: id.layoutID, store: frameStore)
+					}
+				}
 			if isEditingLayout {
 				cardControls(id)
 			}
@@ -635,23 +679,21 @@ struct BatteryPopoverView: View {
 				y: isDragged ? (dragState?.translation.height ?? 0) : 0)
 		.zIndex(isDragged ? 10 : 0)
 		// 抓住卡片任意处即可拖（10pt 阈值避开误触；把手保留，作为"这里可以拖"的明示）。
-		// 滚动宿主下把 mask 收成 .none：simultaneousGesture 与 ScrollView 抢同一段 pan，
-		// 用户想滚却把卡提起来；把手仍用独立 gesture（minDistance=0）可拖
 		.simultaneousGesture(
 			dragGesture(for: id, minimumDistance: 10),
 			including: allowsCardDrag ? .all : .none
 		)
-		.animation(.spring(response: 0.24, dampingFraction: 0.92), value: layoutValue)
-		// 抓起/放下动效（v1.17.2）：scale/shadow 随 isDragged 翻转平滑过渡——
-		// 旧版没有值驱动动画，提起是瞬跳、放下是瞬落，没有"拿起一张卡"的实体感
-		.animation(.spring(response: 0.25, dampingFraction: 0.8), value: isDragged)
-		// 跟手/落位分相（v1.17.2）：拖动中 offset 直跟指针（1:1，无弹簧滞后——
-		// 指针走到哪卡在哪，拖拽才有"捏在手里"的确定感）；松手后 offset 归零走弹簧，
-		// 与 layoutValue 的让位弹簧合成"从手指位置飞回槽位"的落定动画
-		.animation(dragState == nil ? .spring(response: 0.3, dampingFraction: 0.85) : nil, value: dragState?.translation ?? .zero)
-		// 折叠/展开动效（v1.18.6）：点"∨"收合/展开图表卡走弹簧——旧版无值驱动动画，
-		// 高度与内容瞬跳
-		.animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: configuration.collapsedCards)
+		// 滚动中关掉重排/折叠弹簧，只保留抓起动效——装饰动画不与120Hz 滚动抢帧
+		.animation(allowRepack ? .spring(response: 0.34, dampingFraction: 0.88) : nil, value: layoutValue)
+		.animation(.spring(response: 0.26, dampingFraction: 0.82), value: isDragged)
+		.animation(
+			(dragState == nil && allowRepack) ? .spring(response: 0.30, dampingFraction: 0.86) : nil,
+			value: dragState?.translation ?? .zero
+		)
+		.animation(
+			(reduceMotion || !allowRepack) ? nil : .spring(response: 0.30, dampingFraction: 0.86),
+			value: configuration.collapsedCards
+		)
 	}
 
 	/// 拖拽手势（把手与卡片本体共用一套状态机）。
@@ -673,10 +715,12 @@ struct BatteryPopoverView: View {
 						known: known
 					)
 					layoutDraft = layoutSeed ?? PanelLayout()
+					// 拖拽期让 frame 表发变更：把手层才能跟上预览重排的坐标
+					frameStore.publishesChanges = true
 					dragState = CardDragState(
 						card: id.layoutID,
 						translation: drag.translation,
-						originFrame: frameTable.frames[id.layoutID] ?? .zero,
+						originFrame: frameStore.frames[id.layoutID] ?? .zero,
 						// 起拖点=手指真实位置：落点跟手（旧实现用卡片中心，200pt 高的卡偏 ~100pt）
 						startPoint: drag.startLocation
 					)
@@ -695,36 +739,37 @@ struct BatteryPopoverView: View {
 	/// 预览重排刷新 frame 表也不回灌落点计算——防反馈振荡
 	private func updatePreview() {
 		guard let drag = dragState, drag.isDragging else { return }
-		guard let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else {
-			// 出界/无锚点：清指示线，否则线会冻在上一次合法缝隙上
+		let table = frameStore.snapshotTable()
+		guard let target = CardDropResolver.resolve(point: drag.pointer, table: table, excluding: drag.card) else {
+			// 出界/无锚点：清指示线与预览——松手不得提交上一合法落点（丢弃回弹语义）
 			dropIndicator = nil
+			previewLayout = nil
 			return
 		}
-		dropIndicator = CardDropResolver.indicatorLine(for: target, table: frameTable, excluding: drag.card)
+		dropIndicator = CardDropResolver.indicatorLine(for: target, table: table, excluding: drag.card)
 		let base = previewLayout ?? layoutDraft
 		let candidate = PanelFlow.insertLayout(base, card: drag.card, target: target)
 		if candidate != base { previewLayout = candidate }
 	}
 
-	/// 松手：落点有效 → 提交预览布局并持久化；面板外 → 丢弃预览回弹。
-	/// id 参数 = 发起松手的把手所属卡：与本卡拖拽无关的松手（幽灵事件）不得提交别人的拖拽。
-	/// v1.18.0：拖拽落盘纳入后悔药——破坏前先快照当前状态，设置窗口「撤销上次布局改动」
-	/// 一键找回（此前撤销只覆盖预设/恢复默认，拖乱了几下只能手动拖回来）。
+	/// 松手：提交拖拽中已经算好的预览布局。
+	/// **不再用 frame 表重解落点**——探针在布局动画中异步写表，松手时可能是预览前旧序，
+	/// 重解会落错槽或静默丢弃；previewLayout 就是最后一次合法 target 的插入结果。
 	private func finishDrag(from id: CardID? = nil) {
 		defer {
 			if id == nil || dragState?.card == id?.layoutID {
 				dragState = nil
 				previewLayout = nil
 				dropIndicator = nil
+				frameStore.publishesChanges = false
 			}
 		}
 		guard let drag = dragState, drag.isDragging,
 			  id.map({ drag.card == $0.layoutID }) ?? true,
-			  let target = CardDropResolver.resolve(point: drag.pointer, table: frameTable, excluding: drag.card) else { return }
-		let moved = PanelFlow.insertLayout(previewLayout ?? layoutDraft, card: drag.card, target: target)
-		layoutDraft = moved
+			  let preview = previewLayout else { return }
+		layoutDraft = preview
 		configurationManager.snapshotLayoutForUndo()
-		configurationManager.setPanelLayout(PanelFlow.normalize(moved, known: Set(CardID.allCases.map(\.layoutID))))
+		configurationManager.setPanelLayout(PanelFlow.normalize(preview, known: Set(CardID.allCases.map(\.layoutID))))
 	}
 
 	/// 常驻拖拽把手：六点把手胶囊，DragGesture 独占（无兄弟手势竞争）。
@@ -816,10 +861,11 @@ struct BatteryPopoverView: View {
 		layoutSeed = nil
 	}
 
-	/// 一键重置：清掉自定义布局回自动模式（玩坏了的后悔药；恢复出厂语义阅读序）
+	/// 一键重置：清掉自定义布局回自动模式。
+	/// 必须走 restoreDefaultLayout（先快照再清）——直接 clear 会让用户无法撤销。
 	private func resetLayout() {
 		layoutDraft = PanelLayout()
-		configurationManager.clearPanelLayout()
+		configurationManager.restoreDefaultLayout()
 		isEditingLayout = false
 	}
 

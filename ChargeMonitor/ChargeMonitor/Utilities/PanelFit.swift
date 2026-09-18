@@ -30,7 +30,9 @@ nonisolated enum PanelFit {
 		chromeHeight: CGFloat
 	) -> Budget {
 		let available = max(floorHeight, visibleFrameHeight - topMargin - chromeHeight)
-		let scrolls = naturalHeight > available
-		return Budget(availableHeight: available, scrolls: scrolls, contentHeight: min(naturalHeight, available))
+		// 离屏探针测量失败（0/负）不许把面板做成 0 高空白：踩地板，记为「装得下」的最小面板
+		let safeNatural = naturalHeight > 0 ? naturalHeight : floorHeight
+		let scrolls = safeNatural > available
+		return Budget(availableHeight: available, scrolls: scrolls, contentHeight: min(safeNatural, available))
 	}
 }

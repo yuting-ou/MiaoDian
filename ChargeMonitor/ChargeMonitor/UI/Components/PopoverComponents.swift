@@ -155,7 +155,7 @@ struct PopoverInfoRow: View {
 				.fixedSize(horizontal: false, vertical: true)
 				.frame(maxWidth: .infinity, alignment: .leading)
 				.contentTransition(.opacity)
-				.animation(.easeInOut(duration: 0.3), value: item.value)
+				.animation(.easeInOut(duration: PanelMotion.valueFadeSeconds), value: item.value)
 		}
 		.padding(.vertical, 1.5) // v2.1.2：3→2→1.5（面板高度受屏幕可用高约束）
 		.help(item.helpText ?? item.value)

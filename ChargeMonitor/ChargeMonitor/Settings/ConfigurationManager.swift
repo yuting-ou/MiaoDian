@@ -10,9 +10,20 @@ final class ConfigurationManager: ObservableObject {
     init(store: ConfigurationStoring) {
         self.store = store
 
-        let initial = (store.load() ?? .default).normalized()
-        self.configuration = initial
-        store.save(initial)
+        if let loaded = store.load() {
+            let initial = loaded.normalized()
+            self.configuration = initial
+            store.save(initial)
+        } else if store.hasStoredBytes {
+            // 有字节但解码失败：内存用默认继续跑，**磁盘原样保留**——
+            // 绝不 save(.default) 覆盖（那会静默销毁用户配置，CRITICAL）
+            self.configuration = AppConfiguration.default.normalized()
+        } else {
+            // 从未写过：安全落一份默认
+            let initial = AppConfiguration.default.normalized()
+            self.configuration = initial
+            store.save(initial)
+        }
     }
 
     convenience init() {

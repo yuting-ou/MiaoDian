@@ -20,6 +20,21 @@ nonisolated struct PanelLayout: Codable, Equatable, Sendable {
 		self.hidden = hidden
 	}
 
+	enum CodingKeys: String, CodingKey {
+		case rows, left, right, hidden
+	}
+
+	/// 全字段 decodeIfPresent：缺 key 不 throw。
+	/// 合成 Codable 会对非 Optional 的 left/right/hidden 缺 key 直接失败，
+	/// 连带整份 AppConfiguration 解码失败 → 触发配置被默认覆盖的风险。
+	init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		self.rows = try c.decodeIfPresent([[String]].self, forKey: .rows)
+		self.left = try c.decodeIfPresent([String].self, forKey: .left) ?? []
+		self.right = try c.decodeIfPresent([String].self, forKey: .right) ?? []
+		self.hidden = try c.decodeIfPresent([String].self, forKey: .hidden) ?? []
+	}
+
 	/// 生效行表：优先 rows，v1.13 旧档回退（两列按索引对齐成行，列内相对序保留）
 	nonisolated var effectiveRows: [[String]] {
 		rows ?? PanelFlow.alignColumns(left: left, right: right)

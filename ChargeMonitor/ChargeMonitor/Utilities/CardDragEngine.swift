@@ -118,19 +118,46 @@ enum BoardSpace {
 	static let name = "MiaoDianBoard"
 }
 
+/// frame 表的引用宿主：探针写入**默认不触发视图失效**（120Hz 滚动不掉帧）。
+/// 拖拽/预览期间把 publishesChanges 置 true，写表才发 objectWillChange，
+/// 让把手层跟上重排坐标；滚动期保持 false，探针静默写表。
+@MainActor
+final class CardFrameStore: ObservableObject {
+	private(set) var frames: [String: CGRect] = [:]
+	/// true = 写表通知视图（仅拖拽/预览）；false = 静默（滚动）
+	var publishesChanges = false
+
+	init(frames: [String: CGRect] = [:]) {
+		self.frames = frames
+	}
+
+	func setFrame(_ id: String, _ frame: CGRect) {
+		guard frames[id] != frame else { return }
+		frames[id] = frame
+		if publishesChanges {
+			objectWillChange.send()
+		}
+	}
+
+	/// 快照成解析器吃的不可变表（拖拽计算路径每次现拷，避免读到写了一半的表）
+	func snapshotTable() -> CardDropResolver.FrameTable {
+		CardDropResolver.FrameTable(frames: frames)
+	}
+}
+
 /// frame 采集探针：卡片背景里安静地把自己在**板面坐标系**的 frame 写进共享表
 struct CardFrameProbe: View {
 	let id: String
-	@Binding var table: CardDropResolver.FrameTable
+	let store: CardFrameStore
 
 	var body: some View {
 		GeometryReader { geo in
 			Color.clear
 				.onAppear {
-					table.frames[id] = geo.frame(in: .named(BoardSpace.name))
+					store.setFrame(id, geo.frame(in: .named(BoardSpace.name)))
 				}
 				.onChange(of: geo.frame(in: .named(BoardSpace.name))) { _, new in
-					table.frames[id] = new
+					store.setFrame(id, new)
 				}
 		}
 	}
@@ -145,6 +172,15 @@ struct PanelMasonryLayout: Layout {
 	let segments: [PanelFlow.Segment]
 	/// 全藏光时的板面高度（编辑模式保持高度用）
 	let emptyHeight: CGFloat
+
+	/// 布局缓存：plan/宽度不变时跳过重复算 plan；行高仍按子视图现测
+	/// （卡内容高度会变，不能缓存死高度，否则图表一涨就裁切）
+	struct Cache {
+		var plan: [PanelFlow.MasonryCell] = []
+		var boardWidth: CGFloat = -1
+	}
+
+	func makeCache(subviews: Subviews) -> Cache { Cache() }
 
 	/// 单格宽度：整行=板宽；半宽=(板宽-缝)/2
 	private func cellWidth(boardWidth: CGFloat, rowWidth: Int) -> CGFloat {
@@ -167,9 +203,19 @@ struct PanelMasonryLayout: Layout {
 		}
 	}
 
-	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-		let width = proposal.width ?? 0
+	private func cachedPlan(boardWidth: CGFloat, cache: inout Cache) -> [PanelFlow.MasonryCell] {
+		if cache.boardWidth == boardWidth, !cache.plan.isEmpty {
+			return cache.plan
+		}
 		let plan = PanelFlow.masonryPlan(segments)
+		cache.plan = plan
+		cache.boardWidth = boardWidth
+		return plan
+	}
+
+	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+		let width = proposal.width ?? 0
+		let plan = cachedPlan(boardWidth: width, cache: &cache)
 		guard width > 0, !plan.isEmpty, plan.count == subviews.count else {
 			return CGSize(width: width, height: emptyHeight)
 		}
@@ -178,8 +224,8 @@ struct PanelMasonryLayout: Layout {
 		return CGSize(width: width, height: max(total, 0))
 	}
 
-	func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-		let plan = PanelFlow.masonryPlan(segments)
+	func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+		let plan = cachedPlan(boardWidth: bounds.width, cache: &cache)
 		guard bounds.width > 0, !plan.isEmpty, plan.count == subviews.count else { return }
 		let heights = rowHeights(plan: plan, boardWidth: bounds.width, subviews: subviews)
 		var y = bounds.minY

@@ -184,9 +184,9 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 			chromeHeight: chrome
 		)
 
-		// 装不下：卡片区内部滚动（外壳/头部/控制行固定，玻璃不跟滚重采样）。
-		// 不再用外层 ScrollView 包整个 BatteryPopoverView——那会把玻璃壳一起卷进去。
-		let hosting = NSHostingView(rootView: AnyView(
+		// 装不下：卡片区 AppKit NSScrollView（外壳/头部/控制行固定，玻璃不跟滚重采样）。
+		// 宿主用 PanelHostingView：扫子孙 ScrollView 拧弹性/背景旋钮
+		let hosting = PanelHostingView(rootView: AnyView(
 			makeRoot(!fit.scrolls, fit.scrolls ? fit.availableHeight : nil)
 		))
 		if fit.scrolls {

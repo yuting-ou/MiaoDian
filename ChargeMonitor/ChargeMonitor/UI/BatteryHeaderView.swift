@@ -28,7 +28,7 @@ struct BatteryHeaderView: View {
 						.font(.system(size: 27, weight: .bold, design: .rounded))
 						// 与信息行同一结论：numericText 插值字形持续吃内存，转场用淡入淡出
 						.contentTransition(.opacity)
-						.animation(.easeInOut(duration: 0.3), value: percentDisplay)
+						.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: percentDisplay)
 					Text("%")
 						.font(.system(size: 15, weight: .semibold, design: .rounded))
 						.foregroundStyle(GlassTokens.labelOnGlass)
@@ -175,7 +175,7 @@ struct BatteryHeaderView: View {
 					style: StrokeStyle(lineWidth: 4.5, lineCap: .round)
 				)
 				.rotationEffect(.degrees(-90))
-				.animation(.easeOut(duration: 0.4), value: percentFraction)
+				.animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: percentFraction)
 			
 			// 弧端流光晕（v1.25.0）：充电时一小段白色高光沿进度弧从 12 点流向弧端，
 			// 流速 = arcFlowPeriod（wavePeriod 量化档，功率越快流得越快）。
@@ -217,7 +217,7 @@ struct BatteryHeaderView: View {
 								 level: percentFraction)
 			}
 		}
-		.animation(.easeInOut(duration: 0.35), value: fillMoodForWarning)
+		.animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: fillMoodForWarning)
 		// 低电轻呼吸（v1.23.0）：只呼吸圆环内的底色层，文字与大数字永不参与
 		.modifier(LowPowerBreath(active: fillMoodForWarning == .lowBattery))
 	}
@@ -245,15 +245,18 @@ struct BatteryHeaderView: View {
 		}
 	}
 	
-	// 呼吸光点：限帧到 12fps（慢呼吸肉眼无差），模糊半径固定不变避免逐帧重算高斯模糊，
+	// 呼吸光点：限帧到 PanelMotion.timelineFPS（30fps，见 PanelMotion；模糊半径固定不变
+	// 避免逐帧重算高斯模糊，呼吸只动透明度和缩放）。
 	// 呼吸只动透明度和缩放。不用 repeatForever/symbolEffect 是因为那类持续动画
 	// 会以屏幕满帧率驱动整个面板视图树重算，CPU 开销大得多。
 	// 「减少动态效果」：光点静止呈现（无 TimelineView 持续帧），不得有残留动画
 	private struct ChargingBreathingDot: View {
 		let color: Color
 		@Environment(\.accessibilityReduceMotion) private var reduceMotion
-		
+
 		var body: some View {
+			// 液态玻璃的生命感：充电呼吸点常驻（仅「减少动态效果」退静）。
+			// 滚动掉帧不靠关它——由数据发布冻结与卸陪滚探针承担。
 			if reduceMotion {
 				Circle()
 					.fill(.white)
@@ -261,7 +264,7 @@ struct BatteryHeaderView: View {
 					.shadow(color: color, radius: 3)
 					.opacity(0.8)
 			} else {
-				TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+				TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
 					let time = context.date.timeIntervalSinceReferenceDate
 					let breathe = 0.5 + 0.5 * sin(time * 2 * .pi / 1.8)
 					Circle()
@@ -358,7 +361,7 @@ struct BatteryHeaderView: View {
 }
 
 // 充电波浪液面（v1.22.0）：液位 = 真实电量占比（视觉有出处，不许装饰说谎），
-// 波面正弦涌动。限帧 12fps（与呼吸光点同纪律）；纯几何位移，无模糊无 repeatForever；
+// 波面正弦涌动。限帧 PanelMotion.timelineInterval（与呼吸光点同纪律）；纯几何位移，无模糊无 repeatForever；
 // 「减少动态效果」退化为静止波面（同一液位同一语义色，只让步动效不让步信息）
 private struct ChargingWaveFill: View {
 	let color: Color
@@ -371,7 +374,7 @@ private struct ChargingWaveFill: View {
 			if reduceMotion {
 				waveCanvas(phase: .pi / 3)
 			} else {
-				TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+				TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
 					let time = context.date.timeIntervalSinceReferenceDate
 					waveCanvas(phase: (time / period) * 2 * .pi)
 				}
@@ -416,7 +419,7 @@ private struct ChargingWaveFill: View {
 
 // 弧端流光晕（v1.25.0 填充通道）：一小段白色高光沿进度弧从 12 点流向弧端，到站即隐、
 // 循环往复——能量沿弧线流入、汇入弧端光点的隐喻。白色就是光点的颜色：流光是还没到达的光点。
-// 动画走全屋统一的 TimelineView 墙钟模式（12fps 限帧、纯几何位移、无模糊无 repeatForever），
+// 动画走全屋统一的 TimelineView 墙钟模式（PanelMotion.timelineInterval 限帧、纯几何位移、无模糊无 repeatForever），
 // 周期取 arcFlowPeriod（wavePeriod 量化档，采样抖动不让光段瞬移）；
 // 「减少动态效果」整层退场（纯动效零信息，不似波浪还留着静面语义，挂载处把门）。
 private struct ArcFlowGlow: View {
@@ -424,13 +427,12 @@ private struct ArcFlowGlow: View {
 	let progress: CGFloat // 进度弧末端占比（0.02...1，与进度弧同一终点）
 
 	var body: some View {
-		TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
-			// 相位取模成单程：0→1 对应 12 点→弧端；光段头部在此位置，尾拖在身后渐隐
+		TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
+			// 相位取模成单程：0→1 对应 12 点→弧端
 			let turns = (context.date.timeIntervalSinceReferenceDate / period)
 				.truncatingRemainder(dividingBy: 1)
 			let head = progress * CGFloat(turns)
 			let tail = max(0, head - CGFloat(BatteryVisualResolver.arcGlowSegment(progress: Double(progress))))
-			// 进出渐隐包络：出发与到站各 12% 行程内淡入淡出，循环两端都不闪
 			let envelope = max(0, min(1, turns / 0.12, (1 - turns) / 0.12))
 			Circle()
 				.trim(from: tail, to: head)
@@ -493,7 +495,7 @@ private struct HeatAlertBorder: ViewModifier {
 		if reduceMotion {
 			borderShape.opacity(0.55)
 		} else {
-			TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+			TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
 				let t = context.date.timeIntervalSinceReferenceDate
 				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
 				borderShape.opacity(0.30 + 0.28 * breathe)
@@ -539,7 +541,7 @@ private struct BreathPulse: ViewModifier {
 		if reduceMotion {
 			content
 		} else {
-			TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+			TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
 				let t = context.date.timeIntervalSinceReferenceDate
 				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
 				content.opacity(0.75 + 0.25 * breathe)

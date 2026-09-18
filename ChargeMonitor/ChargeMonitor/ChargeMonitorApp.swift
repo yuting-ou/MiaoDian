@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	@MainActor
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		NSApplication.shared.setActivationPolicy(.accessory)
+		// 鼠标滚轮行步进 → 像素步长：面板卡片区/设置 Form 共用
+		AppScrollFeel.install()
 		let controller = MenuBarPanelController()
 		controller.install()
 		panelController = controller

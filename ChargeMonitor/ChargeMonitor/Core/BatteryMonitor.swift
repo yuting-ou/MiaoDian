@@ -36,6 +36,12 @@ final class BatteryMonitor: ObservableObject {
 	private var powerSourceChangeSource: CFRunLoopSource?
 	// 面板是否打开：高耗电应用累计只应在面板打开期间计时（列表也只在那时刷新）
 	private(set) var isPopoverOpen = false
+	/// 面板卡片区滚动中：**整段 refresh 不得碰任何 @Published**——
+	/// 电量/功耗曲线/续航/蓝牙任一发布都会让面板 body 在 120Hz 滚动帧上重算。
+	/// 只更新私有估算器，真值挂起，停手后 flushPendingUISnapshot 一次性补发。
+	var defersUISnapshot = false
+	private var pendingSnapshot: BatterySnapshot?
+	private var pendingDrainEstimate: DrainRateEstimate?
 	
 	private let activeInterval: TimeInterval = 2
 	private let backgroundInterval: TimeInterval = 10
@@ -78,11 +84,36 @@ final class BatteryMonitor: ObservableObject {
 	
 	func stopPolling() {
 		isPopoverOpen = false
+		defersUISnapshot = false
+		flushPendingUISnapshot()
 		// 清空高耗电列表：它只代表"面板打开期间"的采样，
 		// 留着旧值会让耗电异常提醒在面板关闭几小时后点名过时的应用
 		// （重新打开面板后 2 秒轮询会很快重新积累出结果）
 		significantEnergyApps = []
 		startPollingLoopIfNeeded()
+	}
+
+	/// 滚动结束/关闭面板时补发滚动期间挂起的快照
+	func flushPendingUISnapshot() {
+		guard let pending = pendingSnapshot else {
+			if let est = pendingDrainEstimate, est != drainEstimate {
+				drainEstimate = est
+			}
+			pendingDrainEstimate = nil
+			return
+		}
+		pendingSnapshot = nil
+		if pending != snapshot {
+			logChargeHoldTransition(to: pending)
+			snapshot = pending
+		}
+		if let est = pendingDrainEstimate {
+			drainEstimate = est
+			pendingDrainEstimate = nil
+		}
+		// 停手后按挂起快照补一条曲线点（滚动中刻意没发 @Published）
+		recordPowerSample(from: pending)
+		recordTemperatureSample(from: pending)
 	}
 	
 	private func startPollingLoopIfNeeded() {
@@ -100,13 +131,27 @@ final class BatteryMonitor: ObservableObject {
 	private func refresh() async {
 		let nextSnapshot = await batteryReader.readSnapshot()
 		if nextSnapshot != snapshot {
-			logChargeHoldTransition(to: nextSnapshot)
-			snapshot = nextSnapshot
+			if defersUISnapshot {
+				pendingSnapshot = nextSnapshot
+			} else {
+				logChargeHoldTransition(to: nextSnapshot)
+				snapshot = nextSnapshot
+				pendingSnapshot = nil
+			}
+		} else if defersUISnapshot {
+			// 滚动中读到与当前 UI 相同的值：说明先前挂起的 pending 可能已过时
+			//（例如 B→挂起→又回到 A，而 UI 仍是 A）——丢弃挂起，避免 flush 发旧值
+			pendingSnapshot = nil
 		}
-		
-		// 高耗电列表只有面板在看，后台不做全进程采样（每次要扫遍所有进程）；
-		// 重新打开面板后 2 秒轮询会很快重新积累出结果。
-		// 主线程只快照在场应用列表，差分与聚合在 actor 上跑，发布回主线程
+
+		// 滚动中：私有估算照跑（续航要连续），但零 @Published、零蓝牙子进程
+		if defersUISnapshot {
+			drainEstimator.record(snapshot: nextSnapshot)
+			pendingDrainEstimate = drainEstimator.estimate()
+			return
+		}
+
+		// 高耗电列表只有面板在看，后台不做全进程采样
 		if isPopoverOpen, !energyComputationInFlight {
 			energyComputationInFlight = true
 			let stubs = SignificantEnergyReader.currentRunningAppStubs()
@@ -119,7 +164,7 @@ final class BatteryMonitor: ObservableObject {
 				self.energyComputationInFlight = false
 			}
 		}
-		
+
 		recordPowerSample(from: nextSnapshot)
 		recordTemperatureSample(from: nextSnapshot)
 		updateDrainEstimate(from: nextSnapshot)

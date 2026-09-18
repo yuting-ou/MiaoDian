@@ -1676,6 +1676,10 @@ do {
 		PanelFit.budget(naturalHeight: 300, visibleFrameHeight: 200, chromeHeight: 10).contentHeight,
 		300,
 		"高度预算：自然高低于地板时不滚、内容高=自然高")
+	// 测量失败（0）不许做成 0 高空白面板
+	let failedProbe = PanelFit.budget(naturalHeight: 0, visibleFrameHeight: 987, chromeHeight: 28)
+	expectEqual(failedProbe.contentHeight, PanelFit.floorHeight, "高度预算：探针测到 0 时踩地板，不做空白面板")
+	expect(!failedProbe.scrolls, "高度预算：测量失败按最小面板处理，不启滚动")
 
 	// 别名感知的速度对比：降档会话（别名键）进同一只头的对比池
 	let current = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(3600), startPercent: 20, endPercent: 80, peakInputW: 60, chargerKey: motherKey)
@@ -3060,7 +3064,7 @@ do {
 	unplugged.notChargingReason = 16_777_216
 	expect(!BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: unplugged, threshold: 80),
 		"共存标记：拔电一律清零（回归锁：重置不许被提醒开关的 guard 挡住）")
-	var resumedCharging = batterySnap(percent: 85, charging: true, onBattery: false)
+	let resumedCharging = batterySnap(percent: 85, charging: true, onBattery: false)
 	expect(BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: resumedCharging, threshold: 80),
 		"共存标记：恢复充电仍保持本会话置位（不再重复喊；变异检验：逐帧现算的写法必红）")
 	var heldFarBelowLine = batterySnap(percent: 60, onBattery: false)
@@ -3085,7 +3089,7 @@ do {
 		"采样埋点：在充→停充（拔电）记")
 	expect(!BatteryMonitor.shouldLogHoldTransition(from: previous, to: previous),
 		"采样埋点：三态全无变化不记（零成本轮询不刷屏）")
-	var noSignature = batterySnap(percent: 50, charging: false, onBattery: false)
+	let noSignature = batterySnap(percent: 50, charging: false, onBattery: false)
 	expect(BatteryMonitor.shouldLogHoldTransition(from: noSignature, to: previous),
 		"采样埋点：reason 从读不到变读到值要留痕")
 }
@@ -3515,6 +3519,158 @@ do {
 	var driftedQuiet = ScenarioPreset.travel.applied(to: base)
 	driftedQuiet.enabledOptions.insert(.quietHours)
 	expectEqual(ScenarioPreset.matched(in: driftedQuiet), nil, "自行开免打扰后不算任何预设")
+}
+
+// MARK: - 滚动手感 ScrollFeel（鼠标滚轮放大，触控板放过）
+
+do {
+	// 触控板精确滚动：一律不放大（系统已跟手）
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: true, deltaY: 3.2), "滚轮跟手：精确滚动（触控板）不放大")
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: true, deltaY: -0.05), "滚轮跟手：精确滚动即便幅度小也不走放大分支")
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: true, deltaY: 0), "滚轮跟手：精确滚动零位移不放大")
+
+	// 鼠标滚轮（非精确）：有效幅度才放大
+	expect(ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: 1), "滚轮跟手：鼠标一格上滚应放大")
+	expect(ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: -1), "滚轮跟手：鼠标一格下滚应放大")
+	expect(ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: 0.5), "滚轮跟手：鼠标半格应放大")
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: 0.05), "滚轮跟手：惯性尾巴（|Δ|<地板）不放大")
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: 0), "滚轮跟手：零位移不放大")
+	expect(!ScrollFeel.shouldAmplify(hasPreciseScrollingDeltas: false, deltaY: -ScrollFeel.minWheelDelta + 0.001), "滚轮跟手：地板下界开区间")
+
+	// 像素换算：符号与步长
+	expectEqual(ScrollFeel.pixelDelta(forWheel: 1), ScrollFeel.mousePixelStep, "滚轮跟手：+1 格 → +步长像素")
+	expectEqual(ScrollFeel.pixelDelta(forWheel: -1), -ScrollFeel.mousePixelStep, "滚轮跟手：-1 格 → -步长像素（方向保持）")
+	expectEqual(ScrollFeel.pixelDelta(forWheel: 2, step: 40), 80, "滚轮跟手：步长可注入")
+	expectEqual(ScrollFeel.pixelDelta(forWheel: 0.5), ScrollFeel.mousePixelStep * 0.5, "滚轮跟手：半格线性")
+	// 变异锁：若实现把精确滚动也放大会红；若 shouldAmplify 写反（!hasPrecise 写成 hasPrecise）会红
+	expect(ScrollFeel.mousePixelStep > 20, "滚轮跟手：步长须显著大于系统默认行高，否则等于没放大")
+}
+
+// MARK: - 滚动静默 PanelScrollIdle（120Hz：停手多久才恢复头部动画）
+
+do {
+	expectEqual(PanelScrollIdle.idleMilliseconds, 80, "滚动静默：默认 80ms")
+	expectEqual(PanelScrollIdle.idleNanoseconds, 80_000_000, "滚动静默：毫秒换算纳秒")
+	expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 0), "滚动静默：0ms 不清位")
+	expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 79_999_999), "滚动静默：地板下界开区间")
+	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 80_000_000), "滚动静默：到点清位")
+	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 200_000_000), "滚动静默：超过清位")
+}
+
+// MARK: - 纵向弹性 PanelScrollElasticity（到边回弹是 120Hz 掉帧点）
+
+do {
+	expect(PanelScrollElasticity.allowsVerticalBounce, "弹性：默认保留橡皮筋（苹果手感；性能靠数据冻结不靠阉割动效）")
+}
+
+// MARK: - 动效门 PanelMotion（丝滑 = 隔离 + 滚动中不跑装饰弹簧）
+
+do {
+	expectEqual(PanelMotion.timelineFPS, 30, "动效：头部小动画 30fps（12 发涩，120 全速太贵）")
+	expectEqual(PanelMotion.timelineInterval, 1.0 / 30.0, "动效：fps→interval 换算")
+	expectEqual(PanelMotion.valueFadeSeconds, 0.2, "动效：数值淡化 0.2s")
+	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: false, isDragging: false), "动效门：静止时允许重排弹簧")
+	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: true, isDragging: true), "动效门：拖拽中始终允许（交互不是装饰）")
+	expect(!PanelMotionGate.allowsRepackAnimations(isScrolling: true, isDragging: false), "动效门：滚动中禁止装饰性重排弹簧")
+	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: false, isDragging: true), "动效门：未滚动拖拽允许")
+}
+
+// MARK: - 滚动文档几何 PanelScrollGeometry
+
+do {
+	expectEqual(PanelScrollGeometry.documentHeight(measured: 1100, viewport: 900), 1100, "文档高：测量高于视口时取测量值")
+	expectEqual(PanelScrollGeometry.documentHeight(measured: 200, viewport: 900), 900, "文档高：测量矮于视口时撑到视口")
+	expectEqual(PanelScrollGeometry.clampedScrollY(current: 500, contentHeight: 1100, viewport: 900), 200, "offset：超出底边钳到 maxY")
+	expectEqual(PanelScrollGeometry.clampedScrollY(current: -20, contentHeight: 1100, viewport: 900), 0, "offset：负值钳到 0")
+}
+
+// MARK: - 配置解码韧性（CRITICAL：解码失败不得连坐/覆盖）
+
+do {
+	// PanelLayout 缺 key 不 throw
+	let layoutJSON = Data("{}".utf8)
+	let emptyLayout = try? PropertyListDecoder().decode(PanelLayout.self, from: {
+		let enc = PropertyListEncoder()
+		return try! enc.encode([String: [String]]())
+	}())
+	// 用 JSON 更直观
+	if let decoded = try? JSONDecoder().decode(PanelLayout.self, from: layoutJSON) {
+		expectEqual(decoded.left, [], "布局解码：缺 left 默认 []")
+		expectEqual(decoded.right, [], "布局解码：缺 right 默认 []")
+		expectEqual(decoded.hidden, [], "布局解码：缺 hidden 默认 []")
+		expect(decoded.rows == nil, "布局解码：缺 rows 为 nil")
+		expectEqual(decoded.effectiveRows, [], "布局解码：空档 effectiveRows 为空")
+	} else {
+		expect(false, "布局解码：空 JSON 不应 throw")
+	}
+	// 只有 rows、无 left/right/hidden 的旧/新混合档
+	let partial = #"{"rows":[["a","b"]]}"#.data(using: .utf8)!
+	if let decoded = try? JSONDecoder().decode(PanelLayout.self, from: partial) {
+		expectEqual(decoded.rows ?? [], [["a", "b"]], "布局解码：rows 保留")
+		expectEqual(decoded.hidden, [], "布局解码：缺 hidden 为空")
+		expectEqual(decoded.effectiveRows, [["a", "b"]], "布局解码：effective 优先 rows")
+	} else {
+		expect(false, "布局解码：只有 rows 的档不应 throw")
+	}
+	// snapshotThenClear：先后悔药再清
+	var cfg = AppConfiguration.default
+	cfg.panelLayout = PanelLayout(rows: [["powerInfo"]], hidden: ["checkup"])
+	let cleared = cfg.snapshotThenClearLayout()
+	expect(cleared.panelLayout == nil, "恢复默认：清掉自定义布局")
+	expect(cleared.lastCustomLayout == cfg.panelLayout, "恢复默认：快照保留原布局（后悔药）")
+	expect(cleared.canUndoLayout, "恢复默认：撤销可用")
+	_ = emptyLayout
+}
+
+// MARK: - 配置存储纪律（CRITICAL：坏档不得写回默认覆盖用户字节）
+
+do {
+	final class SpyConfigStore: ConfigurationStoring {
+		var hasStoredBytes: Bool
+		var loadResult: AppConfiguration?
+		private(set) var saveCount = 0
+		init(hasStoredBytes: Bool, loadResult: AppConfiguration?) {
+			self.hasStoredBytes = hasStoredBytes
+			self.loadResult = loadResult
+		}
+		func load() -> AppConfiguration? { loadResult }
+		func save(_ configuration: AppConfiguration) { saveCount += 1 }
+	}
+
+	// 与 ConfigurationManager.init 同构的三路分支（纯逻辑锁）
+	func bootstrap(store: ConfigurationStoring) -> AppConfiguration {
+		if let loaded = store.load() {
+			let initial = loaded.normalized()
+			store.save(initial)
+			return initial
+		} else if store.hasStoredBytes {
+			return AppConfiguration.default.normalized()
+		} else {
+			let initial = AppConfiguration.default.normalized()
+			store.save(initial)
+			return initial
+		}
+	}
+
+	let corrupt = SpyConfigStore(hasStoredBytes: true, loadResult: nil)
+	let corruptBoot = bootstrap(store: corrupt)
+	expectEqual(corrupt.saveCount, 0, "配置纪律：坏档不得 save（不覆盖磁盘）")
+	expectEqual(
+		corruptBoot.lowBatteryThresholdPercent,
+		AppConfiguration.default.normalized().lowBatteryThresholdPercent,
+		"配置纪律：坏档内存用默认继续跑"
+	)
+
+	let fresh = SpyConfigStore(hasStoredBytes: false, loadResult: nil)
+	_ = bootstrap(store: fresh)
+	expectEqual(fresh.saveCount, 1, "配置纪律：从未写过才落默认")
+
+	var good = AppConfiguration.default
+	good.lowBatteryThresholdPercent = 30
+	let ok = SpyConfigStore(hasStoredBytes: true, loadResult: good)
+	let okBoot = bootstrap(store: ok)
+	expectEqual(okBoot.lowBatteryThresholdPercent, 30, "配置纪律：好档读入")
+	expectEqual(ok.saveCount, 1, "配置纪律：好档允许回写 normalized")
 }
 
 // MARK: - 汇总
