@@ -21,19 +21,18 @@ nonisolated enum DwellTracking {
 	nonisolated static let minDaysForWeekConclusion = 3
 
 	/// 生成截止 today 的连续 dayKey 列表（新→旧或旧→新由 ascending 决定）
+	/// dayKey 字符串必须跟随注入 calendar 的时区（与 UsageCalendarLayout.dayKey 同源）；
+	/// DateFormatter 默认吃系统时区，与 calendar.timeZone 不一致时会把窗口键打错一天。
 	nonisolated static func dayKeys(
 		endingOn today: Date,
 		count: Int,
 		calendar: Calendar = .current,
 		ascending: Bool = false
 	) -> [String] {
-		let formatter = DateFormatter()
-		formatter.locale = Locale(identifier: "en_US_POSIX")
-		formatter.dateFormat = "yyyy-MM-dd"
 		var keys: [String] = []
 		var date = calendar.startOfDay(for: today)
 		for _ in 0..<max(0, count) {
-			keys.append(formatter.string(from: date))
+			keys.append(UsageCalendarLayout.dayKey(date, calendar: calendar))
 			guard let prev = calendar.date(byAdding: .day, value: -1, to: date) else { break }
 			date = prev
 		}

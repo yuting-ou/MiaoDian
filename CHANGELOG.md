@@ -1,3 +1,12 @@
+## v2.8.1 — 2026-09-21（dayKeys 时区跟随 + v2.8.0 发布链收尾）
+
+- **发现**：v2.8.0 的 `DwellTracking.dayKeys` 用 `DateFormatter` 生成窗口键，却未绑定注入 `calendar.timeZone`——formatter 默认吃系统时区，与注入日历不一致时（CI=UTC、测试注入 Asia/Shanghai）近7日/近30日窗口键整体错位一天，CSV「能耗聚合」断言在 CI 必红
+- **根因**：与周报窗口谎言同族——窗口计算用了注入 calendar，字符串化却没用同一时区；`UsageCalendarLayout.dayKey` / `monthKeyString` 已绑时区，`dayKeys` 是漏网点
+- **修复**：`dayKeys` 改走 `UsageCalendarLayout.dayKey`（calendar.timeZone 同源）；`UsageCalendarLayout` 标 `nonisolated`（可被窗口纯函数调用）
+- **测试**：新增 UTC+14 注入日历断言（formatter 不绑 calendar 时本地也必红）；CSV 近7日聚合断言在 UTC 下复现并消失
+- **门**：测试本机 **1054** / CI 时区 **1055** 全绿零警告 / Swift 6 零错误（MacOSX26.5）/ 版本 2.8.1
+- **说明**：v2.8.0 功能本体不变；2.8.0 的远端 tag/Release 未发布（CI 红），本版一次性补齐 E3 发布链
+
 ## v2.8.0 — 2026-09-18（E3 能耗报告聚合 + 周报窗口诚实修复）
 
 - **发现（数据完整性透镜）**：`weeklyDigestBody` 对**全部** `dailyHistory` 求和却写「本周用电」——把装上以来说成本周，属传记失真级信任事故，按作业书优先修

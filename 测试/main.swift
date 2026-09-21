@@ -4020,9 +4020,6 @@ do {
 	expect(SleepDrainAnalytics.eligibleRecords([shortRec], now: now).isEmpty, "睡眠分析：<60 分钟剔除")
 	_ = shortOnly
 
-	let heavy = [
-		rec(hoursAgo: 3, start: 80, end: 68, culprits: ["backupd"]),  // 12%/8h=1.5... wait duration is 8h from helper
-	]
 	// dropPerHour: helper sleep 8h → 12/8=1.5
 	// 造 3 条偏快：16%/8h=2.0
 	let fast = [
@@ -4162,6 +4159,20 @@ do {
 	let lines = EnergyAggregation.reportLines(history: history, endingOn: today, calendar: cal)
 	expect(lines.contains(where: { $0.contains("近7日") && $0.contains("日均") }), "E3：报告含近7日聚合")
 	expect(lines.contains(where: { $0.contains("本月") && $0.contains("无月级电量曲线") }), "E3：报告诚实边界注明")
+}
+
+// MARK: - dayKeys 时区跟随（变异：DateFormatter 默认系统时区 ≠ 注入 calendar）
+
+do {
+	// 选用 UTC+14：与常见系统时区（东八/UTC）都错开，formatter 不绑 calendar 时必红
+	var cal = Calendar(identifier: .gregorian)
+	cal.timeZone = TimeZone(identifier: "Pacific/Kiritimati")!
+	let anchor = cal.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 12))!
+	let keys = DwellTracking.dayKeys(endingOn: anchor, count: 3, calendar: cal)
+	expectEqual(keys.first, "2026-08-13", "dayKeys：跟随注入日历时区（非系统时区）")
+	expectEqual(keys.last, "2026-08-11", "dayKeys：回推连续日键")
+	let asc = DwellTracking.dayKeys(endingOn: anchor, count: 2, calendar: cal, ascending: true)
+	expectEqual(asc.first, "2026-08-12", "dayKeys：ascending 旧→新")
 }
 
 // MARK: - 汇总
