@@ -447,30 +447,45 @@ do {
 
 do {
 	let cal = Calendar.current
-	// 2026-07-26 是周日
+	// 2026-07-26 是周日；周报窗 = 截止 due 的近 7 日
 	let sundayEvening = cal.date(from: DateComponents(year: 2026, month: 7, day: 26, hour: 21))!
 	let sundayDue = cal.date(from: DateComponents(year: 2026, month: 7, day: 26, hour: 20))!
 	expectEqual(BatteryAlertController.mostRecentDigestDue(before: sundayEvening), sundayDue, "周报：周日晚上到点（当天 20:00）")
-	
+
 	let sundayAfternoon = cal.date(from: DateComponents(year: 2026, month: 7, day: 26, hour: 19))!
 	let lastSundayDue = cal.date(from: DateComponents(year: 2026, month: 7, day: 19, hour: 20))!
 	expectEqual(BatteryAlertController.mostRecentDigestDue(before: sundayAfternoon), lastSundayDue, "周报：周日 20 点前还没到点，算上周的")
-	
+
 	let wednesday = cal.date(from: DateComponents(year: 2026, month: 7, day: 29, hour: 10))!
 	expectEqual(BatteryAlertController.mostRecentDigestDue(before: wednesday), sundayDue, "周报：周中补发用刚过去的周日")
-	
+
+	// 窗口内两天 + 窗口外噪声：只计近 7 日，绝不把装上以来说成「本周」
 	let history = [
+		DailyUsage(dayKey: "2026-07-10", drainedPercent: 99, chargedPercent: 99), // 上上周，必须被过滤
 		DailyUsage(dayKey: "2026-07-24", drainedPercent: 40, chargedPercent: 35),
-		DailyUsage(dayKey: "2026-07-25", drainedPercent: 30, chargedPercent: 45)
+		DailyUsage(dayKey: "2026-07-25", drainedPercent: 30, chargedPercent: 45),
+		DailyUsage(dayKey: "2026-08-01", drainedPercent: 50, chargedPercent: 10)  // 下周，必须被过滤
 	]
-	let body = BatteryAlertController.weeklyDigestBody(history: history, sessionCount: 3, healthPercent: 92)
-	expectEqual(body, "本周用电 70%、充入 80%、充电 3 次；健康度 92%", "周报：正文汇总格式")
-	
-	let emptyBody = BatteryAlertController.weeklyDigestBody(history: [], sessionCount: 0, healthPercent: 92)
+	let body = BatteryAlertController.weeklyDigestBody(history: history, sessionCount: 3, healthPercent: 92, due: sundayDue, calendar: cal)
+	expect(body.contains("本周用电 70%（记录 2 天，日均 35%）、充入 80%、充电 3 次"), "周报：只计近7日且日均按样本日")
+	expect(body.contains("健康度 92%"), "周报：带健康度尾巴")
+	expect(!body.contains("189"), "周报：不得含窗外噪声合计（变异检验：去掉窗口过滤必红）")
+
+	let emptyBody = BatteryAlertController.weeklyDigestBody(history: [], sessionCount: 0, healthPercent: 92, due: sundayDue, calendar: cal)
 	expect(emptyBody.isEmpty, "周报：没数据返回空串不发")
-	
-	let noHealth = BatteryAlertController.weeklyDigestBody(history: history, sessionCount: 0, healthPercent: nil)
-	expectEqual(noHealth, "本周用电 70%、充入 80%、充电 0 次", "周报：没健康度时不带尾巴")
+
+	let noHealth = BatteryAlertController.weeklyDigestBody(history: history, sessionCount: 0, healthPercent: nil, due: sundayDue, calendar: cal)
+	expectEqual(noHealth, "本周用电 70%（记录 2 天，日均 35%）、充入 80%、充电 0 次", "周报：没健康度时不带尾巴")
+
+	// 窗口外只有一点数据、窗口内仅充电次数：电量诚实写 0，仍交代充电
+	let onlyPrior = BatteryAlertController.weeklyDigestBody(
+		history: [DailyUsage(dayKey: "2026-07-01", drainedPercent: 40, chargedPercent: 40)],
+		sessionCount: 2,
+		healthPercent: nil,
+		due: sundayDue,
+		calendar: cal
+	)
+	expectEqual(onlyPrior, "本周用电 0%、充入 0%、充电 2 次", "周报：窗外电量不得并入本周")
 }
 
 // MARK: - 新选项迁移
@@ -1980,15 +1995,23 @@ do {
 	let soc = SOCSample(date: t0, percent: 80, isCharging: false)
 	let event = PowerEvent(date: t0, kind: .pluggedIn)
 
+	// now 钉在 2026-08-13 当天，聚合窗应命中该日
+	var calCSV = Calendar(identifier: .gregorian)
+	calCSV.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+	let csvNow = calCSV.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 12))!
 	let csv = BatteryDataExporter.csv(
 		sessions: [session],
 		dailyHistory: [usage],
 		healthSamples: [health],
 		socSamples: [soc],
-		powerEvents: [event]
+		powerEvents: [event],
+		now: csvNow,
+		calendar: calCSV
 	)
 	expect(csv.contains("# 充电记录"), "CSV导出：含充电记录小节")
 	expect(csv.contains("# 每日用电"), "CSV导出：含每日用电小节")
+	expect(csv.contains("# 能耗聚合"), "CSV导出：含能耗聚合小节")
+	expect(csv.contains("近7日,1,10,20,10.0,0.750"), "CSV导出：近7日聚合按样本日")
 	expect(csv.contains("# 健康度趋势"), "CSV导出：含健康度小节")
 	expect(csv.contains("# 24小时电量"), "CSV导出：含24小时电量小节")
 	expect(csv.contains("# 电源事件"), "CSV导出：含电源事件小节")
@@ -2216,7 +2239,9 @@ do {
 	]
 	let body = BatteryAlertController.monthlyDigestBody(history: history, sessions: sessions, healthSamples: health, due: aug1Due, calendar: cal)
 	expect(body.contains("上月用电 61%、充入 75%、充电 1 次"), "月报：正文汇总只计上月")
-	expect(body.contains("日均用电 2%"), "月报：日均按当月天数摊")
+	// 日均按有效样本日（2 天），不用 7 月日历 31 天把画像压成 2%
+	expect(body.contains("记录 2 天，日均用电 31%"), "月报：日均按样本日而非日历天")
+	expect(!body.contains("日均用电 2%"), "月报：禁用日历天摊薄口径（变异检验）")
 	expect(body.contains("月末健康度 95%"), "月报：取当月最后一个健康度样本")
 
 	// 上月完全没数据 → 空串不发
@@ -3235,7 +3260,13 @@ do {
 	// 两者各自独立判"已发"：标记互不覆盖，不会一个发了另一个被永久静默
 	expect(weeklyDue! < bothDue && monthlyDue! < bothDue, "双发审计：到点时间都早于当前")
 	// 月报正文与周报正文互不依赖：一方无数据返回空串不发，不影响另一方
-	let emptyWeek = BatteryAlertController.weeklyDigestBody(history: [], sessionCount: 0, healthPercent: nil)
+	let emptyWeek = BatteryAlertController.weeklyDigestBody(
+		history: [],
+		sessionCount: 0,
+		healthPercent: nil,
+		due: weeklyDue!,
+		calendar: cal
+	)
 	expect(emptyWeek.isEmpty, "双发审计：周报无数据独立不发")
 	let monthHistory = [DailyUsage(dayKey: "2026-01-15", drainedPercent: 30, chargedPercent: 40)]
 	let monthBody = BatteryAlertController.monthlyDigestBody(history: monthHistory, sessions: [], healthSamples: [], due: monthlyDue!, calendar: cal)
@@ -3832,13 +3863,21 @@ do {
 		history: hist,
 		sessionCount: 2,
 		healthPercent: 91,
-		dwellLine: line
+		dwellLine: line,
+		due: today,
+		calendar: calendar
 	)
 	expect(body.contains("健康度"), "周报：含健康度")
 	if let line {
 		expect(body.contains(line), "周报：组装进驻留句")
 	}
-	let bodyNoDwell = BatteryAlertController.weeklyDigestBody(history: hist, sessionCount: 2, healthPercent: 91)
+	let bodyNoDwell = BatteryAlertController.weeklyDigestBody(
+		history: hist,
+		sessionCount: 2,
+		healthPercent: 91,
+		due: today,
+		calendar: calendar
+	)
 	expect(!bodyNoDwell.contains("驻留日均"), "周报：无 dwellLine 时不编造")
 
 	// 洞察顺序：驻留在慢充之前，存放/涓流在最后
@@ -4054,6 +4093,75 @@ do {
 	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 850, lastSeenCycles: 820) == nil, "H3：同档内不重复")
 	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 1000, lastSeenCycles: 700)?.notificationID.contains("1000") == true,
 		   "H3：优先报更高的档")
+}
+
+// MARK: - E3 EnergyAggregation 能耗聚合
+
+do {
+	func energyDay(_ key: String, drain: Int, charge: Int, acH: Double = 0, battH: Double = 0) -> DailyUsage {
+		DailyUsage(
+			dayKey: key,
+			drainedPercent: drain,
+			chargedPercent: charge,
+			acSeconds: acH * 3600,
+			batterySeconds: battH * 3600
+		)
+	}
+	let history = [
+		energyDay("2026-09-01", drain: 40, charge: 10, acH: 2, battH: 6),
+		energyDay("2026-09-02", drain: 20, charge: 30, acH: 8, battH: 2),
+		energyDay("2026-09-03", drain: 0, charge: 0), // 无有效样本，不进分母
+		energyDay("2026-09-08", drain: 60, charge: 5, acH: 1, battH: 5),
+		energyDay("2026-09-09", drain: 30, charge: 40, acH: 4, battH: 4)
+	]
+	let week = EnergyAggregation.aggregate(
+		history: history,
+		dayKeys: ["2026-09-03", "2026-09-08", "2026-09-09", "2026-09-10"]
+	)
+	expectEqual(week.dataDays, 2, "E3：空样本日不进分母")
+	expectEqual(week.totalDrainedPercent, 90, "E3：窗口用电合计")
+	expectEqual(week.totalChargedPercent, 45, "E3：窗口充入合计")
+	expectEqual(week.avgDrainedPerDataDay, 45.0, "E3：日均按样本日")
+	expectEqual(week.peakDrainDayKey, "2026-09-08", "E3：峰值日")
+	expectEqual(week.peakDrainPercent, 60, "E3：峰值百分点")
+	// ac=5h battery=9h → share=5/14
+	expect(week.acShare != nil && abs(week.acShare! - 5.0 / 14.0) < 0.001, "E3：窗口插电占比")
+
+	let empty = EnergyAggregation.aggregate(history: history, dayKeys: ["2026-01-01"])
+	expectEqual(empty.dataDays, 0, "E3：窗外空窗")
+	expect(empty.avgDrainedPerDataDay == nil, "E3：无样本不给日均")
+	expect(EnergyAggregation.digestSummary(label: "本周", stats: empty).isEmpty, "E3：空窗摘要为空")
+
+	let month = EnergyAggregation.monthAggregate(history: history, monthPrefix: "2026-09")
+	expectEqual(month.dataDays, 4, "E3：月聚合有效日")
+	expectEqual(month.totalDrainedPercent, 150, "E3：月用电合计")
+
+	// 对比：两侧各 ≥2 有效日才给结论
+	let cmp = EnergyAggregation.drainComparison(
+		history: history,
+		recentKeys: ["2026-09-08", "2026-09-09"],
+		priorKeys: ["2026-09-01", "2026-09-02"]
+	)
+	expect(cmp != nil, "E3：双侧样本足够应出对比")
+	if let cmp {
+		expect(abs(cmp.recentAvgPerDataDay - 45.0) < 0.001, "E3：近窗日均")
+		expect(abs(cmp.priorAvgPerDataDay - 30.0) < 0.001, "E3：前窗日均")
+		expect(abs(cmp.deltaPerDataDay - 15.0) < 0.001, "E3：日均差")
+	}
+	let thin = EnergyAggregation.drainComparison(
+		history: history,
+		recentKeys: ["2026-09-08"],
+		priorKeys: ["2026-09-01", "2026-09-02"]
+	)
+	expect(thin == nil, "E3：单侧样本不足对比为 nil")
+
+	// 报告行：注入固定 today=2026-09-10
+	var cal = Calendar(identifier: .gregorian)
+	cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+	let today = cal.date(from: DateComponents(year: 2026, month: 9, day: 10, hour: 12))!
+	let lines = EnergyAggregation.reportLines(history: history, endingOn: today, calendar: cal)
+	expect(lines.contains(where: { $0.contains("近7日") && $0.contains("日均") }), "E3：报告含近7日聚合")
+	expect(lines.contains(where: { $0.contains("本月") && $0.contains("无月级电量曲线") }), "E3：报告诚实边界注明")
 }
 
 // MARK: - 汇总

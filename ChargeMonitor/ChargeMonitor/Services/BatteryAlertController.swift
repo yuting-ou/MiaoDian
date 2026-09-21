@@ -669,7 +669,8 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			dwellLine: DwellTracking.weeklyDigestLine(
 				history: recorder.dailyHistory,
 				due: due
-			)
+			),
+			due: due
 		)
 		guard !body.isEmpty else { return }
 		send(id: "weekly-digest", title: "本周电池小结", body: body)
@@ -688,18 +689,27 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		return calendar.date(byAdding: .day, value: -7, to: due)
 	}
 	
-	// 周报正文；这周没产生任何用电数据就返回空串（不发也罢）
+	// 周报正文：只统计 due 截止的近 7 日窗——对全部历史求和会把「装上以来」说成「本周」
+	// 这周没产生任何用电数据（且无充电次数）就返回空串（不发也罢）
 	nonisolated static func weeklyDigestBody(
 		history: [DailyUsage],
 		sessionCount: Int,
 		healthPercent: Int?,
-		dwellLine: String? = nil
+		dwellLine: String? = nil,
+		due: Date,
+		calendar: Calendar = .current
 	) -> String {
-		let drained = history.reduce(0) { $0 + $1.drainedPercent }
-		let charged = history.reduce(0) { $0 + $1.chargedPercent }
-		guard drained > 0 || charged > 0 || sessionCount > 0 else { return "" }
+		let keys = DwellTracking.dayKeys(endingOn: due, count: 7, calendar: calendar)
+		let stats = EnergyAggregation.aggregate(history: history, dayKeys: keys)
+		guard stats.totalDrainedPercent > 0 || stats.totalChargedPercent > 0 || sessionCount > 0 else { return "" }
 
-		var parts = ["本周用电 \(drained)%、充入 \(charged)%、充电 \(sessionCount) 次"]
+		var summary = EnergyAggregation.digestSummary(label: "本周", stats: stats)
+		if summary.isEmpty {
+			// 窗口内无有效能耗样本，但本周有充电记录——仍要交代次数，电量诚实写 0
+			summary = "本周用电 0%、充入 0%"
+		}
+		summary += "、充电 \(sessionCount) 次"
+		var parts = [summary]
 		if let health = healthPercent {
 			parts.append("健康度 \(health)%")
 		}
@@ -754,15 +764,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		else { return "" }
 		let prefix = UsagePatternAnalyzer.monthKeyString(prevMonthStart, calendar: calendar)
 
-		let monthDays = history.filter { $0.dayKey.hasPrefix(prefix) }
-		let drained = monthDays.reduce(0) { $0 + $1.drainedPercent }
-		let charged = monthDays.reduce(0) { $0 + $1.chargedPercent }
+		let stats = EnergyAggregation.monthAggregate(history: history, monthPrefix: prefix)
 		let sessionCount = sessions.filter { UsagePatternAnalyzer.monthKeyString($0.startDate, calendar: calendar).hasPrefix(prefix) }.count
-		guard drained > 0 || charged > 0 || sessionCount > 0 else { return "" }
+		guard stats.totalDrainedPercent > 0 || stats.totalChargedPercent > 0 || sessionCount > 0 else { return "" }
 
-		let dayCount = calendar.range(of: .day, in: .month, for: prevMonthStart)?.count ?? 30
-		var parts = [String(format: "上月用电 %d%%、充入 %d%%、充电 %d 次", drained, charged, sessionCount)]
-		parts.append(String(format: "日均用电 %.0f%%", Double(drained) / Double(dayCount)))
+		// 日均按有效样本日：日历天数会把「没记录的日子」摊成 0，系统性压低用电画像
+		var parts = [String(format: "上月用电 %d%%、充入 %d%%、充电 %d 次", stats.totalDrainedPercent, stats.totalChargedPercent, sessionCount)]
+		if let avg = stats.avgDrainedPerDataDay, stats.dataDays > 0 {
+			parts.append("记录 \(stats.dataDays) 天，日均用电 \(Int(avg.rounded()))%")
+		}
 		if let lastHealth = healthSamples.last(where: { UsagePatternAnalyzer.monthKeyString($0.date, calendar: calendar).hasPrefix(prefix) }) {
 			parts.append("月末健康度 \(lastHealth.healthPercent)%")
 		}

@@ -5,12 +5,15 @@ import Foundation
 // 纯本地输出，符合应用"数据自主、不上传"的定位
 enum BatteryDataExporter {
 	// 单文件多表：每张表用 "# 表名" 注释行 + 表头行 + 数据行，表间空一行分隔
+	// now/calendar 可注入：聚合窗口相对「导出时刻」，测试需固定锚点
 	static func csv(
 		sessions: [ChargeSession],
 		dailyHistory: [DailyUsage],
 		healthSamples: [HealthSample],
 		socSamples: [SOCSample],
-		powerEvents: [PowerEvent]
+		powerEvents: [PowerEvent],
+		now: Date = Date(),
+		calendar: Calendar = .current
 	) -> String {
 		var lines: [String] = []
 
@@ -25,6 +28,17 @@ enum BatteryDataExporter {
 					formatNumber(usage.acSeconds), formatNumber(usage.batterySeconds), share]
 		}, to: &lines)
 
+		// E3：窗口聚合表。日均=有效样本日；无月级电量曲线（诚实边界）
+		let aggregateRows = energyAggregateRows(history: dailyHistory, now: now, calendar: calendar)
+		if !aggregateRows.isEmpty {
+			appendSection(
+				title: "能耗聚合",
+				header: ["窗口", "记录天数", "用电%", "充入%", "日均用电%", "插电占比"],
+				rows: aggregateRows,
+				to: &lines
+			)
+		}
+
 		appendSection(title: "健康度趋势", header: ["日期", "健康度%", "循环次数"], rows: healthSamples.map { sample in
 			[sample.date.ISO8601Format(), "\(sample.healthPercent)", sample.cycleCount.map(String.init) ?? ""]
 		}, to: &lines)
@@ -38,6 +52,35 @@ enum BatteryDataExporter {
 		}, to: &lines)
 
 		return lines.joined(separator: "\n") + "\n"
+	}
+
+	private static func energyAggregateRows(
+		history: [DailyUsage],
+		now: Date,
+		calendar: Calendar
+	) -> [[String]] {
+		func row(_ label: String, _ stats: EnergyAggregation.WindowStats) -> [String]? {
+			guard stats.dataDays > 0 else { return nil }
+			let avg = stats.avgDrainedPerDataDay.map { String(format: "%.1f", $0) } ?? ""
+			let share = stats.acShare.map { String(format: "%.3f", $0) } ?? ""
+			return [label, "\(stats.dataDays)", "\(stats.totalDrainedPercent)", "\(stats.totalChargedPercent)", avg, share]
+		}
+		var rows: [[String]] = []
+		let recent7 = EnergyAggregation.aggregate(
+			history: history,
+			dayKeys: DwellTracking.dayKeys(endingOn: now, count: 7, calendar: calendar)
+		)
+		if let r = row("近7日", recent7) { rows.append(r) }
+		let recent30 = EnergyAggregation.aggregate(
+			history: history,
+			dayKeys: DwellTracking.dayKeys(endingOn: now, count: 30, calendar: calendar)
+		)
+		if let r = row("近30日", recent30) { rows.append(r) }
+		let monthPrefix = UsagePatternAnalyzer.monthKeyString(now, calendar: calendar)
+		if let r = row("本月", EnergyAggregation.monthAggregate(history: history, monthPrefix: monthPrefix)) {
+			rows.append(r)
+		}
+		return rows
 	}
 
 	private static func appendSection(title: String, header: [String], rows: [[String]], to lines: inout [String]) {

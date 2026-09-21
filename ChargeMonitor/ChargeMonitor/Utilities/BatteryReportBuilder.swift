@@ -58,6 +58,11 @@ struct BatteryReportBuilder {
 		if !dailyHistory.isEmpty {
 			sections.append("")
 			sections.append("【最近用电】")
+			// 窗口聚合前置：先给近7日/本月可溯源汇总，再列逐日原数据
+			let aggregates = EnergyAggregation.reportLines(history: dailyHistory, endingOn: Date())
+			if !aggregates.isEmpty {
+				sections.append(contentsOf: aggregates)
+			}
 			for day in dailyHistory.reversed() {
 				var line = "\(day.dayKey)  用电 \(day.drainedPercent)%  充入 \(day.chargedPercent)%"
 				if let share = day.acShare {
