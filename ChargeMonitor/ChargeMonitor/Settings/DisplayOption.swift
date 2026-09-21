@@ -129,7 +129,7 @@ nonisolated enum DisplayOption: String, CaseIterable, Identifiable, Codable, Sen
 		case .batteryCurrentVoltage: return "电池端实时电压与电流（正充负放）"
 		case .uptime: return "本次开机时长"
 		case .timeRemaining: return "按系统估算的剩余可用时间"
-		case .drainRate: return "按最近一小时真实放电算出的掉电速度"
+		case .drainRate: return "按最近放电窗口的真实掉电算出（约一小时，负载突变时缩短）"
 		case .runtimeScenarios: return "轻度/视频/会议三种场景还能用多久"
 		case .sleepDrainReport: return "合盖睡眠期间掉了多少电"
 		case .significantEnergyApps: return "当前耗电大户与本周累计排行"

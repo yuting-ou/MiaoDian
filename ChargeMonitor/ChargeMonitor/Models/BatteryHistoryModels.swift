@@ -23,9 +23,17 @@ nonisolated struct TemperatureSample: Equatable, Sendable {
 }
 
 // 掉电速度估算结果
+// windowSeconds：E4 实际采用的估算窗口（秒）；旧调用方/合成值可省略
 nonisolated struct DrainRateEstimate: Equatable, Sendable {
 	let percentPerHour: Double
 	let estimatedMinutesRemaining: Int?
+	let windowSeconds: Int?
+
+	init(percentPerHour: Double, estimatedMinutesRemaining: Int?, windowSeconds: Int? = nil) {
+		self.percentPerHour = percentPerHour
+		self.estimatedMinutesRemaining = estimatedMinutesRemaining
+		self.windowSeconds = windowSeconds
+	}
 }
 
 // 充电曲线采样点：相对会话开始的分钟数 + 当时电量

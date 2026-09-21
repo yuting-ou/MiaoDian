@@ -363,6 +363,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		}
 	}
 	
+	// 掉电窗口口径：与 DrainRateEstimate.windowSeconds 同源，避免短窗仍写「最近一小时」
+	nonisolated static func drainWindowText(_ estimate: DrainRateEstimate?) -> String {
+		guard let window = estimate?.windowSeconds, window > 0, window < 3600 else {
+			return "最近一小时"
+		}
+		let minutes = max(1, window / 60)
+		return "最近 \(minutes) 分钟"
+	}
+
 	// 耗电异常：掉电速度突然飙高时提醒，顺带点名高耗电应用
 	// 典型场景：合盖没合好塞进包里烧电，或某个应用后台发疯
 	private func evaluateHighDrain(_ estimate: DrainRateEstimate?) {
@@ -379,7 +388,8 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let isAbnormal = lastSnapshot.powerSource == .battery && rate >= threshold
 		if isAbnormal {
 			guard !didNotifyHighDrain, alertEnabled(.alertHighDrain) else { return }
-			var body = String(format: "最近一小时掉电 %.0f%%/小时，比平时快不少", rate)
+			// 口径与 estimate.windowSeconds 同源：短窗时不得仍写「最近一小时」
+			var body = String(format: "%@掉电 %.0f%%/小时，比平时快不少", Self.drainWindowText(estimate), rate)
 			if let culprit = monitor?.significantEnergyApps.first?.name, !culprit.isEmpty {
 				body += "，「\(culprit)」正在高耗电"
 			}

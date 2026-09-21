@@ -413,6 +413,9 @@ struct BatteryInfoFormatter {
 		guard let estimate = drainEstimate else { return nil }
 		
 		var value = String(format: "%.1f%%/小时", estimate.percentPerHour)
+		if let window = estimate.windowSeconds, window > 0, window < 3600 {
+			value += String(format: "（近 %d 分钟）", max(1, window / 60))
+		}
 		if let minutes = estimate.estimatedMinutesRemaining, minutes > 0 {
 			value += " · 约可用\(DurationFormatter.chinese(minutes: minutes))"
 		}

@@ -39,6 +39,7 @@ nonisolated enum RuntimeScenario: CaseIterable, Hashable, Sendable {
 
 // 续航换算：剩余电量 ÷（当前掉电速度 × 场景系数）→ 各场景还能撑多少分钟
 // 纯函数，掉电估算（DrainRateEstimator）负责"当前速度"，这里只做换算
+// calibrationFactor：E4 本机强度因子；nil = 出厂系数
 nonisolated enum RuntimeScenarioEstimator {
 	// 某场景的剩余分钟数；掉速或电量无效时返回 nil
 	static func minutesRemaining(socPercent: Int, percentPerHour: Double, multiplier: Double) -> Int? {
@@ -48,9 +49,17 @@ nonisolated enum RuntimeScenarioEstimator {
 	}
 
 	// 全部场景的换算结果（供卡片按场景顺序展示）
-	static func estimates(socPercent: Int, percentPerHour: Double) -> [(scenario: RuntimeScenario, minutes: Int)] {
+	static func estimates(
+		socPercent: Int,
+		percentPerHour: Double,
+		calibrationFactor: Double? = nil
+	) -> [(scenario: RuntimeScenario, minutes: Int)] {
 		RuntimeScenario.allCases.compactMap { scenario in
-			minutesRemaining(socPercent: socPercent, percentPerHour: percentPerHour, multiplier: scenario.drainMultiplier)
+			let multiplier = RuntimeScenarioCalibration.effectiveMultiplier(
+				factory: scenario.drainMultiplier,
+				factor: calibrationFactor
+			)
+			return minutesRemaining(socPercent: socPercent, percentPerHour: percentPerHour, multiplier: multiplier)
 				.map { (scenario, $0) }
 		}
 	}

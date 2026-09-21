@@ -24,6 +24,18 @@ struct DrainRateEstimator {
 	// 库仑计数至少要这么多条电流读数，抗单帧抖动
 	nonisolated private static let minAmperageSamples = 10
 
+	// E4 窗口自适应默认参：突变时切到短窗，稳定时用满窗
+	nonisolated static let adaptiveFullWindowSeconds: TimeInterval = 60 * 60
+	nonisolated static let adaptiveMinSpanSeconds: TimeInterval = 10 * 60
+	nonisolated static let adaptiveRecentSpanSeconds: TimeInterval = 15 * 60
+	nonisolated static let adaptiveMinRecentSpanSeconds: TimeInterval = 8 * 60
+	nonisolated static let adaptiveMutationRatio: Double = 0.35
+	nonisolated static let adaptiveRateFloor: Double = 0.5
+	// 绝对阈值：短窗判定另要求 recentDrop≥2，避免低基线下单次 1% 量化台阶算成假突变
+	nonisolated static let adaptiveMutationAbsolute: Double = 4.0
+	// 短窗最少掉电百分点：1% 量化噪声在低放电率+短窗上会算出虚高速率
+	nonisolated static let adaptiveMinRecentDrop: Int = 2
+
 	mutating func record(snapshot: BatterySnapshot, at date: Date = Date()) {
 		guard snapshot.powerSource == .battery, !snapshot.isCharging else {
 			samples.removeAll()
@@ -52,15 +64,11 @@ struct DrainRateEstimator {
 	}
 
 	func estimate() -> DrainRateEstimate? {
-		guard let first = samples.first, let last = samples.last else { return nil }
-
-		let span = last.date.timeIntervalSince(first.date)
-		guard span >= Self.minimumSpanSeconds else { return nil }
-
-		let dropped = first.percent - last.percent
-		guard dropped >= 1 else { return nil }
-
-		let percentPerHour = Double(dropped) / span * 3600
+		guard let last = samples.last else { return nil }
+		let pairs = samples.map { (date: $0.date, percent: $0.percent) }
+		guard let adaptive = Self.adaptivePercentPerHour(samples: pairs) else { return nil }
+		let percentPerHour = adaptive.rate
+		let windowSeconds = adaptive.windowSeconds
 
 		// 剩余时间：库仑计数优先，原料不足退回百分比线性外推
 		var minutesRemaining: Int? = Self.coulombMinutesRemaining(
@@ -73,8 +81,60 @@ struct DrainRateEstimator {
 
 		return DrainRateEstimate(
 			percentPerHour: percentPerHour,
-			estimatedMinutesRemaining: minutesRemaining
+			estimatedMinutesRemaining: minutesRemaining,
+			windowSeconds: Int(windowSeconds)
 		)
+	}
+
+	/// E4 窗口自适应（纯函数）：稳定用满窗；负载突变时用短窗响应。
+	/// 返回 rate 与实际采用的窗口秒数；样本不足/无掉电 → nil。
+	nonisolated static func adaptivePercentPerHour(
+		samples: [(date: Date, percent: Int)],
+		fullWindow: TimeInterval = adaptiveFullWindowSeconds,
+		minSpan: TimeInterval = adaptiveMinSpanSeconds,
+		recentSpan: TimeInterval = adaptiveRecentSpanSeconds,
+		minRecentSpan: TimeInterval = adaptiveMinRecentSpanSeconds,
+		mutationRatio: Double = adaptiveMutationRatio,
+		rateFloor: Double = adaptiveRateFloor,
+		mutationAbsolute: Double = adaptiveMutationAbsolute,
+		minRecentDrop: Int = adaptiveMinRecentDrop
+	) -> (rate: Double, windowSeconds: TimeInterval)? {
+		guard let end = samples.last?.date else { return nil }
+		let fullSamples = samples.filter { end.timeIntervalSince($0.date) <= fullWindow }
+		guard let first = fullSamples.first, let last = fullSamples.last else { return nil }
+		let fullSpan = last.date.timeIntervalSince(first.date)
+		let fullDrop = first.percent - last.percent
+		var fullRate: Double?
+		if fullSpan >= minSpan, fullDrop >= 1 {
+			fullRate = Double(fullDrop) / fullSpan * 3600
+		}
+
+		let recentSamples = samples.filter { end.timeIntervalSince($0.date) <= recentSpan }
+		var recentRate: Double?
+		var recentSpanUsed: TimeInterval = 0
+		if let rFirst = recentSamples.first, let rLast = recentSamples.last {
+			recentSpanUsed = rLast.date.timeIntervalSince(rFirst.date)
+			let recentDrop = rFirst.percent - rLast.percent
+			// minRecentDrop≥2：低基线时 1% 台阶在短窗上可算出虚高 %/h（假突变）
+			if recentSpanUsed >= minRecentSpan, recentDrop >= max(1, minRecentDrop) {
+				recentRate = Double(recentDrop) / recentSpanUsed * 3600
+			}
+		}
+
+		if let fullRate, let recentRate {
+			let threshold = max(mutationRatio * max(abs(fullRate), rateFloor), mutationAbsolute)
+			if abs(recentRate - fullRate) >= threshold {
+				return (recentRate, recentSpanUsed)
+			}
+			return (fullRate, fullWindow)
+		}
+		if let fullRate {
+			return (fullRate, fullWindow)
+		}
+		if let recentRate {
+			return (recentRate, recentSpanUsed)
+		}
+		return nil
 	}
 
 	// 库仑计数的纯函数核心，供单测直测：剩余电荷（满充容量 × 电量）÷ 时间加权平均放电电流

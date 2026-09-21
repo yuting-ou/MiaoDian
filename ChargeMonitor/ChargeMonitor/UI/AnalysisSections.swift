@@ -175,6 +175,7 @@ struct HourlyDrainSection: View {
 struct RuntimeScenarioSection: View {
 	let estimate: DrainRateEstimate
 	let socPercent: Int
+	let calibrationFactor: Double?
 	let isCollapsed: Bool
 	let onToggle: () -> Void
 
@@ -190,7 +191,7 @@ struct RuntimeScenarioSection: View {
 			.padding(.bottom, isCollapsed ? 0 : 2)
 
 			if !isCollapsed {
-				Text(String(format: "按当前掉电速度 %.1f%%/小时换算", estimate.percentPerHour))
+				Text(speedLine)
 					.font(.system(size: 9))
 					.foregroundStyle(GlassTokens.labelOnGlass)
 					.padding(.top, 2)
@@ -210,12 +211,35 @@ struct RuntimeScenarioSection: View {
 					}
 					.padding(.top, 6)
 				}
+
+				let note = RuntimeScenarioCalibration.calibrationNote(factor: calibrationFactor)
+				if !note.isEmpty {
+					Text(note)
+						.font(.system(size: 9))
+						.foregroundStyle(GlassTokens.labelOnGlass)
+						.padding(.top, 6)
+						.help("系数相对本机近几周日放电强度基线做有界微调，不是绝对功率标定")
+				}
 			}
 		}
 	}
 
+	// 掉电速度口径：短窗时写明「近 N 分钟」，避免用户以为是整小时均速
+	private var speedLine: String {
+		var line = String(format: "按当前掉电速度 %.1f%%/小时", estimate.percentPerHour)
+		if let window = estimate.windowSeconds, window < 3600, window > 0 {
+			let minutes = max(1, window / 60)
+			line += String(format: "（近 %d 分钟）", minutes)
+		}
+		return line + "换算"
+	}
+
 	private var scenarioRows: [(scenario: RuntimeScenario, minutes: Int)] {
-		RuntimeScenarioEstimator.estimates(socPercent: socPercent, percentPerHour: estimate.percentPerHour)
+		RuntimeScenarioEstimator.estimates(
+			socPercent: socPercent,
+			percentPerHour: estimate.percentPerHour,
+			calibrationFactor: calibrationFactor
+		)
 	}
 
 	private func tint(for scenario: RuntimeScenario) -> Color {

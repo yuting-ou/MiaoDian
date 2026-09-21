@@ -2379,6 +2379,177 @@ do {
 	// 边界：没电、没掉速都不给结论
 	expect(RuntimeScenarioEstimator.minutesRemaining(socPercent: 0, percentPerHour: 10, multiplier: 0.65) == nil, "续航换算：0% 不换算")
 	expect(RuntimeScenarioEstimator.minutesRemaining(socPercent: 50, percentPerHour: 0, multiplier: 0.65) == nil, "续航换算：零掉速不换算")
+
+	// E4：calibrationFactor 收紧系数 → 同等电量分钟数变短
+	let calibrated = RuntimeScenarioEstimator.estimates(socPercent: 50, percentPerHour: 10, calibrationFactor: 1.25)
+	expectEqual(calibrated.count, 3, "E4校准：三场景仍在")
+	// lightUse 0.65 * 夹紧后的 effective：factor 1.25 → raw 0.8125，lo=0.65*0.85=0.5525, hi=0.65*1.2=0.78 → 0.78
+	// 50 / (10*0.78) * 60 = 384.6 → 384
+	expectEqual(calibrated.first?.minutes, 384, "E4校准：强度因子收紧后轻度分钟变短")
+	let nilFactor = RuntimeScenarioEstimator.estimates(socPercent: 50, percentPerHour: 10, calibrationFactor: nil)
+	expectEqual(nilFactor.first?.minutes, 461, "E4校准：nil 因子维持出厂")
+}
+
+// MARK: - E4 窗口自适应 + 本机强度校准
+
+do {
+	func pt(_ minutes: Double, _ percent: Int) -> (date: Date, percent: Int) {
+		(t0.addingTimeInterval(minutes * 60), percent)
+	}
+
+	// 稳定掉电：满窗 60 分钟 10% → 10%/h，应采用满窗
+	var stable: [(date: Date, percent: Int)] = []
+	for i in 0...30 {
+		stable.append(pt(Double(i) * 2, 100 - i / 3))
+	}
+	let stableR = DrainRateEstimator.adaptivePercentPerHour(samples: stable)
+	expect(stableR != nil, "E4窗口：稳定放电应有估算")
+	if let r = stableR {
+		expect(abs(r.rate - 10.0) < 0.15, "E4窗口：稳定速率≈10%/h")
+		expect(abs(r.windowSeconds - DrainRateEstimator.adaptiveFullWindowSeconds) < 1, "E4窗口：稳定时用满窗")
+	}
+
+	// 突变：前 50 分钟几乎不掉，最近 10 分钟猛掉 → 应切短窗
+	var mutated: [(date: Date, percent: Int)] = []
+	// 0–50min: 100→99 (很慢)
+	for i in 0...25 {
+		mutated.append(pt(Double(i) * 2, 100 - i / 26))
+	}
+	// 50–60min: 99→90 (快)
+	for i in 0...5 {
+		mutated.append(pt(50 + Double(i) * 2, 99 - i * 2))
+	}
+	let mutR = DrainRateEstimator.adaptivePercentPerHour(samples: mutated)
+	expect(mutR != nil, "E4窗口：突变序列应有估算")
+	if let r = mutR {
+		// 最近约 10 分钟掉约 9-10%，短窗速率远高于满窗均速
+		expect(r.rate > 20.0, "E4窗口：突变时应采用更高短窗速率（实际 \(r.rate)）")
+		expect(r.windowSeconds < 3600, "E4窗口：突变时窗口应短于满窗")
+	}
+
+	// 变异检验：若实现恒用满窗，突变序列速率会被稀释到 <15
+	// （满窗 60min 掉约 10% → ~10%/h）——上面 r.rate>20 会红
+	let forcedFull = DrainRateEstimator.adaptivePercentPerHour(
+		samples: mutated,
+		mutationRatio: 999,
+		mutationAbsolute: 999
+	)
+	if let f = forcedFull {
+		expect(f.rate < 15.0, "E4窗口变异：禁止切换时速率被满窗稀释")
+		expect(abs(f.windowSeconds - DrainRateEstimator.adaptiveFullWindowSeconds) < 1, "E4窗口变异：禁止切换时仍标满窗")
+	}
+
+	// 样本不足
+	expect(DrainRateEstimator.adaptivePercentPerHour(samples: []) == nil, "E4窗口：空样本 nil")
+	expect(DrainRateEstimator.adaptivePercentPerHour(samples: [pt(0, 100), pt(3, 99)]) == nil, "E4窗口：过短跨度 nil")
+
+	// 对抗审查 D4：低基线 + 1% 量化台阶不得假突变
+	// 满窗 60 分钟只掉 1%（约 1%/h），台阶落在末段——生产默认（minRecentDrop=2）不得切短窗
+	var lowBase: [(date: Date, percent: Int)] = []
+	for i in 0...30 {
+		let minute = Double(i) * 2
+		lowBase.append(pt(minute, minute < 58 ? 90 : 89))
+	}
+	let lowR = DrainRateEstimator.adaptivePercentPerHour(samples: lowBase)
+	expect(lowR != nil, "E4窗口：低基线应有估算")
+	if let r = lowR {
+		expect(r.rate < 3.0, "E4窗口：低基线 1% 台阶不得切成假突变（实际 \(r.rate)）")
+		expect(abs(r.windowSeconds - DrainRateEstimator.adaptiveFullWindowSeconds) < 1, "E4窗口：低基线量化台阶仍用满窗")
+	}
+	// 变异：minRecentDrop 降为 1 且短窗扫到该台阶时，1% 会被算成 ~7.5%/h 假突变
+	let steppedUnsafe = DrainRateEstimator.adaptivePercentPerHour(
+		samples: lowBase,
+		recentSpan: 8 * 60,
+		minRecentDrop: 1
+	)
+	if let r1 = steppedUnsafe {
+		expect(r1.rate > 4.0, "E4窗口变异：允许 1% 进短窗时假突变应现形（实际 \(r1.rate)）")
+	}
+	// 同序列、生产门槛 minRecentDrop=2 → 仍满窗
+	let steppedSafe = DrainRateEstimator.adaptivePercentPerHour(
+		samples: lowBase,
+		recentSpan: 8 * 60,
+		minRecentDrop: 2
+	)
+	if let r2 = steppedSafe {
+		expect(r2.rate < 3.0, "E4窗口：同序列下 minRecentDrop=2 挡住假突变")
+	}
+
+	// 口径文案：短窗 vs 满窗
+	expect(BatteryAlertController.drainWindowText(nil) == "最近一小时", "E4口径：无窗口写最近一小时")
+	expect(BatteryAlertController.drainWindowText(DrainRateEstimate(percentPerHour: 10, estimatedMinutesRemaining: nil, windowSeconds: 3600)) == "最近一小时", "E4口径：满窗写最近一小时")
+	expect(BatteryAlertController.drainWindowText(DrainRateEstimate(percentPerHour: 10, estimatedMinutesRemaining: nil, windowSeconds: 900)) == "最近 15 分钟", "E4口径：短窗写近 N 分钟")
+}
+
+do {
+	func energyDay(_ key: String, drain: Int, batteryH: Double, acH: Double = 0) -> DailyUsage {
+		DailyUsage(dayKey: key, drainedPercent: drain, chargedPercent: 0, acSeconds: acH * 3600, batterySeconds: batteryH * 3600)
+	}
+
+	// dayIntensity 门槛
+	expect(RuntimeScenarioCalibration.dayIntensity(energyDay("2026-09-01", drain: 20, batteryH: 4)) == 5.0, "E4校准：强度=20%/4h")
+	expect(RuntimeScenarioCalibration.dayIntensity(energyDay("2026-09-01", drain: 20, batteryH: 0.4)) == nil, "E4校准：电池时长不足半小时 nil")
+	expect(RuntimeScenarioCalibration.dayIntensity(energyDay("2026-09-01", drain: 0, batteryH: 4)) == nil, "E4校准：无掉电 nil")
+
+	// 样本不足 → factor nil
+	let thin = [
+		energyDay("2026-09-01", drain: 20, batteryH: 4),
+		energyDay("2026-09-02", drain: 20, batteryH: 4),
+	]
+	expect(RuntimeScenarioCalibration.intensityFactor(history: thin) == nil, "E4校准：样本不足不给因子")
+
+	// 近期更费电：基线 5%/h ×5 天，近期 8%/h ×3 天 → 8/5=1.6 → 夹紧 1.25
+	var heavyRecent = [
+		energyDay("2026-09-01", drain: 20, batteryH: 4), // 5
+		energyDay("2026-09-02", drain: 20, batteryH: 4),
+		energyDay("2026-09-03", drain: 20, batteryH: 4),
+		energyDay("2026-09-04", drain: 20, batteryH: 4),
+		energyDay("2026-09-05", drain: 20, batteryH: 4),
+	]
+	heavyRecent.append(energyDay("2026-09-06", drain: 32, batteryH: 4)) // 8
+	heavyRecent.append(energyDay("2026-09-07", drain: 32, batteryH: 4))
+	heavyRecent.append(energyDay("2026-09-08", drain: 32, batteryH: 4))
+	let fHeavy = RuntimeScenarioCalibration.intensityFactor(history: heavyRecent)
+	expect(fHeavy != nil, "E4校准：样本足够应有因子")
+	if let f = fHeavy {
+		expect(abs(f - 1.25) < 0.001, "E4校准：偏快因子夹紧上界 1.25（实际 \(f)）")
+	}
+
+	// 近期更省电：基线 8%/h，近期 4%/h → 0.5 → 夹紧 0.80
+	let lightRecent = [
+		energyDay("2026-09-01", drain: 32, batteryH: 4),
+		energyDay("2026-09-02", drain: 32, batteryH: 4),
+		energyDay("2026-09-03", drain: 32, batteryH: 4),
+		energyDay("2026-09-04", drain: 32, batteryH: 4),
+		energyDay("2026-09-05", drain: 32, batteryH: 4),
+		energyDay("2026-09-06", drain: 16, batteryH: 4), // 4
+		energyDay("2026-09-07", drain: 16, batteryH: 4),
+		energyDay("2026-09-08", drain: 16, batteryH: 4),
+	]
+	let fLight = RuntimeScenarioCalibration.intensityFactor(history: lightRecent)
+	if let f = fLight {
+		expect(abs(f - 0.80) < 0.001, "E4校准：偏慢因子夹紧下界 0.80（实际 \(f)）")
+	}
+
+	// 平稳：近期=基线 → ≈1.0
+	let flat = (1...10).map { energyDay(String(format: "2026-09-%02d", $0), drain: 20, batteryH: 4) }
+	if let f = RuntimeScenarioCalibration.intensityFactor(history: flat) {
+		expect(abs(f - 1.0) < 0.001, "E4校准：平稳机器因子≈1")
+	}
+
+	// effectiveMultiplier 夹紧
+	expectEqual(RuntimeScenarioCalibration.effectiveMultiplier(factory: 0.65, factor: nil), 0.65, "E4校准：nil 因子出厂原样")
+	// factor 1.25, factory 0.65 → 0.8125, hi=0.78 → 0.78
+	expect(abs(RuntimeScenarioCalibration.effectiveMultiplier(factory: 0.65, factor: 1.25) - 0.78) < 0.0001, "E4校准：上沿夹紧")
+	// factor 0.8, factory 1.7 → 1.36, lo=1.7*0.85=1.445 → 1.445
+	expect(abs(RuntimeScenarioCalibration.effectiveMultiplier(factory: 1.7, factor: 0.8) - 1.445) < 0.0001, "E4校准：下沿夹紧")
+	// 变异：去掉夹紧时 0.65*1.25=0.8125 ≠ 0.78
+	expect(RuntimeScenarioCalibration.effectiveMultiplier(factory: 0.65, factor: 1.25) != 0.65 * 1.25, "E4校准变异：夹紧必须生效")
+
+	// 文案
+	expect(RuntimeScenarioCalibration.calibrationNote(factor: nil).isEmpty, "E4校准：nil 无文案")
+	expect(RuntimeScenarioCalibration.calibrationNote(factor: 1.0).isEmpty, "E4校准：×1.00 无文案")
+	expect(RuntimeScenarioCalibration.calibrationNote(factor: 1.12).contains("1.12"), "E4校准：有因子出口径")
 }
 
 // MARK: - 电量计跳变

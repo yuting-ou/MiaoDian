@@ -465,7 +465,12 @@ struct BatteryPopoverView: View {
 		if options.contains(.runtimeScenarios), monitor.snapshot.powerSource == .battery,
 			let estimate = monitor.drainEstimate, estimate.percentPerHour > 0,
 			monitor.snapshot.stateOfChargePercent != nil {
-			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118)))
+			// 校准口径行会多占一行，配平高度给余量（不裁内容，只影响双列配平）
+			let calNote = RuntimeScenarioCalibration.calibrationNote(
+				factor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory)
+			)
+			let noteExtra: CGFloat = calNote.isEmpty ? 0 : 16
+			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118 + noteExtra)))
 		}
 		if options.contains(.significantEnergyApps) {
 			let energyExtra = weeklyAppEnergy.isEmpty ? 0 : 22 + 20 * CGFloat(weeklyAppEnergy.count)
@@ -961,6 +966,7 @@ struct BatteryPopoverView: View {
 			RuntimeScenarioSection(
 				estimate: estimate,
 				socPercent: soc,
+				calibrationFactor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory),
 				isCollapsed: isCardCollapsed(.runtimeScenarios),
 				onToggle: { toggleCard(.runtimeScenarios) }
 			)
