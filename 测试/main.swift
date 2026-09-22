@@ -804,25 +804,29 @@ do {
 
 // MARK: - 睡眠掉电提醒判定
 
-// 锁死“醒来 10 分钟内重启不重发”：同一 wakeDate 已报过就拦住
+// 锁死「同一 wakeDate 已报过就拦住」；新鲜度窗 8h（免打扰补发，v2.9.1）
 do {
 	let sleepStart = t0
 	let wake = t0.addingTimeInterval(2 * 3600)
 	let heavy = SleepDrainRecord(sleepDate: sleepStart, wakeDate: wake, startPercent: 80, endPercent: 72)
 	let now = wake.addingTimeInterval(60)
-	
+
 	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: nil), "睡眠掉电：刚醒来的异常记录应提醒")
 	expect(!BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: wake), "睡眠掉电：同一觉已报过，重启不重发")
-	
+
 	let otherWake = wake.addingTimeInterval(86400)
 	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: otherWake), "睡眠掉电：别的觉的旧标记不误伤新记录")
-	
-	let staleNow = wake.addingTimeInterval(30 * 60)
-	expect(!BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: staleNow, lastAlertedWakeDate: nil), "睡眠掉电：醒来超 10 分钟的旧记录不提醒")
-	
+
+	// 免打扰补发：醒来 2 小时后仍未投递，仍在新鲜度窗内允许补发（v2.9.1）
+	let retryNow = wake.addingTimeInterval(2 * 3600)
+	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: retryNow, lastAlertedWakeDate: nil), "睡眠掉电：免打扰后 2h 仍可补发（8h 窗）")
+
+	let staleNow = wake.addingTimeInterval(9 * 3600)
+	expect(!BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: staleNow, lastAlertedWakeDate: nil), "睡眠掉电：醒来超 8 小时的旧记录不提醒")
+
 	let mild = SleepDrainRecord(sleepDate: sleepStart, wakeDate: wake, startPercent: 80, endPercent: 78)
 	expect(!BatteryAlertController.shouldAlertSleepDrain(record: mild, now: now, lastAlertedWakeDate: nil), "睡眠掉电：只掉 2% 低于阈值不提醒")
-	
+
 	let shortSleep = SleepDrainRecord(sleepDate: wake.addingTimeInterval(-30 * 60), wakeDate: wake, startPercent: 80, endPercent: 70)
 	expect(!BatteryAlertController.shouldAlertSleepDrain(record: shortSleep, now: now, lastAlertedWakeDate: nil), "睡眠掉电：合盖不足一小时不提醒")
 }
@@ -3966,17 +3970,27 @@ do {
 // MARK: - v2.4.0 产品指引（C4 涓流 / C5 存放 / 驻留洞察 / H1 口径 / 周报驻留）
 
 do {
-	// C5 存放门控
+	// C5 存放门控（文案必须与 45...65 门控带一致，v2.9.1）
 	expectEqual(
 		StorageGuide.advice(socPercent: 90, isOnAC: true),
-		"若要长期存放，建议充到 50–60% 再拔电",
+		"若要长期存放，建议充到 45–65% 再拔电",
 		"存放：插电且≥80% 给存放建议"
 	)
 	expect(StorageGuide.advice(socPercent: 79, isOnAC: true) == nil, "存放：插电 79% 不打扰")
 	expectEqual(
 		StorageGuide.advice(socPercent: 55, isOnAC: false),
-		"当前电量适合长期存放（约 50–60%）",
+		"当前电量在存放建议带（45–65%）",
 		"存放：电池模式落在 45–65 带给正向确认"
+	)
+	expectEqual(
+		StorageGuide.advice(socPercent: 45, isOnAC: false),
+		"当前电量在存放建议带（45–65%）",
+		"存放：带下界 45% 文案与门控一致（不得写 50–60）"
+	)
+	expectEqual(
+		StorageGuide.advice(socPercent: 65, isOnAC: false),
+		"当前电量在存放建议带（45–65%）",
+		"存放：带上界 65% 文案与门控一致（不得写 50–60）"
 	)
 	expect(StorageGuide.advice(socPercent: 30, isOnAC: false) == nil, "存放：低电不瞎建议")
 	expect(StorageGuide.advice(socPercent: nil, isOnAC: true) == nil, "存放：SoC 缺失沉默")
@@ -4259,8 +4273,10 @@ do {
 	expect(cycleHit?.body.contains("820") == true, "H3：循环文案")
 	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 750, lastSeenCycles: 700) == nil, "H3：未跨档不告警")
 	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 850, lastSeenCycles: 820) == nil, "H3：同档内不重复")
-	expect(HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 1000, lastSeenCycles: 700)?.notificationID.contains("1000") == true,
-		   "H3：优先报更高的档")
+	// v2.9.1：一跳跨多档报全，id 取最低档（800），正文点名全部跨过的档
+	let multi = HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 1100, lastSeenCycles: 700)
+	expect(multi?.notificationID.contains("800") == true, "H3：跨多档 id 取最低档以便补发")
+	expect(multi?.body.contains("800") == true && multi?.body.contains("1000") == true, "H3：跨多档正文报全（800 与 1000）")
 }
 
 // MARK: - E3 EnergyAggregation 能耗聚合
@@ -4344,6 +4360,73 @@ do {
 	expectEqual(keys.last, "2026-08-11", "dayKeys：回推连续日键")
 	let asc = DwellTracking.dayKeys(endingOn: anchor, count: 2, calendar: cal, ascending: true)
 	expectEqual(asc.first, "2026-08-12", "dayKeys：ascending 旧→新")
+}
+
+// MARK: - v2.9.1 信任补丁（历史完整性 / 投递诚实 / 口径）
+
+do {
+	// A1 封顶不越界：超长档 + 今天落中部（todayIndex >= maxDays 且 < excess）旧实现 trap
+	var longHistory: [DailyUsage] = []
+	for i in 1...200 {
+		longHistory.append(DailyUsage(dayKey: String(format: "2026-01-%03d", i)))
+	}
+	// 今天落在索引 100（maxDays=90 → 100 >= 90 且 100 < excess=111）→ 旧 removeSubrange 越界
+	let mid = BatteryHistoryRecorder.insertingDailyUsage(longHistory, dayKey: "2026-04-11", maxDays: 90)
+	expect(mid.contains { $0.dayKey == "2026-04-11" }, "v2.9.1封顶：中部今天保住（旧实现 trap）")
+	expectEqual(mid.count, 90, "v2.9.1封顶：数量夹到 maxDays")
+	expect(mid.allSatisfy { day in mid.filter { $0.dayKey == day.dayKey }.count == 1 }, "v2.9.1封顶：无重复日键")
+	expect(mid == mid.sorted { $0.dayKey < $1.dayKey }, "v2.9.1封顶：保持升序")
+
+	// A2 空档不得当有效历史（isEmptyHistory 纯判定）
+	let emptyArch = BatteryHistoryArchive(
+		exportedAt: Date(), sessions: [], healthSamples: [], dailyHistory: [],
+		lastSleepDrain: nil, sleepDrainHistory: [], chargerProfiles: [], socSamples: [],
+		powerEvents: [], chargerPowerStats: [:], hourlyDrainStats: HourlyDrainStats(),
+		appEnergy: [], socJumpEvents: []
+	)
+	expect(emptyArch.isEmptyHistory, "v2.9.1空档：全零字段判空")
+	expect(!BatteryHistoryArchive(
+		exportedAt: Date(),
+		sessions: [ChargeSession(startDate: Date(), endDate: Date(), startPercent: 1, endPercent: 2, peakInputW: 0)],
+		healthSamples: [], dailyHistory: [], lastSleepDrain: nil, sleepDrainHistory: nil,
+		chargerProfiles: [], socSamples: [], powerEvents: [], chargerPowerStats: [:],
+		hourlyDrainStats: HourlyDrainStats(), appEnergy: [], socJumpEvents: []
+	).isEmptyHistory, "v2.9.1空档：有会话不算空")
+
+	// A3 导入回执含睡眠掉电史（makeArchive 已补传）
+	let sleepRec = SleepDrainRecord(
+		sleepDate: Date().addingTimeInterval(-480 * 60),
+		wakeDate: Date(),
+		startPercent: 80,
+		endPercent: 70,
+		culpritNames: nil
+	)
+	let withSleep = BatteryHistoryArchive(
+		exportedAt: Date(), sessions: [], healthSamples: [], dailyHistory: [],
+		lastSleepDrain: sleepRec, sleepDrainHistory: [sleepRec], chargerProfiles: [],
+		socSamples: [], powerEvents: [], chargerPowerStats: [:],
+		hourlyDrainStats: HourlyDrainStats(), appEnergy: [], socJumpEvents: []
+	)
+	expect(!withSleep.isEmptyHistory, "v2.9.1空档：仅有睡眠史不算空")
+	expect(withSleep.importSummary.contains("睡眠掉电"), "v2.9.1回执：睡眠掉电入回执")
+
+	// C1 掉电窗口口径：真实跨度，不得把 10 分钟说成一小时
+	var shortSpan: [(date: Date, percent: Int)] = []
+	for i in 0...5 {
+		shortSpan.append((Date(timeIntervalSince1970: 1_000_000 + Double(i) * 120), 100 - i * 2))
+	}
+	if let r = DrainRateEstimator.adaptivePercentPerHour(samples: shortSpan) {
+		expect(r.windowSeconds < 3600, "v2.9.1口径：短跨度不得标满窗一小时（实际 \(r.windowSeconds)s）")
+		expect(r.windowSeconds > 500 && r.windowSeconds < 700, "v2.9.1口径：窗口≈真实跨度 10 分钟")
+	} else {
+		expect(false, "v2.9.1口径：10 分钟掉电应有估算")
+	}
+
+	// C2 drainWindowText 跟 windowSeconds
+	expect(
+		BatteryAlertController.drainWindowText(DrainRateEstimate(percentPerHour: 12, estimatedMinutesRemaining: nil, windowSeconds: 600)) != "最近一小时",
+		"v2.9.1口径：600s 窗不得写最近一小时"
+	)
 }
 
 // MARK: - 汇总

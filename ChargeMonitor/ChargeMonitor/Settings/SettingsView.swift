@@ -710,6 +710,11 @@ struct SettingsView: View {
 			showArchiveAlert(title: "无法解析该存档", body: "文件可能已损坏，或来自更高版本的妙电。")
 			return
 		}
+		// 空/残档不覆盖：先挡再问，避免「导入完成，存档为空」把现网历史清光
+		guard !archive.isEmptyHistory else {
+			showArchiveAlert(title: "存档为空", body: "该文件没有任何历史数据，已取消导入，当前数据未被改动。")
+			return
+		}
 
 		let alert = NSAlert()
 		alert.messageText = "导入历史存档？"

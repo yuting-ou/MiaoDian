@@ -40,7 +40,9 @@ struct BatteryReportBuilder {
 			sections.append(contentsOf: lines)
 		}
 		
-		if let charger = chargerProfiles.first(where: { $0.key == currentChargerKey }) {
+		// 别名感知查找：降档归并后 raw 键可能只在 aliases 里，直接 first(where key==) 会整段消失
+		if let key = currentChargerKey,
+		   let charger = BatteryHistoryRecorder.chargerProfile(matching: key, in: chargerProfiles) {
 			sections.append("")
 			sections.append("【当前充电器】")
 			var line = charger.displayName
@@ -115,13 +117,15 @@ struct BatteryReportBuilder {
 		return sections.joined(separator: "\n") + "\n"
 	}
 	
-	// 报告里的体检行：分数 + 评语（与面板同一套算法）
+	// 报告里的体检行：分数 + 评语（与面板同一套算法；驻留用「今天」而非 last）
 	private var checkupLine: String? {
+		let todayKey = UsageCalendarLayout.dayKey(Date(), calendar: .current)
+		let today = dailyHistory.last(where: { $0.dayKey == todayKey })
 		guard let checkup = BatteryCheckup.evaluate(
 			healthPercent: snapshot.healthPercent,
 			cycleCount: snapshot.cycleCount,
 			temperatureC: snapshot.temperatureC,
-			highSocDwellShare: dailyHistory.last?.highSocDwellShare
+			highSocDwellShare: today?.highSocDwellShare
 		) else { return nil }
 		return "\(checkup.score) 分  \(checkup.verdict)"
 	}

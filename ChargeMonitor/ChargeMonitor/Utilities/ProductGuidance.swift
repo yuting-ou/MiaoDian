@@ -9,10 +9,11 @@ nonisolated enum StorageGuide {
 	nonisolated static func advice(socPercent: Int?, isOnAC: Bool) -> String? {
 		guard let soc = socPercent, (0...100).contains(soc) else { return nil }
 		if isOnAC && soc >= 80 {
-			return "若要长期存放，建议充到 50–60% 再拔电"
+			return "若要长期存放，建议充到 45–65% 再拔电"
 		}
 		if !isOnAC, storedSOCRange.contains(soc) {
-			return "当前电量适合长期存放（约 50–60%）"
+			// 文案必须与门控带一致：45/65 落在带内就不能写成「约 50–60%」
+			return "当前电量在存放建议带（45–65%）"
 		}
 		return nil
 	}

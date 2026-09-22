@@ -132,7 +132,7 @@ nonisolated enum DisplayOption: String, CaseIterable, Identifiable, Codable, Sen
 		case .drainRate: return "按最近放电窗口的真实掉电算出（约一小时，负载突变时缩短）"
 		case .runtimeScenarios: return "轻度/视频/会议三种场景还能用多久"
 		case .sleepDrainReport: return "合盖睡眠期间掉了多少电"
-		case .significantEnergyApps: return "当前耗电大户与本周累计排行"
+		case .significantEnergyApps: return "当前耗电大户与近 7 日排行（面板打开时采样）"
 		case .bluetoothDevices: return "蓝牙耳机、鼠标、键盘等外设电量"
 		case .powerChart: return "最近 5 分钟整机功耗迷你曲线"
 		case .temperatureChart: return "最近 30 分钟电池温度曲线"

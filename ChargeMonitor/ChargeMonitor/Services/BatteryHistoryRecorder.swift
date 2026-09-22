@@ -554,14 +554,20 @@ final class BatteryHistoryRecorder: ObservableObject {
 		history.sort { $0.dayKey < $1.dayKey }
 		let excess = history.count - maxDays
 		guard excess > 0 else { return history }
-		let todayIndex = history.firstIndex { $0.dayKey == dayKey } ?? history.count
-		if todayIndex < excess {
-			// 今天在最旧端：保住今天，从它的后继起裁掉 excess 个
-			history.removeSubrange((todayIndex + 1)..<(todayIndex + 1 + excess))
-		} else {
-			history.removeFirst(excess)
+		// 封顶永不失「今天」：从最旧起删掉 excess 个非今天的天。
+		// 不按下标切片——超长档 + 今天落中部时 (todayIndex+1+excess) 会越界 trap
+		// （restore 不封顶的 dailyHistory 跨时区西行即可触发）。
+		var toRemove = excess
+		var kept: [DailyUsage] = []
+		kept.reserveCapacity(maxDays)
+		for day in history {
+			if day.dayKey != dayKey, toRemove > 0 {
+				toRemove -= 1
+				continue
+			}
+			kept.append(day)
 		}
-		return history
+		return kept
 	}
 
 	// 一帧快照累计进当日用电：电池模式掉的计入用电，充电时涨的计入充入；
@@ -758,11 +764,15 @@ final class BatteryHistoryRecorder: ObservableObject {
 	
 	@objc private func handleWillSleep() {
 		appendPowerEvent(.sleep)
+		// 醒后未及结算又合盖：先用当前电量把上一觉结掉，否则整夜掉电静默丢失
+		if pendingWake != nil, let percent = lastPercentForDaily {
+			settlePendingSleepDrain(endPercent: percent)
+		}
 		guard let percent = lastPercentForDaily else { return }
 		sleepStart = (Date(), percent)
 		pendingWake = nil
 	}
-	
+
 	@objc private func handleDidWake() {
 		appendPowerEvent(.wake)
 		guard let start = sleepStart else { return }
@@ -770,15 +780,20 @@ final class BatteryHistoryRecorder: ObservableObject {
 		// 醒来瞬间的快照可能还是睡前的旧值，挂起等下一次刷新再结算
 		pendingWake = (start.date, start.percent, Date())
 	}
-	
+
 	private func finalizeSleepDrainIfNeeded(_ snapshot: BatterySnapshot) {
-		guard let pending = pendingWake, let percent = snapshot.stateOfChargePercent else { return }
+		guard let percent = snapshot.stateOfChargePercent else { return }
+		settlePendingSleepDrain(endPercent: percent)
+	}
+
+	private func settlePendingSleepDrain(endPercent: Int) {
+		guard let pending = pendingWake else { return }
 		pendingWake = nil
 		guard let record = Self.settledSleepDrain(
 			sleepDate: pending.sleepDate,
 			startPercent: pending.startPercent,
 			wakeDate: pending.wakeDate,
-			endPercent: percent
+			endPercent: endPercent
 		) else { return }
 		lastSleepDrain = record
 		save(record, key: Self.sleepDrainKey)
@@ -1200,6 +1215,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 			healthSamples: healthSamples,
 			dailyHistory: dailyHistory,
 			lastSleepDrain: lastSleepDrain,
+			sleepDrainHistory: sleepDrainHistory,
 			chargerProfiles: chargerProfiles,
 			socSamples: socSamples,
 			powerEvents: powerEvents,

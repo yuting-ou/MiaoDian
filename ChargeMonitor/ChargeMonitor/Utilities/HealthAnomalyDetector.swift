@@ -45,7 +45,7 @@ nonisolated enum HealthAnomalyDetector {
 		)
 	}
 
-	/// 循环数达到里程碑（只报 lastSeen 与 cycle 之间跨过的档）
+	/// 循环数达到里程碑（只报 lastSeen 与 cycle 之间跨过的档；一跳跨多档要报全）
 	nonisolated static func cycleMilestoneFinding(
 		cycleCount: Int?,
 		lastSeenCycles: Int,
@@ -53,15 +53,16 @@ nonisolated enum HealthAnomalyDetector {
 	) -> Finding? {
 		guard let cycle = cycleCount, cycle > 0, lastSeenCycles >= 0 else { return nil }
 		let crossed = milestones
-			.filter { $0 > 0 }
-			.sorted()
-			.last { lastSeenCycles < $0 && cycle >= $0 }
-		guard let crossed else { return nil }
+			.filter { $0 > 0 && lastSeenCycles < $0 && cycle >= $0 }
+			.sorted(by: >)
+		guard let lowest = crossed.last else { return nil }
+		let crossedList = crossed.map(String.init).joined(separator: "/")
+		let extra = crossed.count > 1 ? "（已跨过 \(crossedList)）" : ""
 		return Finding(
 			kind: .cycleMilestone,
-			notificationID: "cycle-milestone-\(crossed)",
-			title: "电池循环次数达到 \(crossed)",
-			body: "当前循环约 \(cycle) 次。达到设计循环寿命前健康度逐步下降属正常，可在面板对照健康趋势。"
+			notificationID: "cycle-milestone-\(lowest)",
+			title: "电池循环次数达到 \(lowest)",
+			body: "当前循环约 \(cycle) 次\(extra)。达到设计循环寿命前健康度逐步下降属正常，可在面板对照健康趋势。"
 		)
 	}
 }

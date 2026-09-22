@@ -27,6 +27,22 @@ nonisolated struct BatteryHistoryArchive: Codable {
 	var batterySerialLastSeen: String?
 	var batteryReplacedAt: Date?
 
+	// 空/残档不得覆盖现网历史：全零字段的 JSON 也能 decode 成功，
+	// 若照单全收会把用户电池传记清空，回执还说「存档为空」——双重说谎
+	var isEmptyHistory: Bool {
+		sessions.isEmpty
+			&& healthSamples.isEmpty
+			&& dailyHistory.isEmpty
+			&& lastSleepDrain == nil
+			&& (sleepDrainHistory ?? []).isEmpty
+			&& chargerProfiles.isEmpty
+			&& socSamples.isEmpty
+			&& powerEvents.isEmpty
+			&& appEnergy.isEmpty
+			&& socJumpEvents.isEmpty
+			&& chargerPowerStats.isEmpty
+	}
+
 	// 导入成功的回执（纯函数，供单测）：恢复后面板数字会突变，
 	// 必须说清"是导入生效"而不是"应用出 bug"——成功也值得一次开口
 	var importSummary: String {
@@ -35,6 +51,9 @@ nonisolated struct BatteryHistoryArchive: Codable {
 		if !healthSamples.isEmpty { parts.append("健康样本 \(healthSamples.count) 条") }
 		if !dailyHistory.isEmpty { parts.append("用电天数 \(dailyHistory.count) 天") }
 		if !chargerProfiles.isEmpty { parts.append("充电器 \(chargerProfiles.count) 只") }
+		if let sleepDrainHistory, !sleepDrainHistory.isEmpty {
+			parts.append("睡眠掉电 \(sleepDrainHistory.count) 条")
+		}
 		guard !parts.isEmpty else { return "存档为空，未导入任何数据" }
 		return "已导入：" + parts.joined(separator: "、")
 	}

@@ -50,9 +50,10 @@ struct SignificantEnergySection: View {
 				}
 			}
 
-			// 本周累计：把"现在谁在耗电"延伸成"这周到底谁最费电"
+			// 近 7 日累计：把"现在谁在耗电"延伸成"最近谁最费电"；
+			// 只在面板打开时采样，标题必须写明，不能冒充全周归因
 			if !weeklyTop.isEmpty {
-				PopoverSectionHeader("本周累计")
+				PopoverSectionHeader("近 7 日（面板打开时采样）")
 					.padding(.top, 4)
 					.padding(.bottom, 2)
 

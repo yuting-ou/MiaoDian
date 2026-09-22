@@ -59,7 +59,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	nonisolated private static let sleepDrainAlertMinPercent = 5
 	nonisolated private static let sleepDrainAlertMinPerHour = 2.0
 	// 只对醒来后这段时间内的记录报警，启动时从磁盘捧出来的旧记录不算
-	nonisolated private static let sleepDrainAlertFreshnessSeconds: TimeInterval = 10 * 60
+	nonisolated private static let sleepDrainAlertFreshnessSeconds: TimeInterval = 8 * 3600
 	// 已报过的那一觉（按 wakeDate 记）：醒来 10 分钟内重启应用不能把同一条通知再发一遍
 	private static let sleepDrainAlertedKey = "lastSleepDrainAlertWakeDate"
 	// 低电预判：按当前掉速距警示线不足 45 分钟就提前喊一声
@@ -186,6 +186,10 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		evaluateFullForecast(snapshot)
 		evaluateHealthMilestone(snapshot)
 		evaluateHealthAnomalies(snapshot: snapshot)
+		// 同一觉重试：免打扰吞掉后靠这里补发（wakeDate 去重 + 新鲜度窗防轰炸）
+		if let pendingSleep = historyRecorder?.lastSleepDrain {
+			evaluateSleepDrain(pendingSleep)
+		}
 		checkWeeklyDigest()
 		checkMonthlyDigest()
 	}
@@ -495,20 +499,24 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			if health > stored { defaults.set(health, forKey: Self.healthMilestoneKey) }
 			return
 		}
-		defaults.set(health, forKey: Self.healthMilestoneKey)
+		// 一跳跨多档要报全：92→81 必须交代 90/85/80，不能只报最高档后把其余档静默吞掉
+		let crossed = Self.healthMilestones.filter { stored > $0 && health <= $0 }.sorted(by: >)
+		guard let lowest = crossed.last else { return }
 
-		guard alertEnabled(.alertHealthMilestone) else { return }
-		guard let crossed = Self.healthMilestones.first(where: { stored > $0 && health <= $0 }) else { return }
-		let suffix = crossed == 80 ? "，已到官方建议检测电池的参考线" : "，属正常老化，留意即可"
-		// 里程碑是单向永久标记（defaults.set 已先行）：免打扰被吞的话这一档提醒永久丢失——
-		// 但重发也无从谈起（阈值穿越是一次性事件），所以这里要求投递失败时把标记回退，
-		// 让免打扰结束后下一轮若仍在阈值下方可补发（v1.19.1）
-		if !send(
-			id: "health-milestone-\(crossed)",
-			title: "电池健康度跌破 \(crossed)%",
-			body: "当前健康度 \(health)%" + suffix
+		guard alertEnabled(.alertHealthMilestone) else {
+			// 开关关着也要推进基准，避免打开后补报陈年穿越
+			defaults.set(health, forKey: Self.healthMilestoneKey)
+			return
+		}
+		let crossedList = crossed.map(String.init).joined(separator: "/")
+		let suffix = lowest == 80 ? "，已到官方建议检测电池的参考线" : "，属正常老化，留意即可"
+		// 投递失败（免打扰）不落基准，下一轮仍可补发（v1.19.1）
+		if send(
+			id: "health-milestone-\(lowest)",
+			title: "电池健康度跌破 \(lowest)%",
+			body: "当前健康度 \(health)%（已跌破 \(crossedList)%）" + suffix
 		) {
-			defaults.set(stored, forKey: Self.healthMilestoneKey)
+			defaults.set(health, forKey: Self.healthMilestoneKey)
 		}
 	}
 
@@ -527,7 +535,8 @@ final class BatteryAlertController: NSObject, ObservableObject {
 
 		// 30 天降幅：同一天只提醒一次
 		if let finding = HealthAnomalyDetector.healthDeclineFinding(
-			samples: historyRecorder?.healthSamples ?? [],
+			// 换电池边界过滤后才比：新旧电芯尾/头相连会拼出假骤降
+			samples: historyRecorder?.trendHealthSamples ?? [],
 			thresholdPoints: config.healthDeclineThresholdPoints,
 			windowDays: HealthAnomalyDetector.defaultDeclineWindowDays,
 			now: Date()
@@ -601,9 +610,8 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		if let owners = record.culpritNames, !owners.isEmpty {
 			body += "\n正在阻止睡眠：\(owners.joined(separator: "、"))"
 		}
-		// 先记账再发（针对"投递失败不重复轰炸"）：系统通知中心 add 失败仍算已投递、标记照落。
-		// v1.19.1 起 send 的 false 只表示"免打扰静默"——这种不记账，新鲜度窗口内免打扰结束
-		// 后补发一次（shouldAlertSleepDrain 的去重保证不轰炸）
+		// 投递失败（免打扰）不记账；evaluate() 周期会带着同一觉重试，
+		// 新鲜度窗（8h）内免打扰结束后补发一次，wakeDate 去重保证不轰炸
 		let delivered = send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
 		if delivered {
 			defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
@@ -634,12 +642,14 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			now: now,
 			cooldown: Self.gaugeCalibrationCooldownSeconds
 		) else { return }
-		defaults.set(now, forKey: Self.gaugeCalibrationAlertKey)
-		send(
+		// 投递成功才进冷却——免打扰吞掉时不能空转 30 天
+		if send(
 			id: "gauge-calibration",
 			title: "电量计可能失准",
 			body: "最近 30 天记录到 \(count) 次电量跳变（电量突然变化 2% 以上）。建议做一次完整的充放循环，帮电量计重新校准"
-		)
+		) {
+			defaults.set(now, forKey: Self.gaugeCalibrationAlertKey)
+		}
 	}
 
 	// 周报/月报发送许可（纯函数，供单测）：上次发送早于本次到点时间才发。
@@ -668,8 +678,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			return
 		}
 		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
-		defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
-		
+
 		let weekStart = due.addingTimeInterval(-7 * 86400)
 		let sessionCount = recorder.recentSessions.filter { $0.startDate >= weekStart }.count
 		let body = Self.weeklyDigestBody(
@@ -682,8 +691,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			),
 			due: due
 		)
-		guard !body.isEmpty else { return }
-		send(id: "weekly-digest", title: "本周电池小结", body: body)
+		// 无内容也记账：本期确实没什么可说，别让 digestSendAllowed 每轮空转
+		guard !body.isEmpty else {
+			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
+			return
+		}
+		// 投递成功才记账——免打扰吞掉时保留 lastSent，下一轮仍可补发本期
+		if send(id: "weekly-digest", title: "本周电池小结", body: body) {
+			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
+		}
 	}
 	
 	// 最近一个已到点的”周日 20:00”；周日 20 点前返回上周的
@@ -741,7 +757,6 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			return
 		}
 		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
-		defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
 
 		let body = Self.monthlyDigestBody(
 			history: recorder.dailyHistory,
@@ -749,8 +764,14 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			healthSamples: recorder.healthSamples,
 			due: due
 		)
-		guard !body.isEmpty else { return }
-		send(id: "monthly-digest", title: "上月电池小结", body: body)
+		guard !body.isEmpty else {
+			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+			return
+		}
+		// 投递成功才记账——免打扰吞掉时下一轮仍可补发本期
+		if send(id: "monthly-digest", title: "上月电池小结", body: body) {
+			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+		}
 	}
 
 	// 最近一个已到点的"本月 1 号 09:00"；本月 1 号 9 点前返回上月的

@@ -126,10 +126,11 @@ struct DrainRateEstimator {
 			if abs(recentRate - fullRate) >= threshold {
 				return (recentRate, recentSpanUsed)
 			}
-			return (fullRate, fullWindow)
+			// 返回真实跨度而非名义满窗：刚拔电 10 分钟不得说「最近一小时」
+			return (fullRate, fullSpan)
 		}
 		if let fullRate {
-			return (fullRate, fullWindow)
+			return (fullRate, fullSpan)
 		}
 		if let recentRate {
 			return (recentRate, recentSpanUsed)
