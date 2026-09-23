@@ -2150,6 +2150,37 @@ do {
 	}
 }
 
+// MARK: - 校准暂停要说明（v2.9.8 细节打磨）
+
+// v2.9.5 起强度校准「同口径样本不足就不出结论」，卡片底部那行会静默消失两三周；
+// 撤结论是对的，但什么都不说会让用户以为功能坏了。这里锁定「什么时候该说、说什么、说多长」。
+do {
+	func row(_ key: String, drained: Int, gap: Double?) -> DailyUsage {
+		DailyUsage(dayKey: key, drainedPercent: drained, chargedPercent: 0, batterySeconds: 4 * 3600, attributionGapSeconds: gap)
+	}
+	var allNew: [DailyUsage] = []
+	for i in 1...10 { allNew.append(row(String(format: "2026-09-%02d", i), drained: 20, gap: 180)) }
+	expectEqual(RuntimeScenarioCalibration.pendingSameBucketDays(history: allNew), nil, "校准暂停说明：同口径样本够→不解释（反向确认）")
+	expectEqual(RuntimeScenarioCalibration.calibrationNote(factor: 1.0, pendingDays: nil), "", "校准暂停说明：因子持平仍不刷屏")
+
+	var mixed: [DailyUsage] = []
+	for i in 1...5 { mixed.append(row(String(format: "2026-09-%02d", i), drained: 20, gap: nil)) }
+	for i in 6...10 { mixed.append(row(String(format: "2026-09-%02d", i), drained: 20, gap: 180)) }
+	expectEqual(RuntimeScenarioCalibration.pendingSameBucketDays(history: mixed), 3, "校准暂停说明：缺口确由分桶造成→给还差几天（变异：不设 raw 门槛即误报）")
+	expectEqual(RuntimeScenarioCalibration.calibrationNote(factor: nil, pendingDays: 3),
+			   "强度校准待同口径记录（还需 3 天）", "校准暂停说明：文案内容与天数")
+	// 载体预算：这句话进的是既有槽位（卡片按 noteExtra 配平 16pt），不许比现有最长口径句更占地方
+	let longest = RuntimeScenarioCalibration.calibrationNote(factor: 0.8).count
+	expect(RuntimeScenarioCalibration.calibrationNote(factor: nil, pendingDays: 12).count <= longest,
+		   "校准暂停说明：长度不超过既有最长口径句，不会多撑一行")
+
+	var few: [DailyUsage] = []
+	for i in 1...4 { few.append(row(String(format: "2026-09-%02d", i), drained: 20, gap: 180)) }
+	expectEqual(RuntimeScenarioCalibration.pendingSameBucketDays(history: few), nil,
+			   "校准暂停说明：本来就凑不够样本（不是升级的锅）→ 不解释（变异：去掉 raw 门槛即红）")
+	expectEqual(RuntimeScenarioCalibration.calibrationNote(factor: nil, pendingDays: nil), "", "校准暂停说明：无暂停原因时保持沉默")
+}
+
 // MARK: - 强度校准·分子分母同源
 
 // v2.9.2 把整夜电池时长补进 batterySeconds 后，"醒着掉电/电池时长"这个比值的分母

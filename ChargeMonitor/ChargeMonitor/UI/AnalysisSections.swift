@@ -177,6 +177,7 @@ struct RuntimeScenarioSection: View {
 	let estimate: DrainRateEstimate
 	let socPercent: Int
 	let calibrationFactor: Double?
+	let calibrationPendingDays: Int?
 	let isCollapsed: Bool
 	let onToggle: () -> Void
 
@@ -213,7 +214,7 @@ struct RuntimeScenarioSection: View {
 					.padding(.top, 6)
 				}
 
-				let note = RuntimeScenarioCalibration.calibrationNote(factor: calibrationFactor)
+				let note = RuntimeScenarioCalibration.calibrationNote(factor: calibrationFactor, pendingDays: calibrationPendingDays)
 				if !note.isEmpty {
 					Text(note)
 						.font(.system(size: 9))

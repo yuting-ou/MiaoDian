@@ -466,8 +466,10 @@ struct BatteryPopoverView: View {
 			let estimate = monitor.drainEstimate, estimate.percentPerHour > 0,
 			monitor.snapshot.stateOfChargePercent != nil {
 			// 校准口径行会多占一行，配平高度给余量（不裁内容，只影响双列配平）
+			let calPending = RuntimeScenarioCalibration.pendingSameBucketDays(history: historyRecorder.dailyHistory)
 			let calNote = RuntimeScenarioCalibration.calibrationNote(
-				factor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory)
+				factor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory),
+				pendingDays: calPending
 			)
 			let noteExtra: CGFloat = calNote.isEmpty ? 0 : 16
 			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118 + noteExtra)))
@@ -967,6 +969,7 @@ struct BatteryPopoverView: View {
 				estimate: estimate,
 				socPercent: soc,
 				calibrationFactor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory),
+				calibrationPendingDays: RuntimeScenarioCalibration.pendingSameBucketDays(history: historyRecorder.dailyHistory),
 				isCollapsed: isCardCollapsed(.runtimeScenarios),
 				onToggle: { toggleCard(.runtimeScenarios) }
 			)

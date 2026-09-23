@@ -80,9 +80,27 @@ nonisolated enum RuntimeScenarioCalibration {
 		return min(max(scaled, lo), hi)
 	}
 
+	/// 同口径样本还差几天才恢复强度校准；只在"缺口的确由分桶造成"时给数（否则本来就
+	/// 凑不够样本，不是升级的锅，不必解释）。给面板那句"为什么这行没了"用。
+	nonisolated static func pendingSameBucketDays(
+		history: [DailyUsage],
+		recentCount: Int = 3,
+		baselineMin: Int = 5
+	) -> Int? {
+		let required = recentCount + baselineMin
+		let comparable = comparableSamples(history: history).count
+		guard comparable < required else { return nil }
+		guard history.compactMap(dayIntensity).count >= required else { return nil }
+		return required - comparable
+	}
+
 	/// 卡片底部口径句；无因子则空（不刷屏）。
 	/// 显示的是强度因子，不是每个场景夹紧后的倍率——避免用户以为 ×1.25 就是各场景系数。
-	nonisolated static func calibrationNote(factor: Double?) -> String {
+	/// 因子因同口径记录不足而暂停时给一句"还差几天"：撤结论不该让用户以为功能坏了。
+	nonisolated static func calibrationNote(factor: Double?, pendingDays: Int? = nil) -> String {
+		if factor == nil, let pendingDays, pendingDays > 0 {
+			return String(format: "强度校准待同口径记录（还需 %d 天）", pendingDays)
+		}
 		guard let factor, abs(factor - 1.0) >= 0.02 else { return "" }
 		return String(format: "已按本机近期用电强度微调（强度 ×%.2f，场景系数已夹紧）", factor)
 	}
