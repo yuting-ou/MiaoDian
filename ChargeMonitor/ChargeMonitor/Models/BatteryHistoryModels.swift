@@ -78,40 +78,61 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	// 比值都要先减掉这一段，否则跨升级日会出现同一个人不同强度的假象。
 	// 可选 + 旧档缺键=nil（旧行的 batterySeconds 本就不含睡眠，减法自动退化为原值）
 	var sleepBatterySeconds: Double?
+	// 睡眠段补记里的「插电」秒数（v2.9.9）：sleepBatterySeconds 只管电池那半边，
+	// 插电那半边先前无从识别——插电占比要还原「醒着口径」就得两头都能减回去。
+	// 同样可选 + 缺键=nil，旧行退化为原值。
+	var sleepACSeconds: Double?
 	// 建行时生效的归因窗口秒数（v2.9.5）：窗口的覆盖面会变（v2.9.4 把帧路径的秒数
 	// 从 30 秒小帽放宽到与掉电同窗），旧行的「醒着秒数」因此系统性偏小、算出的强度
 	// 偏高。凡跨天比较强度的地方必须按此键同桶，否则升级日会出现假降幅。
 	// 可选 + 旧档缺键=nil（nil 自成一桶：旧机器彼此仍可比，不与新口径混用）
 	var attributionGapSeconds: Double?
 
-	// 插电时长占比；样本不足半小时不给结论，免得刚开机就下定论
+	// 醒着的电池供电秒数：v2.9.2 把整夜补进了 batterySeconds，凡「醒着」语义的比值都要减回去
+	var awakeBatterySeconds: Double {
+		max(0, batterySeconds - min(batterySeconds, sleepBatterySeconds ?? 0))
+	}
+	// 醒着的插电秒数（同上一条，只是那半边落在插电）
+	var awakeACSeconds: Double {
+		max(0, acSeconds - min(acSeconds, sleepACSeconds ?? 0))
+	}
+	// 醒着被观测总时长；旧行两个睡眠键=nil → 退化为 acSeconds + batterySeconds
+	var awakeObservationSeconds: Double { awakeACSeconds + awakeBatterySeconds }
+	// 被观测总时长（含睡眠补记）：判「这一天到底有没有样本」用它，判「醒着多久」用上一条
+	var observationSeconds: Double { acSeconds + batterySeconds }
+
+	// 插电时长占比（醒着口径）；醒着样本不足半小时不给结论，免得刚开机就下定论。
+	// v2.9.9 从「含睡眠补记」改回「只算醒着」：夜间合盖在电池上睡 6 小时，会让同一个
+	// 人同一天的读数从 45% 掉到 20%（本机真实档案实测），而全部旧档本就只记醒着帧——
+	// 含睡分母等于让新的一天和 56 天历史不可比。睡眠时长另有列可重算。
 	var acShare: Double? {
-		let total = acSeconds + batterySeconds
-		guard total >= 30 * 60 else { return nil }
-		return acSeconds / total
+		guard awakeObservationSeconds >= 30 * 60 else { return nil }
+		return awakeACSeconds / awakeObservationSeconds
 	}
 
-	// 高电量（80%+）驻留分钟数；与 acShare 同一采样量门槛
+	// 高电量（80%+）驻留分钟数；门槛看「有没有被观测到」，不看醒着口径——
+	// 驻留本身含整夜补记（应力与睡不睡无关），用醒着秒数当门会把整夜插电的日子判成无样本
 	var dwell80PlusMinutes: Int? {
-		guard acShare != nil else { return nil }
+		guard observationSeconds >= 30 * 60 else { return nil }
 		return Int((soc80to90Seconds + soc90to100Seconds) / 60)
 	}
 
-	// 高电量驻留占通电总时长的比例（0~1）；样本不足半小时不给结论
+	// 高电量驻留占被观测总时长的比例（0~1）；样本不足半小时不给结论。
+	// 这条与 acShare 分母不同是故意的：分子（驻留秒）本就含整夜补记，分母也必须含睡，
+	// 否则夜里停在 90% 的那几小时只进分子、会被算成虚高的应力占比。
 	var highSocDwellShare: Double? {
-		let total = acSeconds + batterySeconds
-		guard total >= 30 * 60 else { return nil }
-		return (soc80to90Seconds + soc90to100Seconds) / total
+		guard observationSeconds >= 30 * 60 else { return nil }
+		return (soc80to90Seconds + soc90to100Seconds) / observationSeconds
 	}
 
 	enum CodingKeys: String, CodingKey {
 		case dayKey, drainedPercent, chargedPercent, acSeconds, batterySeconds
-		case soc80to90Seconds, soc90to100Seconds, sleepBatterySeconds, attributionGapSeconds
+		case soc80to90Seconds, soc90to100Seconds, sleepBatterySeconds, sleepACSeconds, attributionGapSeconds
 	}
 
 	init(dayKey: String, drainedPercent: Int = 0, chargedPercent: Int = 0, acSeconds: Double = 0, batterySeconds: Double = 0,
 		 soc80to90Seconds: Double = 0, soc90to100Seconds: Double = 0,
-		 sleepBatterySeconds: Double? = nil, attributionGapSeconds: Double? = nil) {
+		 sleepBatterySeconds: Double? = nil, sleepACSeconds: Double? = nil, attributionGapSeconds: Double? = nil) {
 		self.dayKey = dayKey
 		self.drainedPercent = drainedPercent
 		self.chargedPercent = chargedPercent
@@ -120,6 +141,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.soc80to90Seconds = soc80to90Seconds
 		self.soc90to100Seconds = soc90to100Seconds
 		self.sleepBatterySeconds = sleepBatterySeconds
+		self.sleepACSeconds = sleepACSeconds
 		self.attributionGapSeconds = attributionGapSeconds
 	}
 
@@ -134,6 +156,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.soc80to90Seconds = try container.decodeIfPresent(Double.self, forKey: .soc80to90Seconds) ?? 0
 		self.soc90to100Seconds = try container.decodeIfPresent(Double.self, forKey: .soc90to100Seconds) ?? 0
 		self.sleepBatterySeconds = try container.decodeIfPresent(Double.self, forKey: .sleepBatterySeconds)
+		self.sleepACSeconds = try container.decodeIfPresent(Double.self, forKey: .sleepACSeconds)
 		self.attributionGapSeconds = try container.decodeIfPresent(Double.self, forKey: .attributionGapSeconds)
 	}
 }

@@ -14,9 +14,10 @@ nonisolated enum RuntimeScenarioCalibration {
 	/// 醒着的电池供电时长：分子（drainedPercent）只统计醒着时段的掉电，v2.9.2 起
 	/// batterySeconds 还含整夜睡眠，必须减回去才与分子同源。旧行无该字段=nil，
 	/// 减法自动退化为原值（旧口径 batterySeconds 本就不含睡眠）→ 跨升级日不跳变。
+	/// v2.9.9 起实现挪到 DailyUsage.awakeBatterySeconds——插电占比要用同一条减法，
+	/// 两处各写一遍迟早会漂，故这里只做转发。
 	nonisolated static func awakeBatterySeconds(_ day: DailyUsage) -> Double {
-		let slept = min(day.batterySeconds, day.sleepBatterySeconds ?? 0)
-		return max(0, day.batterySeconds - slept)
+		day.awakeBatterySeconds
 	}
 
 	/// 单日放电强度 %/小时；醒着不足半小时或无掉电则无样本（缺记录不冒充 0）

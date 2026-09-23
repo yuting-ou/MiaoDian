@@ -335,7 +335,7 @@ do {
 	expect(report.contains("已见 5 次"), "报告补全：充电器见过次数入报")
 	expect(report.contains("【上次睡眠掉电】"), "报告补全：含睡眠掉电区块")
 	expect(report.contains("【最近用电】"), "报告补全：含最近用电区块")
-	expect(report.contains("插电占比 75%"), "报告补全：插电占比入报")
+	expect(report.contains("醒着插电占比 75%"), "报告补全：插电占比入报（文案自带醒着口径）")
 	expect(report.contains("【电源事件】"), "报告补全：含电源事件区块")
 	expect(report.contains("充满电"), "报告补全：电源事件中文化")
 }
@@ -2292,39 +2292,120 @@ do {
 		now: csvNow,
 		calendar: calCSV
 	)
-	expect(csv.contains("# 充电记录"), "CSV导出：含充电记录小节")
-	expect(csv.contains("# 每日用电"), "CSV导出：含每日用电小节")
-	expect(csv.contains("# 能耗聚合"), "CSV导出：含能耗聚合小节")
-	expect(csv.contains("近7日,1,10,20,10.0,0.750"), "CSV导出：近7日聚合按样本日")
-	expect(csv.contains("# 健康度趋势"), "CSV导出：含健康度小节")
-	expect(csv.contains("# 24小时电量"), "CSV导出：含24小时电量小节")
-	expect(csv.contains("# 电源事件"), "CSV导出：含电源事件小节")
-	expect(csv.contains("40,45,60,5"), "CSV导出：充电记录整数/时长格式")
-	expect(csv.contains("2026-08-13,10,20,3600,1200,0.750,,"), "CSV导出：每日用电插电占比（旧档两列口径元数据留空）")
-	expect(csv.contains("接上电源"), "CSV导出：电源事件中文化")
-	expect(csv.contains("95,100"), "CSV导出：健康度与循环次数")
-	expect(csv.contains("80,否"), "CSV导出：24小时电量与充电状态")
-
-	// 插电占比：样本不足半小时（1800 秒）应留空
-	let short = DailyUsage(dayKey: "2026-08-13", drainedPercent: 1, chargedPercent: 1, acSeconds: 600, batterySeconds: 600)
-	let csv2 = BatteryDataExporter.csv(sessions: [], dailyHistory: [short], healthSamples: [], socSamples: [], powerEvents: [])
-	expect(csv2.contains("2026-08-13,1,1,600,600,,,"), "CSV导出：插电占比样本不足留空")
-	// 口径元数据随新档导出：用户重算强度时必须能减回睡眠段、知道当天生效的窗口
-	var stamped = DailyUsage(dayKey: "2026-08-14", drainedPercent: 5, chargedPercent: 0,
-										acSeconds: 3600, batterySeconds: 7200, sleepBatterySeconds: 1800, attributionGapSeconds: 180)
-	let csv3 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
 	// 整行相等而不是前缀 contains：contains 会同时放过 "...,1800," 与 "...,1800,0"（变异实测漏网过一次）
 	func csvRow(_ csv: String, startingWith prefix: String) -> String? {
 		csv.split(separator: "\n").first { $0.hasPrefix(prefix) }.map(String.init)
 	}
-	expectEqual(csvRow(csv3, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.333,1800,180",
-			   "CSV导出：睡眠电池秒与归因窗口秒随行落盘（变异：导出漏列即红）")
+	expect(csv.contains("# 充电记录"), "CSV导出：含充电记录小节")
+	expect(csv.contains("# 每日用电"), "CSV导出：含每日用电小节")
+	expect(csv.contains("# 能耗聚合"), "CSV导出：含能耗聚合小节")
+	expectEqual(csvRow(csv, startingWith: "近7日,"), "近7日,1,10,20,10.0,0.750", "CSV导出：近7日聚合按样本日（整行）")
+	expect(csv.contains("# 健康度趋势"), "CSV导出：含健康度小节")
+	expect(csv.contains("# 24小时电量"), "CSV导出：含24小时电量小节")
+	expect(csv.contains("# 电源事件"), "CSV导出：含电源事件小节")
+	expectEqual(csv.split(separator: "\n").filter { $0.hasPrefix("2026-08-13,") }.count, 1,
+			   "CSV导出：日期行前缀只命中每日用电表（反向确认：整行断言没在比错的表）")
+	expect(csv.contains("40,45,60,5"), "CSV导出：充电记录整数/时长格式")
+	// 旧档（无睡眠补记）：醒着口径＝原口径，值不变；新增的两列睡眠秒留空
+	expectEqual(csvRow(csv, startingWith: "2026-08-13,"), "2026-08-13,10,20,3600,1200,0.750,,,",
+			   "CSV导出：每日用电插电占比（旧档三口径元数据留空，占比与升级前同值）")
+	expect(csv.contains("接上电源"), "CSV导出：电源事件中文化")
+	expect(csv.contains("95,100"), "CSV导出：健康度与循环次数")
+	expect(csv.contains("80,否"), "CSV导出：24小时电量与充电状态")
+
+	// 插电占比：醒着样本不足半小时（1800 秒）应留空
+	let short = DailyUsage(dayKey: "2026-08-13", drainedPercent: 1, chargedPercent: 1, acSeconds: 600, batterySeconds: 600)
+	let csv2 = BatteryDataExporter.csv(sessions: [], dailyHistory: [short], healthSamples: [], socSamples: [], powerEvents: [])
+	expectEqual(csvRow(csv2, startingWith: "2026-08-13,"), "2026-08-13,1,1,600,600,,,,",
+			   "CSV导出：插电占比醒着样本不足留空（整行）")
+	// 口径元数据随新档导出：用户重算强度或还原醒着口径时必须能减回睡眠段、知道当天生效的窗口
+	var stamped = DailyUsage(dayKey: "2026-08-14", drainedPercent: 5, chargedPercent: 0,
+										acSeconds: 3600, batterySeconds: 7200, sleepBatterySeconds: 1800, attributionGapSeconds: 180)
+	let csv3 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
+	// 分母 7200-1800=5400（减睡眠电池段），分子 3600（无睡眠插电段）→ 0.400；旧口径会给 0.333
+	expectEqual(csvRow(csv3, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.400,1800,,180",
+			   "CSV导出：睡眠电池秒/睡眠插电秒/归因窗口秒随行落盘且占比走醒着口径（变异：漏列或含睡分母即红）")
 	stamped.attributionGapSeconds = nil
 	let csv4 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
-	expectEqual(csvRow(csv4, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.333,1800,",
+	expectEqual(csvRow(csv4, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.400,1800,,",
 			   "CSV导出：缺窗口标记的旧行末列留空，不猜口径（变异：写成 0 即红）")
-	let headerLine = csv3.split(separator: "\n").first(where: { $0.hasPrefix("日期,") }) ?? ""
-	expectEqual(headerLine.split(separator: ",").count, "2026-08-14,5,0,3600,7200,0.333,1800,180".split(separator: ",").count, "CSV导出：每日用电表头列数与数据行一致（变异：加列忘改表头即红）")
+	// 睡眠落在插电那头：分子也要减，否则插电党夜里插电睡会被算成"醒着也不插电"
+	stamped.sleepACSeconds = 900
+	let csv5 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
+	// 分子 3600-900=2700，分母 2700+5400=8100 → 0.333
+	expectEqual(csvRow(csv5, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.333,1800,900,",
+			   "CSV导出：睡眠插电秒随行落盘且参与占比分子（变异：分子漏减即红）")
+	let headerLine = csv3.split(separator: "\n").first(where: { $0.hasPrefix("日期,") }).map(String.init) ?? ""
+	expectEqual(headerLine, "日期,用电%,充入%,插电秒,电池秒,插电占比(醒着),睡眠电池秒,睡眠插电秒,归因窗口秒",
+			   "CSV导出：每日用电表头自带口径标注且列数与数据行一致（变异：漏标或错位即红）")
+	// 列数比对必须保留空列：split 默认会把 ",," 折掉，留空口径列正是错位高发处
+	expectEqual(headerLine.split(separator: ",", omittingEmptySubsequences: false).count,
+			   (csvRow(csv5, startingWith: "2026-08-14,") ?? "").split(separator: ",", omittingEmptySubsequences: false).count,
+			   "CSV导出：表头列数与数据行列数一致（含留空列）")
+}
+
+// MARK: - 插电占比醒着口径（v2.9.9：v2.9.2 睡眠补记的第三处未门读者）
+
+do {
+	// 本机真实档案实测：夜里在电池上睡 5h，含睡分母把当天读数从 44.6% 打到 20.4%
+	let wokeOnAC = DailyUsage(dayKey: "2026-09-23", drainedPercent: 20, chargedPercent: 0,
+							  acSeconds: 7200, batterySeconds: 21600, sleepBatterySeconds: 18000)
+	expectEqual(wokeOnAC.awakeACSeconds, 7200, "插电占比醒着口径：无睡眠插电段时分子原样")
+	expectEqual(wokeOnAC.awakeBatterySeconds, 3600, "插电占比醒着口径：分母减掉睡眠电池段")
+	expect(abs((wokeOnAC.acShare ?? 0) - 2.0 / 3.0) < 0.001, "插电占比醒着口径：7200/(7200+3600)（含睡分母会给 0.25）")
+
+	// 睡眠落在插电那头：分子也得减，否则"醒着全插电"被算成 75%
+	let acSleep = DailyUsage(dayKey: "2026-09-23", drainedPercent: 0, chargedPercent: 0,
+							 acSeconds: 10800, batterySeconds: 3600, sleepACSeconds: 3600)
+	expect(abs((acSleep.acShare ?? 0) - 2.0 / 3.0) < 0.001, "插电占比醒着口径：睡眠插电段从分子减掉（含睡口径会给 0.75）")
+
+	// §4.5 nil 语义：旧档两个睡眠键都缺=nil → 减法退化为原值，等于把 56 天历史按原口径读
+	let legacy = DailyUsage(dayKey: "2026-08-13", drainedPercent: 10, chargedPercent: 20, acSeconds: 3600, batterySeconds: 1200)
+	expect(abs((legacy.acShare ?? 0) - 0.75) < 0.001, "插电占比醒着口径：旧档无睡眠键→与升级前同值（不判废历史）")
+	expectEqual(legacy.awakeObservationSeconds, legacy.observationSeconds, "插电占比醒着口径：旧档醒着时长＝含睡时长")
+	expect(legacy.sleepACSeconds == nil, "插电占比醒着口径：旧档缺键解出 nil 而非 0（反向确认）")
+
+	// 门槛分家：醒着样本不足半小时 → 占比沉默；驻留按含睡观测时长仍算（应力与睡不睡无关）
+	let tinyAwake = DailyUsage(dayKey: "2026-09-23", drainedPercent: 0, chargedPercent: 0,
+							   acSeconds: 900, batterySeconds: 900, soc90to100Seconds: 600, sleepBatterySeconds: 900)
+	expect(tinyAwake.acShare == nil, "插电占比醒着口径：醒着不足半小时不结论（睡眠补记不凑样本）")
+	// 同一天醒着只有 15 分钟，但被观测总时长够半小时且整夜停在 90%+：驻留必须仍有结论
+	expectEqual(tinyAwake.dwell80PlusMinutes, 10, "高电量驻留门槛按被观测时长（含睡）：醒着不足半小时也给出驻留（变异：门槛改回醒着即红）")
+	let nightOnAC = DailyUsage(dayKey: "2026-09-23", drainedPercent: 0, chargedPercent: 0,
+							   acSeconds: 28800, batterySeconds: 0, soc90to100Seconds: 7200, sleepACSeconds: 21600)
+	expectEqual(nightOnAC.dwell80PlusMinutes, 120, "高电量驻留：整夜插电补记的日子照旧算样本")
+	// 分子含整夜驻留，分母也必须含睡：7200/28800=0.25；分母若改回醒着(7200)会算出 1.0
+	expect(abs((nightOnAC.highSocDwellShare ?? 0) - 0.25) < 0.001, "驻留占比：分母含睡与分子同口径（变异：分母改醒着即红）")
+	expect(abs((nightOnAC.acShare ?? 0) - 1.0) < 0.001, "插电占比醒着口径：整夜插电睡不改变\"醒着一直插电\"的结论")
+
+	// 有效样本日：只靠整夜补记凑出来的 0% 用电日不进日均分母（缺记录不冒充 0）
+	let sleepOnly = DailyUsage(dayKey: "2026-09-24", drainedPercent: 0, chargedPercent: 0,
+							   acSeconds: 0, batterySeconds: 21600, sleepBatterySeconds: 21600)
+	expect(!EnergyAggregation.hasEnergySample(sleepOnly), "有效样本：整夜补记的 0% 用电日不算样本日")
+	let awakeACDay = DailyUsage(dayKey: "2026-09-25", drainedPercent: 0, chargedPercent: 0, acSeconds: 7200, batterySeconds: 0)
+	expect(EnergyAggregation.hasEnergySample(awakeACDay), "有效样本：醒着插电够半小时照旧算（反向确认）")
+	let window = EnergyAggregation.aggregate(history: [wokeOnAC, sleepOnly, awakeACDay],
+											 dayKeys: ["2026-09-23", "2026-09-24", "2026-09-25"])
+	expectEqual(window.dataDays, 2, "E3 窗口：睡眠-only 日不进记录天数")
+	expect(abs((window.acShare ?? 0) - 0.8) < 0.001, "E3 窗口：插电占比走醒着口径（7200+7200 / 14400+3600）")
+
+	// 强度校准的醒着时长钉死绝对值：与插电占比共用一条减法，任一处漏减即红
+	// （注：早先写的"两边相等"是同义反复——两个同式恒等，抓不到任何变异）
+	expectEqual(RuntimeScenarioCalibration.awakeBatterySeconds(wokeOnAC), 3600,
+			   "口径同源：强度校准的醒着电池时长已减掉睡眠段（变异：漏减或另写一份即红）")
+
+	// 建行处补记睡眠插电秒：没有这一笔，醒着口径在真实数据里无从还原
+	let credited = BatteryHistoryRecorder.creditingSleepTime(
+		[DailyUsage(dayKey: "2026-09-23", acSeconds: 3600)],
+		parts: [SleepSegmentPart(dayKey: "2026-09-23", seconds: 7200, startPercent: 90, endPercent: 88)],
+		onAC: true
+	)
+	expectEqual(credited.first?.sleepACSeconds, 7200, "睡眠补记：插电那半边留痕（醒着口径能减回去）")
+	expectEqual(credited.first?.acSeconds, 10800, "睡眠补记：插电总时长照旧累加（不减原始记录）")
+
+	// 载体守卫：面板那行仍是一行放得下的长度（今日用电卡固定高度）
+	expect(String(format: "醒着 %.0f%% 的时间插着电源", 100.0).count <= 18,
+		   "载体守卫：插电占比行不长于卡片既有最长句")
 }
 
 // MARK: - 充电器质量诊断

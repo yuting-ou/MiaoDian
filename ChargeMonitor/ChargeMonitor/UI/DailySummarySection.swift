@@ -28,9 +28,9 @@ struct DailySummarySection: View {
 				}
 				.padding(.vertical, 2)
 				
-				// 插电占比：长期插电党能看到自己的习惯
+				// 插电占比：长期插电党能看到自己的习惯（醒着口径，与全部历史连续）
 				if let share = usage.acShare {
-					Text(String(format: "今天 %.0f%% 的时间插着电源", share * 100))
+					Text(String(format: "醒着 %.0f%% 的时间插着电源", share * 100))
 						.font(.system(size: 9))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 						.padding(.top, 1)

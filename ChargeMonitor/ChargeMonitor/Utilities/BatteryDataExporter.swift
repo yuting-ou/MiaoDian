@@ -23,14 +23,15 @@ enum BatteryDataExporter {
 		}, to: &lines)
 
 		// 口径元数据随行导出：插电/电池秒的覆盖面随版本变（睡眠段补记、归因窗口放宽），
-		// 少了「睡眠电池秒」与「归因窗口秒」两列，用户自己重算强度就会把新旧口径混进
-		// 同一个分母——应用内刚修掉的错，不该在导出文件里重演
-		appendSection(title: "每日用电", header: ["日期", "用电%", "充入%", "插电秒", "电池秒", "插电占比", "睡眠电池秒", "归因窗口秒"], rows: dailyHistory.map { usage in
+		// 少了「睡眠电池秒」「睡眠插电秒」与「归因窗口秒」三列，用户自己重算强度或
+		// 还原「醒着口径」就会把新旧口径混进同一个分母——应用内刚修掉的错，不该在导出文件里重演
+		appendSection(title: "每日用电", header: ["日期", "用电%", "充入%", "插电秒", "电池秒", "插电占比(醒着)", "睡眠电池秒", "睡眠插电秒", "归因窗口秒"], rows: dailyHistory.map { usage in
 			let share = usage.acShare.map { String(format: "%.3f", $0) } ?? ""
 			let slept = usage.sleepBatterySeconds.map(formatNumber) ?? ""
+			let sleptAC = usage.sleepACSeconds.map(formatNumber) ?? ""
 			let gap = usage.attributionGapSeconds.map(formatNumber) ?? ""
 			return [usage.dayKey, "\(usage.drainedPercent)", "\(usage.chargedPercent)",
-					formatNumber(usage.acSeconds), formatNumber(usage.batterySeconds), share, slept, gap]
+					formatNumber(usage.acSeconds), formatNumber(usage.batterySeconds), share, slept, sleptAC, gap]
 		}, to: &lines)
 
 		// E3：窗口聚合表。日均=有效样本日；无月级电量曲线（诚实边界）

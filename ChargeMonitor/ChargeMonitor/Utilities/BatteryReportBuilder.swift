@@ -68,7 +68,7 @@ struct BatteryReportBuilder {
 			for day in dailyHistory.reversed() {
 				var line = "\(day.dayKey)  用电 \(day.drainedPercent)%  充入 \(day.chargedPercent)%"
 				if let share = day.acShare {
-					line += String(format: "  插电占比 %.0f%%", share * 100)
+					line += String(format: "  醒着插电占比 %.0f%%", share * 100)
 				}
 				sections.append(line)
 			}

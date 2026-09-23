@@ -11,17 +11,19 @@ nonisolated enum EnergyAggregation {
 		let totalDrainedPercent: Int
 		let totalChargedPercent: Int
 		let avgDrainedPerDataDay: Double?
-		let acSeconds: Double
-		let batterySeconds: Double
+		// 醒着口径的时长（睡眠补记已减掉）：与 DailyUsage.acShare 同一条减法，
+		// 窗口级插电占比才不会把"夜里合盖在电池上"算成用户不插电
+		let awakeACSeconds: Double
+		let awakeBatterySeconds: Double
 		let dwell80PlusSeconds: Double
 		let peakDrainDayKey: String?
 		let peakDrainPercent: Int?
 
-		/// 窗口级插电占比；累计通电样本不足半小时不给结论
+		/// 窗口级插电占比（醒着口径）；醒着样本不足半小时不给结论
 		var acShare: Double? {
-			let total = acSeconds + batterySeconds
+			let total = awakeACSeconds + awakeBatterySeconds
 			guard total >= 30 * 60 else { return nil }
-			return acSeconds / total
+			return awakeACSeconds / total
 		}
 
 		var dwell80PlusMinutes: Int? {
@@ -36,9 +38,12 @@ nonisolated enum EnergyAggregation {
 		let deltaPerDataDay: Double
 	}
 
-	/// 有效能耗样本：有掉电/充入，或通电时长 ≥ 半小时（与 DailyUsage.acShare 同门）
+	/// 有效能耗样本：有掉电/充入，或醒着被观测时长 ≥ 半小时（与 DailyUsage.acShare 同门）。
+	/// v2.9.9 起这条门槛从「含睡眠补记的总时长」改回「醒着时长」：只靠整夜补记凑够
+	/// 半小时的日子（当天一帧醒着的都没记到）不该算样本日——那等于把 0% 用电抬进日均
+	/// 分母，重演「缺记录不冒充 0」。旧档本就无睡眠补记，减法退化为原值，不跨口径。
 	nonisolated static func hasEnergySample(_ day: DailyUsage) -> Bool {
-		day.drainedPercent > 0 || day.chargedPercent > 0 || (day.acSeconds + day.batterySeconds) >= 30 * 60
+		day.drainedPercent > 0 || day.chargedPercent > 0 || day.awakeObservationSeconds >= 30 * 60
 	}
 
 	nonisolated static func aggregate(history: [DailyUsage], dayKeys: [String]) -> WindowStats {
@@ -57,8 +62,8 @@ nonisolated enum EnergyAggregation {
 		var dataDays = 0
 		var drained = 0
 		var charged = 0
-		var acSeconds = 0.0
-		var batterySeconds = 0.0
+		var awakeACSeconds = 0.0
+		var awakeBatterySeconds = 0.0
 		var dwellSeconds = 0.0
 		var peakKey: String?
 		var peakDrain = 0
@@ -67,8 +72,8 @@ nonisolated enum EnergyAggregation {
 			dataDays += 1
 			drained += day.drainedPercent
 			charged += day.chargedPercent
-			acSeconds += day.acSeconds
-			batterySeconds += day.batterySeconds
+			awakeACSeconds += day.awakeACSeconds
+			awakeBatterySeconds += day.awakeBatterySeconds
 			dwellSeconds += day.soc80to90Seconds + day.soc90to100Seconds
 			if day.drainedPercent > peakDrain {
 				peakDrain = day.drainedPercent
@@ -81,8 +86,8 @@ nonisolated enum EnergyAggregation {
 			totalDrainedPercent: drained,
 			totalChargedPercent: charged,
 			avgDrainedPerDataDay: avg,
-			acSeconds: acSeconds,
-			batterySeconds: batterySeconds,
+			awakeACSeconds: awakeACSeconds,
+			awakeBatterySeconds: awakeBatterySeconds,
 			dwell80PlusSeconds: dwellSeconds,
 			peakDrainDayKey: peakKey,
 			peakDrainPercent: peakKey == nil ? nil : peakDrain
@@ -133,7 +138,7 @@ nonisolated enum EnergyAggregation {
 		var weekLine = digestSummary(label: "近7日", stats: week)
 		if !weekLine.isEmpty {
 			if let share = week.acShare {
-				weekLine += String(format: "、插电占比 %.0f%%", share * 100)
+				weekLine += String(format: "、醒着插电占比 %.0f%%", share * 100)
 			}
 			if let peakKey = week.peakDrainDayKey, let peak = week.peakDrainPercent, peak > 0 {
 				weekLine += "、峰值 \(peakKey) \(peak)%"

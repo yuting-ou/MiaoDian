@@ -11,6 +11,8 @@ nonisolated enum ChargingHabitAnalyzer {
 	// 至少这么多次插/拔样本才敢下结论，否则规律没意义
 	private static let minSamples = 4
 	// 长期插电的判定：最近几天插电占比都超过这个值
+	// （占比＝醒着口径，v2.9.9：含睡眠补记的分母会让夜里拔电睡的人被误判成"不插电"，
+	//  这条洞察因此整条静默消失）
 	private static let heavyACShare = 0.85
 
 	// 综合近期电源事件 + 用电历史 + 当前状态，给一条最相关的建议；没把握就返回 nil

@@ -688,6 +688,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 			guard part.seconds > 0, let index = history.firstIndex(where: { $0.dayKey == part.dayKey }) else { continue }
 			if onAC {
 				history[index].acSeconds += part.seconds
+				// 插电那半边也要留痕：没有这一笔，「醒着口径」的插电占比无从还原
+				// （旧实现只给电池那半边记了 sleepBatterySeconds）
+				history[index].sleepACSeconds = (history[index].sleepACSeconds ?? 0) + part.seconds
 			} else {
 				history[index].batterySeconds += part.seconds
 				// 单独记一份"来自睡眠的电池时长"：醒着掉电/醒着时长这类比值要拿它减回分母
