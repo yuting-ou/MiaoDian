@@ -684,6 +684,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 				history[index].acSeconds += part.seconds
 			} else {
 				history[index].batterySeconds += part.seconds
+				// 单独记一份"来自睡眠的电池时长"：醒着掉电/醒着时长这类比值要拿它减回分母
+				history[index].sleepBatterySeconds = (history[index].sleepBatterySeconds ?? 0) + part.seconds
 			}
 			let above90 = dwellShareAbove(90, from: part.startPercent, to: part.endPercent)
 			let above80 = dwellShareAbove(80, from: part.startPercent, to: part.endPercent)

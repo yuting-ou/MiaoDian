@@ -73,6 +73,11 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	// 高电量驻留秒数（80–90% 与 90%+ 两档）：电化学应力的直接度量
 	var soc80to90Seconds: Double = 0
 	var soc90to100Seconds: Double = 0
+	// 其中来自睡眠段补记的「电池供电」秒数（v2.9.3）：v2.9.2 把整夜时长补进了
+	// batterySeconds，而「醒着掉电」这类分子并不含夜间的慢放——凡用电池时长做分母的
+	// 比值都要先减掉这一段，否则跨升级日会出现同一个人不同强度的假象。
+	// 可选 + 旧档缺键=nil（旧行的 batterySeconds 本就不含睡眠，减法自动退化为原值）
+	var sleepBatterySeconds: Double?
 
 	// 插电时长占比；样本不足半小时不给结论，免得刚开机就下定论
 	var acShare: Double? {
@@ -96,11 +101,12 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 
 	enum CodingKeys: String, CodingKey {
 		case dayKey, drainedPercent, chargedPercent, acSeconds, batterySeconds
-		case soc80to90Seconds, soc90to100Seconds
+		case soc80to90Seconds, soc90to100Seconds, sleepBatterySeconds
 	}
 
 	init(dayKey: String, drainedPercent: Int = 0, chargedPercent: Int = 0, acSeconds: Double = 0, batterySeconds: Double = 0,
-		 soc80to90Seconds: Double = 0, soc90to100Seconds: Double = 0) {
+		 soc80to90Seconds: Double = 0, soc90to100Seconds: Double = 0,
+		 sleepBatterySeconds: Double? = nil) {
 		self.dayKey = dayKey
 		self.drainedPercent = drainedPercent
 		self.chargedPercent = chargedPercent
@@ -108,6 +114,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.batterySeconds = batterySeconds
 		self.soc80to90Seconds = soc80to90Seconds
 		self.soc90to100Seconds = soc90to100Seconds
+		self.sleepBatterySeconds = sleepBatterySeconds
 	}
 
 	// 旧存档没有时长/驻留字段，缺省 0 兼容解码
@@ -120,6 +127,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.batterySeconds = try container.decodeIfPresent(Double.self, forKey: .batterySeconds) ?? 0
 		self.soc80to90Seconds = try container.decodeIfPresent(Double.self, forKey: .soc80to90Seconds) ?? 0
 		self.soc90to100Seconds = try container.decodeIfPresent(Double.self, forKey: .soc90to100Seconds) ?? 0
+		self.sleepBatterySeconds = try container.decodeIfPresent(Double.self, forKey: .sleepBatterySeconds)
 	}
 }
 

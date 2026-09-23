@@ -1,3 +1,13 @@
+## v2.9.3 — 2026-09-23（强度校准分子分母同源）
+
+修的是上一轮 v2.9.2 自己开的洞：睡眠时长补进 `batterySeconds` 后，`dayIntensity = drainedPercent ÷ (batterySeconds/3600)` 成了「醒着掉电 ÷ 全天电池时长」。
+
+- **后果**：升级当天起每日放电强度被摊薄 4~5 倍（醒着 4h 掉 20% 从 5%/h 变 1.1%/h）→「近期 vs 基线」跨升级日出现假降幅 → 强度因子贴到 0.80 夹紧下限 → 续航场景系数被压低、**预测偏乐观**，面板还写「强度 ×0.80」
+- **修法**：日行新增可选字段 `sleepBatterySeconds`（只登记拔电睡眠段，一天多觉累加）；`awakeBatterySeconds = max(0, batterySeconds − min(batterySeconds, sleepBatterySeconds ?? 0))`；`dayIntensity` 的分母与「醒着满半小时」门槛都改用它
+- **旧档兼容**：`decodeIfPresent`，缺字段=nil → 减法退化为原值，历史零漂移；`BatteryHistoryArchive` 的 `[DailyUsage]` 走同一 Codable 自动带出，无新增 defaults 键
+- **消费路径全量判定**：`batterySeconds` 的 14 处读点逐一核对——只有强度比值是「醒着分子 ÷ 全天分母」；`acShare`/驻留占比/能耗聚合分子分母同population（含睡眠更真）；半小时样本门槛变为「整日有电即过」属合理；CSV 打印原始时长如实
+- **门**：测试本机 **1149** 全绿零警告 / `TZ=UTC` **1150** 全绿 / Swift 6 全量审计零错误零警告 / 变异检验 3 条并逐条记红于哪条断言（N1 摊薄口径→「强度同源：补记睡眠后强度不摊薄」红、N2 覆盖不累加→「一天多觉累加睡眠电池时长」红、N3′ 缺字段当 0→「旧档缺字段解码为 nil」红）
+
 ## v2.9.2 — 2026-09-23（睡眠段时长与高电量驻留归因）
 
 - **透镜**：C 丢失·时间（睡眠唤醒）。追问：合盖那 8 小时，电池传记里去哪了？

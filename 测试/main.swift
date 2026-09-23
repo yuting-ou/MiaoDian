@@ -2042,6 +2042,70 @@ do {
 	expectEqual(plus14Parts.reduce(0) { $0 + $1.seconds }, 50400, "睡眠归因：换时区不改变总时长")
 }
 
+// MARK: - 强度校准·分子分母同源
+
+// v2.9.2 把整夜电池时长补进 batterySeconds 后，"醒着掉电/电池时长"这个比值的分母
+// 变了而分子没变——同一台机器同一习惯会被摊薄成"最近变省电"，把续航场景系数打到
+// 夹紧下限、预测偏乐观。修法：日行单独登记来自睡眠的那部分，比值前减回。
+do {
+	// 旧口径行（无 sleepBatterySeconds）不变
+	let legacy = DailyUsage(dayKey: "2026-09-20", drainedPercent: 20, chargedPercent: 0, acSeconds: 0, batterySeconds: 4 * 3600)
+	expectEqual(RuntimeScenarioCalibration.awakeBatterySeconds(legacy), 4 * 3600, "强度同源：nil 睡眠字段时醒着时长=电池时长")
+	expectEqual(RuntimeScenarioCalibration.dayIntensity(legacy), 5.0, "强度同源：旧口径行强度照旧 5%/h")
+
+	// 补记后的同一人：18h 电池时长里 14h 在睡觉，醒着仍 4h 掉 20% → 仍 5%/h
+	let credited = DailyUsage(dayKey: "2026-09-21", drainedPercent: 20, chargedPercent: 0, acSeconds: 0,
+							  batterySeconds: 18 * 3600, sleepBatterySeconds: 14 * 3600)
+	expectEqual(RuntimeScenarioCalibration.dayIntensity(credited), 5.0, "强度同源：补记睡眠后强度不摊薄（变异：分母仍用 batterySeconds 即红）")
+
+	// 门槛同样走醒着时长；脏数据不把分母算成负
+	let allSleep = DailyUsage(dayKey: "2026-09-22", drainedPercent: 3, chargedPercent: 0, acSeconds: 0,
+							  batterySeconds: 10 * 3600, sleepBatterySeconds: 10 * 3600)
+	expect(RuntimeScenarioCalibration.dayIntensity(allSleep) == nil, "强度同源：全天在睡→无样本，不冒充 0 强度")
+	let dirty = DailyUsage(dayKey: "2026-09-23", drainedPercent: 10, chargedPercent: 0, acSeconds: 0,
+						   batterySeconds: 2 * 3600, sleepBatterySeconds: 9 * 3600)
+	expectEqual(RuntimeScenarioCalibration.awakeBatterySeconds(dirty), 0.0, "强度同源：睡眠超电池时长时夹到 0")
+	expect(RuntimeScenarioCalibration.dayIntensity(dirty) == nil, "强度同源：脏数据不产出强度")
+
+	// 跨升级日不跳变：基线旧口径 + 近期补记行 → 因子≈1（旧实现会掉到 0.80 下限）
+	var mixed: [DailyUsage] = []
+	for i in 0..<6 {
+		mixed.append(DailyUsage(dayKey: String(format: "2026-09-%02d", i + 1), drainedPercent: 20, chargedPercent: 0, batterySeconds: 4 * 3600))
+	}
+	for i in 7...9 {
+		mixed.append(DailyUsage(dayKey: String(format: "2026-09-%02d", i), drainedPercent: 20, chargedPercent: 0,
+								batterySeconds: 18 * 3600, sleepBatterySeconds: 14 * 3600))
+	}
+	if let factor = RuntimeScenarioCalibration.intensityFactor(history: mixed) {
+		expect(abs(factor - 1.0) < 0.02, "强度同源：跨升级日强度不漂移（因子≈1）")
+	} else {
+		expect(false, "强度同源：混合历史应给得出因子")
+	}
+
+	// 补记时登记睡眠电池时长；插电睡眠不登记；一天多觉累加
+	let night = [SleepSegmentPart(dayKey: "2026-09-22", seconds: 3600, startPercent: 88, endPercent: 85),
+				 SleepSegmentPart(dayKey: "2026-09-23", seconds: 25200, startPercent: 85, endPercent: 78)]
+	let rows = [DailyUsage(dayKey: "2026-09-22"), DailyUsage(dayKey: "2026-09-23")]
+	let onBattery = BatteryHistoryRecorder.creditingSleepTime(rows, parts: night, onAC: false)
+	expectEqual(onBattery[0].sleepBatterySeconds, 3600.0, "强度同源：拔电睡眠登记电池睡眠时长（前夜段）")
+	expectEqual(onBattery[1].sleepBatterySeconds, 25200.0, "强度同源：拔电睡眠登记电池睡眠时长（醒来日）")
+	let plugged = BatteryHistoryRecorder.creditingSleepTime(rows, parts: night, onAC: true)
+	expect(plugged[0].sleepBatterySeconds == nil, "强度同源：插电睡眠不登记电池睡眠时长")
+	let twice = BatteryHistoryRecorder.creditingSleepTime(onBattery, parts: [night[0]], onAC: false)
+	expectEqual(twice[0].sleepBatterySeconds, 7200.0, "强度同源：一天多觉累加睡眠电池时长")
+
+	// 旧档兼容与往返
+	let legacyJSON = "{\"dayKey\":\"2026-09-20\",\"drainedPercent\":20,\"chargedPercent\":0,\"acSeconds\":0,\"batterySeconds\":14400,\"soc80to90Seconds\":0,\"soc90to100Seconds\":0}"
+	if let decoded = try? JSONDecoder().decode(DailyUsage.self, from: Data(legacyJSON.utf8)) {
+		expect(decoded.sleepBatterySeconds == nil, "强度同源：旧档缺字段解码为 nil")
+		expectEqual(RuntimeScenarioCalibration.dayIntensity(decoded), 5.0, "强度同源：旧档行强度照算")
+	} else {
+		expect(false, "强度同源：旧档 DailyUsage 可解码")
+	}
+	let roundTrip = try? JSONDecoder().decode(DailyUsage.self, from: (try? JSONEncoder().encode(credited)) ?? Data())
+	expectEqual(roundTrip?.sleepBatterySeconds, 50400.0, "强度同源：新字段编解码往返")
+}
+
 // MARK: - 历史数据损坏抢救
 
 // 主档损坏（有数据却解不开）→ 回退备份；主档正常直接解码；双份都坏不崩；

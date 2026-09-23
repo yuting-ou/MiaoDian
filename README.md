@@ -41,7 +41,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 只需 Command Line Tools，无需完整 Xcode：
 
 ```bash
-bash build.sh    # 先跑单元测试（约 1135 项断言），全过才编译打包
+bash build.sh    # 先跑单元测试（约 1149 项断言），全过才编译打包
 ```
 
 > SDK 27 起 SwiftUI 的属性包装器（`@State` 等）改为宏实现，而 CLT 27 的工具链不带 SwiftUIMacros 插件——build.sh 不猜你在什么环境，直接拿探针实测当前工具链能编哪个 SDK：能编就用默认 SDK，不能就自动回落到最新的可编译旧 SDK（26.x 的 SwiftUI 尚不依赖宏插件），全都编不动就停下来告诉你缺什么。装完整 Xcode 后自动走默认 SDK，无需手工配置。
@@ -60,7 +60,7 @@ bash build.sh    # 先跑单元测试（约 1135 项断言），全过才编译�
 
 ## English
 
-MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 15 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); ~1135 unit tests run first as a build gate.
+MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 15 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); ~1149 unit tests run first as a build gate.
 
 ## 致谢与许可
 
