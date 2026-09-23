@@ -4131,8 +4131,8 @@ do {
 // MARK: - C3 驻留效果追踪 DwellTracking
 
 do {
-	func usage(_ key: String, dwellMin: Int?, acHours: Double = 8) -> DailyUsage {
-		var u = DailyUsage(dayKey: key)
+	func usage(_ key: String, dwellMin: Int?, acHours: Double = 8, gap: Double? = 180) -> DailyUsage {
+		var u = DailyUsage(dayKey: key, attributionGapSeconds: gap)
 		if let dwellMin {
 			u.soc80to90Seconds = Double(dwellMin) * 60 * 0.4
 			u.soc90to100Seconds = Double(dwellMin) * 60 * 0.6
@@ -4188,6 +4188,33 @@ do {
 		expectEqual(cmp.priorAvgMinutes, 90, "驻留对比：前窗日均")
 		expectEqual(cmp.deltaMinutes, -60, "驻留对比：下降 60 分钟/日")
 	}
+
+	// 跨口径不可比：驻留秒数与时长同一个写入者、同一个归因门（v2.9.4 前只认 ≤30 秒帧、
+	// v2.9.2 前完全不含睡眠段），拿升级前的旧日与升级后的新日比"日均"，
+	// 会把记账口径的扩大说成用户习惯变好/变坏
+	let priorKeys = ["2026-09-01", "2026-09-02", "2026-09-03"]
+	let stalePrior = h.map { day -> DailyUsage in
+		guard priorKeys.contains(day.dayKey) else { return day }
+		var copy = day
+		copy.attributionGapSeconds = nil
+		return copy
+	}
+	expect(!DwellTracking.windowsComparable(history: stalePrior, recentKeys: keys3, priorKeys: priorKeys),
+		   "驻留对比口径门：前窗含未标记旧日即不可比（变异：去掉 windowsComparable 判定即红）")
+	expect(DwellTracking.careResponseComparison(history: stalePrior, recentKeys: keys3, priorKeys: priorKeys) == nil,
+		   "驻留对比口径门：跨口径不给 delta，宁可不说不给错的")
+	expect(DwellTracking.windowsComparable(history: h, recentKeys: keys3, priorKeys: priorKeys),
+		   "驻留对比口径门：同桶且够样本→判可比（反向确认，不许把功能一起关掉）")
+	let allLegacy = h.map { day -> DailyUsage in var copy = day; copy.attributionGapSeconds = nil; return copy }
+	expect(!DwellTracking.windowsComparable(history: allLegacy, recentKeys: keys3, priorKeys: priorKeys),
+		   "驻留对比口径门：nil 在驻留比较里不是安全桶——两批旧日之间还可能隔着 v2.9.2（变异：把 nil 当同桶即红）")
+	let staleLines = DwellTracking.summaryLines(
+		todayUsage: usage("2026-09-08", dwellMin: 20),
+		history: stalePrior,
+		today: Date(timeIntervalSinceReferenceDate: 800_000_000)
+	)
+	expect(!staleLines.contains { $0.contains("较前7日") },
+		   "驻留对比口径门：面板文案不出现跨口径的升降结论")
 
 	// 单侧不足 → nil
 	let oneSide = DwellTracking.careResponseComparison(
@@ -4261,7 +4288,8 @@ do {
 
 	// 驻留洞察三态
 	func dwellDay(_ key: String, _ minutes: Int) -> DailyUsage {
-		var u = DailyUsage(dayKey: key)
+		// 造同一口径（v2.9.5 起建行带窗口标记）的历史：驻留升降结论只在同桶内才成立
+		var u = DailyUsage(dayKey: key, attributionGapSeconds: 180)
 		u.soc80to90Seconds = Double(minutes) * 60 * 0.5
 		u.soc90to100Seconds = Double(minutes) * 60 * 0.5
 		u.acSeconds = 8 * 3600

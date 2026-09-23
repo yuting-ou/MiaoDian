@@ -62,14 +62,35 @@ nonisolated enum DwellTracking {
 		)
 	}
 
+	/// 两窗口的驻留口径必须一致才谈「变化」。高电量驻留秒数与时长同一个写入者、同一个
+	/// 归因门（v2.9.4 前只认 ≤30 秒的帧、v2.9.2 前完全不含睡眠段），所以「近 7 日 vs
+	/// 前 7 日」一旦跨过升级日，就会把记账口径的扩大说成用户习惯变差或变好。
+	/// 这里不接受"旧档 nil 自成一桶"：两批 nil 日之间还可能隔着 v2.9.2，只有都带上
+	/// 同一个归因窗口标记的日子才可比（v2.9.5 起建行才写该标记）。
+	nonisolated static func windowsComparable(
+		history: [DailyUsage],
+		recentKeys: [String],
+		priorKeys: [String]
+	) -> Bool {
+		let keys = Set(recentKeys).union(priorKeys)
+		var gaps: Set<Double> = []
+		for day in history where keys.contains(day.dayKey) && day.dwell80PlusMinutes != nil {
+			guard let gap = day.attributionGapSeconds else { return false }
+			gaps.insert(gap)
+		}
+		return gaps.count == 1
+	}
+
 	/// 保养响应对比：recentKeys 窗口日均 vs priorKeys 窗口日均。
 	/// 两侧有效样本各 ≥ 2 才给结论；否则 nil（避免单日噪声当效果）。
+	/// 跨归因窗口口径的日子直接不给对比——口径变化不是用户行为变化。
 	nonisolated static func careResponseComparison(
 		history: [DailyUsage],
 		recentKeys: [String],
 		priorKeys: [String],
 		minDaysPerWindow: Int = 2
 	) -> CareWindowComparison? {
+		guard windowsComparable(history: history, recentKeys: recentKeys, priorKeys: priorKeys) else { return nil }
 		guard
 			let recent = weekAggregate(history: history, dayKeys: recentKeys, minDays: minDaysPerWindow),
 			let prior = weekAggregate(history: history, dayKeys: priorKeys, minDays: minDaysPerWindow)
