@@ -2269,7 +2269,7 @@ do {
 	expect(csv.contains("# 24小时电量"), "CSV导出：含24小时电量小节")
 	expect(csv.contains("# 电源事件"), "CSV导出：含电源事件小节")
 	expect(csv.contains("40,45,60,5"), "CSV导出：充电记录整数/时长格式")
-	expect(csv.contains("2026-08-13,10,20,3600,1200,0.750"), "CSV导出：每日用电插电占比")
+	expect(csv.contains("2026-08-13,10,20,3600,1200,0.750,,"), "CSV导出：每日用电插电占比（旧档两列口径元数据留空）")
 	expect(csv.contains("接上电源"), "CSV导出：电源事件中文化")
 	expect(csv.contains("95,100"), "CSV导出：健康度与循环次数")
 	expect(csv.contains("80,否"), "CSV导出：24小时电量与充电状态")
@@ -2277,7 +2277,23 @@ do {
 	// 插电占比：样本不足半小时（1800 秒）应留空
 	let short = DailyUsage(dayKey: "2026-08-13", drainedPercent: 1, chargedPercent: 1, acSeconds: 600, batterySeconds: 600)
 	let csv2 = BatteryDataExporter.csv(sessions: [], dailyHistory: [short], healthSamples: [], socSamples: [], powerEvents: [])
-	expect(csv2.contains("2026-08-13,1,1,600,600,"), "CSV导出：插电占比样本不足留空")
+	expect(csv2.contains("2026-08-13,1,1,600,600,,,"), "CSV导出：插电占比样本不足留空")
+	// 口径元数据随新档导出：用户重算强度时必须能减回睡眠段、知道当天生效的窗口
+	var stamped = DailyUsage(dayKey: "2026-08-14", drainedPercent: 5, chargedPercent: 0,
+										acSeconds: 3600, batterySeconds: 7200, sleepBatterySeconds: 1800, attributionGapSeconds: 180)
+	let csv3 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
+	// 整行相等而不是前缀 contains：contains 会同时放过 "...,1800," 与 "...,1800,0"（变异实测漏网过一次）
+	func csvRow(_ csv: String, startingWith prefix: String) -> String? {
+		csv.split(separator: "\n").first { $0.hasPrefix(prefix) }.map(String.init)
+	}
+	expectEqual(csvRow(csv3, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.333,1800,180",
+			   "CSV导出：睡眠电池秒与归因窗口秒随行落盘（变异：导出漏列即红）")
+	stamped.attributionGapSeconds = nil
+	let csv4 = BatteryDataExporter.csv(sessions: [], dailyHistory: [stamped], healthSamples: [], socSamples: [], powerEvents: [])
+	expectEqual(csvRow(csv4, startingWith: "2026-08-14,"), "2026-08-14,5,0,3600,7200,0.333,1800,",
+			   "CSV导出：缺窗口标记的旧行末列留空，不猜口径（变异：写成 0 即红）")
+	let headerLine = csv3.split(separator: "\n").first(where: { $0.hasPrefix("日期,") }) ?? ""
+	expectEqual(headerLine.split(separator: ",").count, "2026-08-14,5,0,3600,7200,0.333,1800,180".split(separator: ",").count, "CSV导出：每日用电表头列数与数据行一致（变异：加列忘改表头即红）")
 }
 
 // MARK: - 充电器质量诊断
