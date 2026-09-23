@@ -2408,6 +2408,51 @@ do {
 		   "载体守卫：插电占比行不长于卡片既有最长句")
 }
 
+// MARK: - 归档三面带 v2.9.9 新字段（§1 复利数据：导出/导入/回执）
+
+do {
+	let row = DailyUsage(dayKey: "2026-09-23", drainedPercent: 5, chargedPercent: 0,
+						 acSeconds: 3600, batterySeconds: 7200,
+						 sleepBatterySeconds: 1800, sleepACSeconds: 900, attributionGapSeconds: 180)
+	let archive = BatteryHistoryArchive(
+		exportedAt: t0, sessions: [], healthSamples: [], dailyHistory: [row],
+		lastSleepDrain: nil, sleepDrainHistory: nil, chargerProfiles: [], socSamples: [],
+		powerEvents: [], chargerPowerStats: [:], hourlyDrainStats: HourlyDrainStats(),
+		appEnergy: [], socJumpEvents: []
+	)
+	if let data = BatteryHistoryArchive.encode(archive),
+	   let back = BatteryHistoryArchive.decode(data),
+	   let restored = back.dailyHistory.first {
+		// 醒着口径必须跟着档案走：分子 3600-900、分母再减睡眠电池段 1800 → 2700/8100
+		expectEqual(restored.sleepACSeconds, 900, "归档往返：睡眠插电秒跨 JSON 存活（变异：CodingKeys 漏键即红）")
+		expectEqual(restored.sleepBatterySeconds, 1800, "归档往返：睡眠电池秒跨 JSON 存活")
+		expectEqual(restored.attributionGapSeconds, 180, "归档往返：归因窗口秒跨 JSON 存活")
+		expect(abs((restored.acShare ?? 0) - 1.0 / 3.0) < 0.001, "归档往返：换机恢复后醒着口径与恢复前同值")
+		expect(back.importSummary.contains("用电天数 1 天"), "导入回执：带新字段的行照常计入（变异：解码失败静默丢历史）")
+	} else {
+		expect(false, "归档往返：带睡眠标记的行编解码不失败")
+	}
+	// 旧档（三个口径键都不存在）→ 解出 nil、按升级前口径读；不是整行作废
+	if let data = BatteryHistoryArchive.encode(archive),
+	   var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+	   var days = obj["dailyHistory"] as? [[String: Any]] {
+		for i in days.indices {
+			days[i]["sleepACSeconds"] = nil
+			days[i]["sleepBatterySeconds"] = nil
+			days[i]["attributionGapSeconds"] = nil
+		}
+		obj["dailyHistory"] = days
+		let oldData = try? JSONSerialization.data(withJSONObject: obj)
+		let oldRow = oldData.flatMap { BatteryHistoryArchive.decode($0) }?.dailyHistory.first
+		expect(oldRow?.sleepACSeconds == nil && oldRow?.sleepBatterySeconds == nil,
+			   "归档兼容：旧档缺口径键解出 nil 而非 0（不判废换机前的历史）")
+		expect(abs((oldRow?.acShare ?? 0) - 1.0 / 3.0) < 0.001,
+			   "归档兼容：缺键行的占比退化为原始总时长口径")
+	} else {
+		expect(false, "归档兼容：JSON 结构应可被拆改")
+	}
+}
+
 // MARK: - 充电器质量诊断
 
 do {
