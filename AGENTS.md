@@ -19,6 +19,7 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
 - 版本号单一来源：`ChargeMonitor/ChargeMonitor.xcodeproj/project.pbxproj` 的 `MARKETING_VERSION`
 - 源文件由 build.sh 自动收集（`ChargeMonitor/ChargeMonitor/**/*.swift`），新增文件无需改脚本
 - 单元测试是构建前置门：纯逻辑回归（估算/格式化/配置迁移/历史记录状态机判定）失败时构建直接中止
+- 能量红线（§1 不可谈判之一）用 `bash 工具/自身成本.sh 60` 复跑：并报"累计 CPU 时间"与"`sample` 在栈样本"两个口径，**禁止用 `top -l N` 当证据**（它把脉冲负载平均成 0.0%）；2026-09-23 实测 0.07%~0.23% 区间、无热点
 - 测试基线（2026-09-23 @ v2.9.3）：本机 **1149** 全绿（UTC 1150）
 - 发布线：**v2.9.2**（睡眠段时长与驻留归因）；队列余 E2（需用户配合）/ H4 / W1 观察
 - 工具链与 SDK：SDK 27 起 SwiftUI 属性包装器（`@State` 等）是宏实现，而 CLT 27 工具链不带 SwiftUIMacros 插件——build.sh **不按路径名猜环境**，用 `@State` 探针实测当前工具链能用哪个 SDK 编 UI：能编用默认 SDK，否则回落到最新的可编 26.x SDK，全失败则报错给指引（2026-09-15 在 macOS 27.0 + CLT 27 实测：默认 27 失败、回落 26.5 成功；装完整 Xcode 后自动走默认）。测试面不钉旧 SDK，用默认 SDK 编译并回显版本，故逻辑层一直吃本机最新 SDK 的信号
