@@ -2091,6 +2091,65 @@ do {
 	expectEqual(plus14Parts.reduce(0) { $0 + $1.seconds }, 50400, "睡眠归因：换时区不改变总时长")
 }
 
+// MARK: - 口径桶：强度比较不得跨归因窗口（v2.9.5）
+
+// v2.9.4 把帧路径秒数从 30 秒小帽放宽到与掉电同窗，新行的「醒着秒数」恢复到真值，
+// 而旧行仍是被截断的小分母——强度系统性偏高数倍。基线恰恰由更老的行组成，
+// 于是「近 3 日 ÷ 基线 14 日」会出现假降幅、因子贴到 0.80 下限、续航预测转乐观。
+// 修法：建行时把当时生效的窗口钉进该行，比较时只认同最新一行的那一桶。
+do {
+	func legacyRow(_ day: Int) -> DailyUsage {
+		DailyUsage(dayKey: String(format: "2026-09-%02d", day), drainedPercent: 20, chargedPercent: 0, batterySeconds: 1 * 3600)
+	}
+	func stampedRow(_ day: Int, drained: Int = 20, awake: Double = 4 * 3600, gap: Double = 180) -> DailyUsage {
+		DailyUsage(dayKey: String(format: "2026-09-%02d", day), drainedPercent: drained, chargedPercent: 0,
+				   batterySeconds: awake, attributionGapSeconds: gap)
+	}
+	// 前提：同一习惯在两种覆盖面下的强度差 4 倍（旧行分母被截断）
+	expectEqual(RuntimeScenarioCalibration.dayIntensity(legacyRow(1)), 20.0, "口径桶：旧窗口小分母算出 20%/h（缺陷前提）")
+	expectEqual(RuntimeScenarioCalibration.dayIntensity(stampedRow(10)), 5.0, "口径桶：新窗口同一习惯算出 5%/h（缺陷前提）")
+
+	// 混合桶：近期 3 天新口径 + 基线 5 天旧口径 → 旧桶整批排除，样本不足就不给结论
+	var mixed: [DailyUsage] = []
+	for i in 1...5 { mixed.append(legacyRow(i)) }
+	for i in 8...10 { mixed.append(stampedRow(i)) }
+	expectEqual(RuntimeScenarioCalibration.comparableSamples(history: mixed).count, 3, "口径桶：只取最新一行的窗口桶（变异：不按桶过滤即红）")
+	expect(RuntimeScenarioCalibration.intensityFactor(history: mixed) == nil, "口径桶：新桶样本不足→宁可不给因子，也不出跨口径结论")
+
+	// 同桶样本齐了才谈因子（同强度 → 1.0，不受旧行 4 倍假降幅拉扯）
+	var same: [DailyUsage] = []
+	for i in 1...5 { same.append(stampedRow(i)) }
+	for i in 8...10 { same.append(stampedRow(i)) }
+	expectEqual(RuntimeScenarioCalibration.intensityFactor(history: same), 1.0, "口径桶：同桶且样本足够→因子 1，不再被旧口径拽到下限")
+
+	// 全旧档（清一色 nil 桶）仍照旧可比——修复不许把升级前用户的数据判废
+	var legacyOnly: [DailyUsage] = []
+	for i in 1...5 { legacyOnly.append(legacyRow(i)) }
+	for i in 8...10 {
+		legacyOnly.append(DailyUsage(dayKey: String(format: "2026-09-%02d", i), drainedPercent: 40, chargedPercent: 0, batterySeconds: 1 * 3600))
+	}
+	expectEqual(RuntimeScenarioCalibration.comparableSamples(history: legacyOnly).count, 8, "口径桶：nil 桶自成一桶，旧档彼此可比")
+	expectEqual(RuntimeScenarioCalibration.intensityFactor(history: legacyOnly), 1.25, "口径桶：纯旧档的因子与升级前一致（40/20=2 夹到上限 1.25）")
+
+	// 建行即钉窗口：新的一天必须带上当时生效的归因窗口
+	let inserted = BatteryHistoryRecorder.insertingDailyUsage([], dayKey: "2026-09-24", maxDays: 30)
+	expectEqual(inserted.first?.attributionGapSeconds, 180.0, "口径桶：建行时写入生效中的归因窗口（变异：建行漏传该字段即红）")
+
+	// 旧档兼容与往返（§1 复利数据：字段可选，缺键=nil）
+	if let data = try? JSONEncoder().encode(stampedRow(12)),
+	   let back = try? JSONDecoder().decode(DailyUsage.self, from: data) {
+		expectEqual(back.attributionGapSeconds, 180.0, "口径桶：往返编解码保住窗口标记")
+	} else {
+		expect(false, "口径桶：带窗口行编码/解码失败")
+	}
+	let legacyJSON = "{\"dayKey\":\"2026-09-20\",\"drainedPercent\":20,\"chargedPercent\":0,\"batterySeconds\":14400}"
+	if let decoded = try? JSONDecoder().decode(DailyUsage.self, from: Data(legacyJSON.utf8)) {
+		expect(decoded.attributionGapSeconds == nil, "口径桶：旧档缺窗口字段解码为 nil（不猜窗口）")
+	} else {
+		expect(false, "口径桶：旧档窗口字段解码失败")
+	}
+}
+
 // MARK: - 强度校准·分子分母同源
 
 // v2.9.2 把整夜电池时长补进 batterySeconds 后，"醒着掉电/电池时长"这个比值的分母

@@ -33,6 +33,22 @@ nonisolated enum RuntimeScenarioCalibration {
 		history.compactMap(dayIntensity)
 	}
 
+	/// 同桶才可比：以时间最新一行的归因窗口为参照，只保留同窗口的强度样本。
+	/// 归因窗口的覆盖面会随版本变（v2.9.4 把秒数从 30 秒小帽放宽到与掉电同窗），
+	/// 旧行的醒着秒数系统性偏小 → 强度偏高；若让"近 3 日（新口径）÷ 基线 14 日（旧口径）"
+	/// 混进同一句中位数比较，会出现数倍假降幅、因子贴到 0.80 夹紧下限、续航预测转乐观。
+	/// 旧行 attributionGapSeconds=nil 自成一桶：升级前彼此仍可比，只是不与新口径混用。
+	nonisolated static func comparableSamples(history: [DailyUsage]) -> [Double] {
+		let dated = history
+			.sorted { $0.dayKey < $1.dayKey }
+			.compactMap { day in dayIntensity(day).map { (day.attributionGapSeconds, $0) } }
+		guard !dated.isEmpty else { return [] }
+		// 参照取最后一行的窗口值本身（可能是 nil）：nil 桶也要能自比，
+		// 写成 guard let 会把"无窗口标记"当成"没有参照"，把整批旧档一起判废
+		let reference = dated[dated.count - 1].0
+		return dated.filter { $0.0 == reference }.map(\.1)
+	}
+
 	/// 近期中位数 / 基线中位数，夹紧到 factorRange；样本不足 → nil（维持出厂）
 	/// recentCount：最近 N 个有效样本；baselineMax：其前至多 M 个；baselineMin：至少这么多才谈「基线」
 	nonisolated static func intensityFactor(
@@ -41,11 +57,8 @@ nonisolated enum RuntimeScenarioCalibration {
 		baselineMax: Int = 14,
 		baselineMin: Int = 5
 	) -> Double? {
-		// 按 dayKey 升序切片，不依赖 history 插入序
-		let sorted = history
-			.filter { dayIntensity($0) != nil }
-			.sorted { $0.dayKey < $1.dayKey }
-			.compactMap(dayIntensity)
+		// 按 dayKey 升序取样本（不依赖 history 插入序），且只在同一口径桶内比较
+		let sorted = comparableSamples(history: history)
 		guard sorted.count >= recentCount + baselineMin else { return nil }
 		let recent = Array(sorted.suffix(recentCount))
 		let baselineStart = max(0, sorted.count - recentCount - baselineMax)

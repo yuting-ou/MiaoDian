@@ -78,6 +78,11 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	// 比值都要先减掉这一段，否则跨升级日会出现同一个人不同强度的假象。
 	// 可选 + 旧档缺键=nil（旧行的 batterySeconds 本就不含睡眠，减法自动退化为原值）
 	var sleepBatterySeconds: Double?
+	// 建行时生效的归因窗口秒数（v2.9.5）：窗口的覆盖面会变（v2.9.4 把帧路径的秒数
+	// 从 30 秒小帽放宽到与掉电同窗），旧行的「醒着秒数」因此系统性偏小、算出的强度
+	// 偏高。凡跨天比较强度的地方必须按此键同桶，否则升级日会出现假降幅。
+	// 可选 + 旧档缺键=nil（nil 自成一桶：旧机器彼此仍可比，不与新口径混用）
+	var attributionGapSeconds: Double?
 
 	// 插电时长占比；样本不足半小时不给结论，免得刚开机就下定论
 	var acShare: Double? {
@@ -101,12 +106,12 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 
 	enum CodingKeys: String, CodingKey {
 		case dayKey, drainedPercent, chargedPercent, acSeconds, batterySeconds
-		case soc80to90Seconds, soc90to100Seconds, sleepBatterySeconds
+		case soc80to90Seconds, soc90to100Seconds, sleepBatterySeconds, attributionGapSeconds
 	}
 
 	init(dayKey: String, drainedPercent: Int = 0, chargedPercent: Int = 0, acSeconds: Double = 0, batterySeconds: Double = 0,
 		 soc80to90Seconds: Double = 0, soc90to100Seconds: Double = 0,
-		 sleepBatterySeconds: Double? = nil) {
+		 sleepBatterySeconds: Double? = nil, attributionGapSeconds: Double? = nil) {
 		self.dayKey = dayKey
 		self.drainedPercent = drainedPercent
 		self.chargedPercent = chargedPercent
@@ -115,6 +120,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.soc80to90Seconds = soc80to90Seconds
 		self.soc90to100Seconds = soc90to100Seconds
 		self.sleepBatterySeconds = sleepBatterySeconds
+		self.attributionGapSeconds = attributionGapSeconds
 	}
 
 	// 旧存档没有时长/驻留字段，缺省 0 兼容解码
@@ -128,6 +134,7 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 		self.soc80to90Seconds = try container.decodeIfPresent(Double.self, forKey: .soc80to90Seconds) ?? 0
 		self.soc90to100Seconds = try container.decodeIfPresent(Double.self, forKey: .soc90to100Seconds) ?? 0
 		self.sleepBatterySeconds = try container.decodeIfPresent(Double.self, forKey: .sleepBatterySeconds)
+		self.attributionGapSeconds = try container.decodeIfPresent(Double.self, forKey: .attributionGapSeconds)
 	}
 }
 

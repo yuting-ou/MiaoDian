@@ -552,7 +552,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 当天帧全部静默丢弃，且西行期间天天如此）。今天不在裁剪区间 → 普通封顶。
 	nonisolated static func insertingDailyUsage(_ history: [DailyUsage], dayKey: String, maxDays: Int) -> [DailyUsage] {
 		var history = history
-		history.append(DailyUsage(dayKey: dayKey))
+		// 建行之时把当时生效的归因窗口钉进这一行：口径以后还会变，跨天比值必须有同桶依据
+		history.append(DailyUsage(dayKey: dayKey, attributionGapSeconds: Self.usageAttributionGapSeconds))
 		history.sort { $0.dayKey < $1.dayKey }
 		let excess = history.count - maxDays
 		guard excess > 0 else { return history }
