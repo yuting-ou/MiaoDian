@@ -53,9 +53,11 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 事件边沿检测用：上一帧的电源状态
 	private var lastPowerSource: PowerSourceType?
 	private var lastIsFull = false
-	// 睡眠掉电：合盖时的时间和电量；醒来后等第一个新快照再结算
-	private var sleepStart: (date: Date, percent: Int)?
-	private var pendingWake: (sleepDate: Date, startPercent: Int, wakeDate: Date)?
+	// 睡眠掉电：合盖时的时间、电量和当时的供电来源；醒来后等第一个新快照再结算
+	// onAC 必须在此刻捕获：结算发生在醒来后，那时只剩"现在的"电源状态，
+	// 拿它归因整夜会把"睡前拔着电、醒时插着电"错记成整夜插电
+	private var sleepStart: (date: Date, percent: Int, onAC: Bool)?
+	private var pendingWake: (sleepDate: Date, startPercent: Int, wakeDate: Date, onAC: Bool)?
 	// 充电器档案：本次接入已建档的身份键与接入时刻
 	private var activeChargerKey: String?
 	private var adapterConnectedAt: Date?
@@ -201,13 +203,15 @@ final class BatteryHistoryRecorder: ObservableObject {
 	}
 	
 	private func process(_ snapshot: BatterySnapshot) {
-		finalizeSleepDrainIfNeeded(snapshot)
 		// 先认充电器再开会话：新会话要带上"是谁充的"身份键
 		updateChargerProfile(snapshot)
 		updateChargeSession(snapshot)
 		accumulateChargerPower(snapshot)
 		recordDailyHealth(snapshot)
 		updateDailyUsage(snapshot)
+		// 睡眠结算要在建好当天日行之后：跨午夜那一觉醒来时"今天"的行还不存在，
+		// 先结算会被 creditingSleepTime 的"缺行跳过"整夜吞掉
+		finalizeSleepDrainIfNeeded(snapshot)
 		recordSOCSample(snapshot)
 		recordPowerEvents(snapshot)
 		accumulateAppEnergy()
@@ -622,6 +626,72 @@ final class BatteryHistoryRecorder: ObservableObject {
 		guard wakeDate.timeIntervalSince(sleepDate) >= minSleepSeconds else { return nil }
 		return SleepDrainRecord(sleepDate: sleepDate, wakeDate: wakeDate, startPercent: startPercent, endPercent: endPercent)
 	}
+
+	// MARK: - 睡眠段时长归因（纯函数，供单测）
+
+	// 睡眠段拆成按自然日的片段：合盖→醒来之间没有采样帧，但插电/电池时长与高电量驻留
+	// 是真实发生的，不补记则每天记到的时长只有醒着那几小时（实测 09-22 只记到 6.1h，
+	// 而那一夜 11.9h 睡眠全丢）——续航换算、驻留洞察、插电占比全部偏低。
+	// 两端电量已知，中间按时间线性看待（慢放/慢充本就近似线性），跨午夜时两天各算各的那段；
+	// 日键走 UsageCalendarLayout.dayKey（与注入 calendar.timeZone 同源，时区漂移不错位）。
+	// 睡眠中的供电来源变化无从观测，整段按合盖那一刻的电源归因（诚实边界）。
+	nonisolated static func sleepSegmentParts(
+		sleepDate: Date,
+		startPercent: Int,
+		wakeDate: Date,
+		endPercent: Int,
+		calendar: Calendar
+	) -> [SleepSegmentPart] {
+		let total = wakeDate.timeIntervalSince(sleepDate)
+		guard total > 0 else { return [] }
+		let span = Double(endPercent - startPercent)
+		var parts: [SleepSegmentPart] = []
+		var cursor = sleepDate
+		while cursor < wakeDate {
+			guard let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: cursor)) else { break }
+			let end = min(midnight, wakeDate)
+			parts.append(SleepSegmentPart(
+				dayKey: UsageCalendarLayout.dayKey(cursor, calendar: calendar),
+				seconds: end.timeIntervalSince(cursor),
+				startPercent: Double(startPercent) + span * (cursor.timeIntervalSince(sleepDate) / total),
+				endPercent: Double(startPercent) + span * (end.timeIntervalSince(sleepDate) / total)
+			))
+			cursor = end
+		}
+		return parts
+	}
+
+	/// 段内「电量 ≥ 阈值」的时间占比。单调线性路径下，电量区间与时间区间成正比，
+	/// 闭式解为高端点到阈值的距离占总落差之比；两端同值时要么全程要么全无。
+	nonisolated static func dwellShareAbove(_ threshold: Double, from startPercent: Double, to endPercent: Double) -> Double {
+		let hi = max(startPercent, endPercent), lo = min(startPercent, endPercent)
+		if hi == lo { return hi >= threshold ? 1 : 0 }
+		return min(max((hi - threshold) / (hi - lo), 0), 1)
+	}
+
+	/// 睡眠段结算进日行。只补时长与驻留，不动 drainedPercent/chargedPercent
+	/// （电量差仍归连续采样窗，否则整夜掉电会被当成"瞬时用电"）；
+	/// 那天没有日行则跳过——凭空造一行会让"记录 N 天"与月报日均分母虚增。
+	nonisolated static func creditingSleepTime(
+		_ history: [DailyUsage],
+		parts: [SleepSegmentPart],
+		onAC: Bool
+	) -> [DailyUsage] {
+		var history = history
+		for part in parts {
+			guard part.seconds > 0, let index = history.firstIndex(where: { $0.dayKey == part.dayKey }) else { continue }
+			if onAC {
+				history[index].acSeconds += part.seconds
+			} else {
+				history[index].batterySeconds += part.seconds
+			}
+			let above90 = dwellShareAbove(90, from: part.startPercent, to: part.endPercent)
+			let above80 = dwellShareAbove(80, from: part.startPercent, to: part.endPercent)
+			history[index].soc90to100Seconds += part.seconds * above90
+			history[index].soc80to90Seconds += part.seconds * (above80 - above90)
+		}
+		return history
+	}
 	
 	// MARK: - 电池更换检测
 
@@ -769,7 +839,8 @@ final class BatteryHistoryRecorder: ObservableObject {
 			settlePendingSleepDrain(endPercent: percent)
 		}
 		guard let percent = lastPercentForDaily else { return }
-		sleepStart = (Date(), percent)
+		// 供电来源要在合盖这一刻定格：结算发生在醒来后，那时只剩"现在的"状态
+		sleepStart = (Date(), percent, monitor.snapshot.powerSource == .powerAdapter)
 		pendingWake = nil
 	}
 
@@ -778,7 +849,7 @@ final class BatteryHistoryRecorder: ObservableObject {
 		guard let start = sleepStart else { return }
 		sleepStart = nil
 		// 醒来瞬间的快照可能还是睡前的旧值，挂起等下一次刷新再结算
-		pendingWake = (start.date, start.percent, Date())
+		pendingWake = (start.date, start.percent, Date(), start.onAC)
 	}
 
 	private func finalizeSleepDrainIfNeeded(_ snapshot: BatterySnapshot) {
@@ -789,6 +860,20 @@ final class BatteryHistoryRecorder: ObservableObject {
 	private func settlePendingSleepDrain(endPercent: Int) {
 		guard let pending = pendingWake else { return }
 		pendingWake = nil
+		// 时长与驻留归因不受 ≥20 分钟门约束：小憩 10 分钟也在耗电，也该算进当天时长，
+		// 那道门只管"睡眠掉电记录/告警"这件事
+		let parts = Self.sleepSegmentParts(
+			sleepDate: pending.sleepDate,
+			startPercent: pending.startPercent,
+			wakeDate: pending.wakeDate,
+			endPercent: endPercent,
+			calendar: Calendar.current
+		)
+		let credited = Self.creditingSleepTime(dailyHistory, parts: parts, onAC: pending.onAC)
+		if credited != dailyHistory {
+			dailyHistory = credited
+			save(credited, key: Self.dailyHistoryKey)
+		}
 		guard let record = Self.settledSleepDrain(
 			sleepDate: pending.sleepDate,
 			startPercent: pending.startPercent,

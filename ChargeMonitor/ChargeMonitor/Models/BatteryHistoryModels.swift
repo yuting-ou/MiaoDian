@@ -123,6 +123,15 @@ nonisolated struct DailyUsage: Codable, Equatable, Sendable {
 	}
 }
 
+// 睡眠段按自然日拆分后的一段：日键 + 该段时长 + 段两端电量（按时间线性插值）
+// 只在结算时瞬时存在，不落盘
+nonisolated struct SleepSegmentPart: Equatable, Sendable {
+	var dayKey: String
+	var seconds: TimeInterval
+	var startPercent: Double
+	var endPercent: Double
+}
+
 // 每日健康度采样
 nonisolated struct HealthSample: Codable, Equatable, Sendable {
 	let date: Date

@@ -1965,6 +1965,83 @@ do {
 	expect(nap == nil, "睡眠结算：不足 20 分钟的小憩不记")
 }
 
+// MARK: - 睡眠段时长与驻留归因
+
+// 合盖期间没有采样帧，但时间真实流逝：不补记则每天记到的时长只有醒着那几小时
+// （实测某日仅 6.1h，而那一夜 11.9h 睡眠全丢），续航换算/驻留洞察/插电占比一起偏低
+do {
+	var sh = Calendar(identifier: .gregorian)
+	sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+	let at = { (cal: Calendar, y: Int, mo: Int, d: Int, h: Int) -> Date in
+		cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: 0))!
+	}
+	let sleepDate = at(sh, 2026, 9, 22, 23)
+	let wakeDate = at(sh, 2026, 9, 23, 7)
+
+	// 跨午夜拆两段：日键与长度都跟随注入日历，段端点电量按时间线性插值
+	let parts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 90, wakeDate: wakeDate, endPercent: 78, calendar: sh)
+	expectEqual(parts.count, 2, "睡眠归因：跨午夜拆成两天")
+	expectEqual(parts.map(\.dayKey), ["2026-09-22", "2026-09-23"], "睡眠归因：日键与注入日历同日")
+	expectEqual(parts[0].seconds, 3600, "睡眠归因：前段长度 = 到午夜的实际秒数")
+	expectEqual(parts[1].seconds, 25200, "睡眠归因：后段长度 = 午夜到醒来")
+	expect(abs(parts[1].startPercent - 88.5) < 0.001, "睡眠归因：段端点电量按时间线性插值")
+	expect(BatteryHistoryRecorder.sleepSegmentParts(sleepDate: wakeDate, startPercent: 90, wakeDate: sleepDate, endPercent: 78, calendar: sh).isEmpty, "睡眠归因：时钟回拨不产生片段")
+
+	// 驻留占比：单调线性路径下电量区间与时间区间成正比，闭式解
+	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 95, to: 85), 0.5, "睡眠驻留：穿越阈值时按落差比例计")
+	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 92, to: 95), 1, "睡眠驻留：全程在阈值之上")
+	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 70, to: 60), 0, "睡眠驻留：全程在阈值之下")
+	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 90, to: 90), 1, "睡眠驻留：恒定值恰在阈值上算驻留")
+	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 88, to: 88), 0, "睡眠驻留：恒定值在阈值下不算")
+
+	let rows = [
+		DailyUsage(dayKey: "2026-09-22", drainedPercent: 5, chargedPercent: 3),
+		DailyUsage(dayKey: "2026-09-23", drainedPercent: 1, chargedPercent: 0),
+	]
+	let nightOnBattery = BatteryHistoryRecorder.creditingSleepTime(rows, parts: parts, onAC: false)
+	let nightOnAC = BatteryHistoryRecorder.creditingSleepTime(rows, parts: parts, onAC: true)
+	expectEqual(nightOnBattery[0].batterySeconds, 3600, "睡眠归因：拔电过夜记入电池时长（前夜段）")
+	expectEqual(nightOnBattery[1].batterySeconds, 25200, "睡眠归因：拔电过夜记入电池时长（醒来日）")
+	expectEqual(nightOnBattery[1].acSeconds, 0, "睡眠归因：拔电过夜不记插电时长")
+	expectEqual(nightOnAC[1].acSeconds, 25200, "睡眠归因：插电过夜记入插电时长（按合盖时的电源，非醒来时）")
+	expectEqual(nightOnBattery[0].drainedPercent, 5, "睡眠归因：夜间掉电不冒充瞬时用电（drained 不动）")
+	expectEqual(nightOnAC[0].chargedPercent, 3, "睡眠归因：夜间充入不冒充瞬时充入（charged 不动）")
+	expect(abs(nightOnBattery[0].soc80to90Seconds - 3600) < 0.001, "睡眠归因：跨午夜前那一小时算在 80–90 档")
+	expect(abs(nightOnBattery[1].soc80to90Seconds - 20400) < 0.001, "睡眠归因：醒来日按插值后的段内落差算驻留")
+
+	// 两档不重不漏 + 低电量睡眠不记驻留
+	let flat = [DailyUsage(dayKey: "2026-09-22")]
+	let highSleep = BatteryHistoryRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 3600, startPercent: 95, endPercent: 85)], onAC: true)
+	expectEqual(highSleep[0].soc90to100Seconds, 1800, "睡眠驻留：90%+ 档只算阈值以上那段")
+	expectEqual(highSleep[0].soc80to90Seconds, 1800, "睡眠驻留：80–90 档算余下那段")
+	let lowSleep = BatteryHistoryRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 600, startPercent: 70, endPercent: 60)], onAC: false)
+	expectEqual(lowSleep[0].soc90to100Seconds + lowSleep[0].soc80to90Seconds, 0, "睡眠驻留：低电量睡眠不记驻留")
+
+	// 那天没有日行 → 只跳过该段，绝不凭空造天（否则"记录 N 天"与月报日均分母虚增）
+	let missing = BatteryHistoryRecorder.creditingSleepTime([DailyUsage(dayKey: "2026-09-22")], parts: parts, onAC: false)
+	expectEqual(missing.count, 1, "睡眠归因：缺行时不凭空造天")
+	expectEqual(missing[0].batterySeconds, 3600, "睡眠归因：缺行只跳过该段，已有段仍记")
+	expectEqual(BatteryHistoryRecorder.creditingSleepTime(rows, parts: [], onAC: false), rows, "睡眠归因：无片段时原样返回")
+
+	// ≥20 分钟那道门只管"睡眠掉电记录/告警"，不该顺带吞掉时长归因
+	let napParts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83, calendar: sh)
+	expect(BatteryHistoryRecorder.settledSleepDrain(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83) == nil, "睡眠归因：小憩仍不进出电记录")
+	expectEqual(BatteryHistoryRecorder.creditingSleepTime(rows, parts: napParts, onAC: false)[0].batterySeconds, 600, "睡眠归因：小憩时长照记")
+
+	// 时区跟随：同一批绝对时刻，UTC+14 与 UTC 的午夜分界不同
+	var utcCal = Calendar(identifier: .gregorian)
+	utcCal.timeZone = TimeZone(secondsFromGMT: 0)!
+	var plus14 = Calendar(identifier: .gregorian)
+	plus14.timeZone = TimeZone(secondsFromGMT: 14 * 3600)!
+	let absSleep = at(utcCal, 2026, 9, 22, 12)
+	let absWake = at(utcCal, 2026, 9, 23, 2)
+	let utcParts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: utcCal)
+	let plus14Parts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: plus14)
+	expectEqual(utcParts.map(\.dayKey), ["2026-09-22", "2026-09-23"], "睡眠归因：UTC 下午夜把 14 小时切成两天")
+	expectEqual(plus14Parts.map(\.dayKey), ["2026-09-23"], "睡眠归因：UTC+14 下同一段整夜落在一天（变异：日键不绑 calendar.timeZone 即红）")
+	expectEqual(plus14Parts.reduce(0) { $0 + $1.seconds }, 50400, "睡眠归因：换时区不改变总时长")
+}
+
 // MARK: - 历史数据损坏抢救
 
 // 主档损坏（有数据却解不开）→ 回退备份；主档正常直接解码；双份都坏不崩；
