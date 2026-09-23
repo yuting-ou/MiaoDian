@@ -1965,6 +1965,55 @@ do {
 	expect(nap == nil, "睡眠结算：不足 20 分钟的小憩不记")
 }
 
+// MARK: - 时长与掉电同窗（v2.9.4 修 30 秒小帽）
+
+do {
+	let napped = BatteryHistoryRecorder.accumulatingDailyUsage(
+		DailyUsage(dayKey: "2026-09-23"), percent: 79, lastPercent: 80,
+		powerSource: .battery, isCharging: false, secondsSinceLastSample: 60)
+	expectEqual(napped.drainedPercent, 1, "同窗：60 秒间隔的掉电照记")
+	expectEqual(napped.batterySeconds, 60.0, "同窗：60 秒电池时长不被 30 秒小帽吞掉")
+
+	let acNap = BatteryHistoryRecorder.accumulatingDailyUsage(
+		DailyUsage(dayKey: "2026-09-23"), percent: 80, lastPercent: 80,
+		powerSource: .powerAdapter, isCharging: true, secondsSinceLastSample: 120)
+	expectEqual(acNap.acSeconds, 120.0, "同窗：120 秒插电时长计入 acSeconds")
+
+	let edge = BatteryHistoryRecorder.accumulatingDailyUsage(
+		DailyUsage(dayKey: "2026-09-23"), percent: 80, lastPercent: 80,
+		powerSource: .powerAdapter, isCharging: false, secondsSinceLastSample: 180)
+	expectEqual(edge.acSeconds, 180.0, "分界：恰好 180 秒仍归帧路径")
+
+	let slept = BatteryHistoryRecorder.accumulatingDailyUsage(
+		DailyUsage(dayKey: "2026-09-23"), percent: 75, lastPercent: 80,
+		powerSource: .battery, isCharging: false, secondsSinceLastSample: 181)
+	expectEqual(slept.drainedPercent, 0, "超窗：跨睡眠的掉电不计入瞬时帧")
+	expectEqual(slept.batterySeconds, 0.0, "超窗：跨睡眠的时长也不计入帧（交给睡眠路径）")
+
+	let rows = [DailyUsage(dayKey: "2026-09-23")]
+	let shortNap = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+		SleepSegmentPart(dayKey: "2026-09-23", seconds: 100, startPercent: 88, endPercent: 87)
+	], onAC: false)
+	expectEqual(shortNap, rows, "短觉（≤窗口）不双计：睡眠路径原样返回")
+	expectEqual(shortNap.first?.soc80to90Seconds, 0.0, "短觉跳过时不动驻留桶")
+
+	let longSleep = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+		SleepSegmentPart(dayKey: "2026-09-23", seconds: 600, startPercent: 88, endPercent: 87)
+	], onAC: false)
+	expectEqual(longSleep.first?.batterySeconds, 600.0, "长觉（>窗口）由睡眠路径独占计入")
+	expectEqual(longSleep.first?.sleepBatterySeconds, 600.0, "长觉仍登记睡眠电池时长（供醒着强度减分母）")
+	expect((longSleep.first?.soc80to90Seconds ?? 0) > 0, "长觉驻留桶照常分摊")
+
+	let missing = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+		SleepSegmentPart(dayKey: "2026-09-20", seconds: 600, startPercent: 88, endPercent: 87)
+	], onAC: true)
+	expectEqual(missing, rows, "缺行仍然跳过（不因窗口改动而放宽）")
+
+	// 醒着强度：60 秒间隔补记后分母不再缺一段，强度不应被虚高
+	let day = DailyUsage(dayKey: "2026-09-23", drainedPercent: 5, acSeconds: 0, batterySeconds: 3600)
+	expectEqual(RuntimeScenarioCalibration.dayIntensity(day).map { ($0 * 10).rounded() / 10 }, 5.0, "强度：1 小时掉 5% 记 5%/h")
+}
+
 // MARK: - 睡眠段时长与驻留归因
 
 // 合盖期间没有采样帧，但时间真实流逝：不补记则每天记到的时长只有醒着那几小时

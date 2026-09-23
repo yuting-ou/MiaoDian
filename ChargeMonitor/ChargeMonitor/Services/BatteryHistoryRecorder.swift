@@ -110,8 +110,6 @@ final class BatteryHistoryRecorder: ObservableObject {
 	nonisolated private static let socWindowSeconds: TimeInterval = 24 * 3600
 	nonisolated private static let socRegularInterval: TimeInterval = 10 * 60
 	nonisolated private static let socChangeMinInterval: TimeInterval = 3 * 60
-	// 相邻两帧间隔超过这个值视为睡过，不计入插电/电池时长
-	nonisolated private static let usageDeltaCapSeconds: TimeInterval = 30
 	// 合盖不足 20 分钟算小憩，不计入睡眠掉电记录
 	nonisolated private static let minSleepSeconds: TimeInterval = 20 * 60
 	// 半小时内重复见到同一充电器（如应用重启）不重复计次
@@ -595,7 +593,11 @@ final class BatteryHistoryRecorder: ObservableObject {
 				usage.chargedPercent += percent - last
 			}
 		}
-		if let delta = secondsSinceLastSample, delta > 0, delta <= usageDeltaCapSeconds {
+		// 时长与掉电共用同一个归因窗口：窗口内两样都记，超窗两样都不记。
+		// 旧实现这里另设 30 秒小帽（掉电允许 180 秒），App Nap 或维护性睡眠把轮询
+		// 拖到 30~180 秒时，掉电照记、时长整段消失——本机实测某日 13.7 小时只归因
+		// 2.2 小时，醒着强度被抬到真值的数倍，动态续航的校准输入因此是假的。
+		if let delta = secondsSinceLastSample, isContiguous {
 			if powerSource == .powerAdapter {
 				usage.acSeconds += delta
 			} else {
@@ -679,6 +681,9 @@ final class BatteryHistoryRecorder: ObservableObject {
 	) -> [DailyUsage] {
 		var history = history
 		for part in parts {
+			// 短于归因窗的睡眠，跨它的那一帧已经按同一段记过时长与驻留；
+			// 两条路径以同一个窗口分界（≤窗归帧、>窗归睡眠段），重叠区间不再双计
+			guard part.seconds > usageAttributionGapSeconds else { continue }
 			guard part.seconds > 0, let index = history.firstIndex(where: { $0.dayKey == part.dayKey }) else { continue }
 			if onAC {
 				history[index].acSeconds += part.seconds
