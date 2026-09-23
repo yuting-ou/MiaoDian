@@ -39,7 +39,7 @@ enum BatteryDataExporter {
 		if !aggregateRows.isEmpty {
 			appendSection(
 				title: "能耗聚合",
-				header: ["窗口", "记录天数", "用电%", "充入%", "日均用电%", "插电占比"],
+				header: ["窗口", "记录天数", "用电%", "充入%", "日均用电%", "插电占比(醒着)"],
 				rows: aggregateRows,
 				to: &lines
 			)

@@ -6,6 +6,13 @@ import Foundation
 /// - 不承诺月级电量曲线（细粒度 SOC 仅近 24h，属 HourlyDrainStats / socSamples）
 /// - 样本不足 → 日均/对比为 nil，调用方应沉默
 nonisolated enum EnergyAggregation {
+	/// 面板「醒着插电占比」那行的唯一出口。文案必须住在逻辑层而不是 View 里：
+	/// UI 不进测试面，写在 View 里的字面量测试引用不到，长度守卫就只能重打一遍同样的
+	/// 字符串（改长改词都不会红，等于没守卫）——v2.9.9 的对抗审查正是抓到这里。
+	nonisolated static func plugShareLine(_ share: Double) -> String {
+		String(format: "醒着 %.0f%% 的时间插着电源", share * 100)
+	}
+
 	nonisolated struct WindowStats: Equatable, Sendable {
 		let dataDays: Int
 		let totalDrainedPercent: Int

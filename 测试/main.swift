@@ -2338,6 +2338,10 @@ do {
 	let headerLine = csv3.split(separator: "\n").first(where: { $0.hasPrefix("日期,") }).map(String.init) ?? ""
 	expectEqual(headerLine, "日期,用电%,充入%,插电秒,电池秒,插电占比(醒着),睡眠电池秒,睡眠插电秒,归因窗口秒",
 			   "CSV导出：每日用电表头自带口径标注且列数与数据行一致（变异：漏标或错位即红）")
+	// 聚合表没有睡眠秒列可减，口径只能写在列名上——两张表必须同一说法
+	expectEqual(csv.split(separator: "\n").first(where: { $0.hasPrefix("窗口,") }).map(String.init) ?? "",
+			   "窗口,记录天数,用电%,充入%,日均用电%,插电占比(醒着)",
+			   "CSV导出：能耗聚合表头同样标注醒着口径（变异：漏标即红）")
 	// 列数比对必须保留空列：split 默认会把 ",," 折掉，留空口径列正是错位高发处
 	expectEqual(headerLine.split(separator: ",", omittingEmptySubsequences: false).count,
 			   (csvRow(csv5, startingWith: "2026-08-14,") ?? "").split(separator: ",", omittingEmptySubsequences: false).count,
@@ -2362,7 +2366,15 @@ do {
 	// §4.5 nil 语义：旧档两个睡眠键都缺=nil → 减法退化为原值，等于把 56 天历史按原口径读
 	let legacy = DailyUsage(dayKey: "2026-08-13", drainedPercent: 10, chargedPercent: 20, acSeconds: 3600, batterySeconds: 1200)
 	expect(abs((legacy.acShare ?? 0) - 0.75) < 0.001, "插电占比醒着口径：旧档无睡眠键→与升级前同值（不判废历史）")
-	expectEqual(legacy.awakeObservationSeconds, legacy.observationSeconds, "插电占比醒着口径：旧档醒着时长＝含睡时长")
+	// 不比恒等式（早先写的是 awake==observed，对无标记行恒真、抓不到任何东西）：钉死数值
+	expectEqual(legacy.awakeObservationSeconds, 4800, "插电占比醒着口径：旧档无标记时醒着时长就是原总时长（钉死值）")
+	// 标记超量（睡眠秒 > 总秒，只可能来自导入/损坏）：夹到 0，不给负时长或负占比
+	let overMarked = DailyUsage(dayKey: "2026-09-24", drainedPercent: 0, chargedPercent: 0,
+								acSeconds: 3600, batterySeconds: 1200,
+								sleepBatterySeconds: 9999, sleepACSeconds: 9999)
+	expectEqual(overMarked.awakeACSeconds, 0, "标记超量：分子夹到 0 不为负（变异：去掉 min 夹紧即红）")
+	expectEqual(overMarked.awakeBatterySeconds, 0, "标记超量：分母项夹到 0 不为负")
+	expect(overMarked.acShare == nil, "标记超量：醒着时长归零 → 沉默而不是负占比")
 	expect(legacy.sleepACSeconds == nil, "插电占比醒着口径：旧档缺键解出 nil 而非 0（反向确认）")
 
 	// 门槛分家：醒着样本不足半小时 → 占比沉默；驻留按含睡观测时长仍算（应力与睡不睡无关）
@@ -2403,9 +2415,12 @@ do {
 	expectEqual(credited.first?.sleepACSeconds, 7200, "睡眠补记：插电那半边留痕（醒着口径能减回去）")
 	expectEqual(credited.first?.acSeconds, 10800, "睡眠补记：插电总时长照旧累加（不减原始记录）")
 
-	// 载体守卫：面板那行仍是一行放得下的长度（今日用电卡固定高度）
-	expect(String(format: "醒着 %.0f%% 的时间插着电源", 100.0).count <= 18,
-		   "载体守卫：插电占比行不长于卡片既有最长句")
+	// 载体守卫必须打在面板文案的**唯一出口**上：断言里重打一遍 View 的字面量等于没守卫
+	// （View 不进测试面，改了也不会红）——v2.9.9 对抗审查抓到的正是这一点
+	expectEqual(EnergyAggregation.plugShareLine(0.528), "醒着 53% 的时间插着电源",
+			   "面板文案单一出口：内容与格式钉死（改词或改长即红，UI 只能经此取串）")
+	expect(EnergyAggregation.plugShareLine(1.0).count <= 18,
+		   "载体守卫：插电占比行（出口函数）不长于卡片既有最长句")
 }
 
 // MARK: - 归档三面带 v2.9.9 新字段（§1 复利数据：导出/导入/回执）
