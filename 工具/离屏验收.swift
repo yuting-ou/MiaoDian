@@ -123,8 +123,26 @@ struct OffscreenAcceptance {
 			let predicted = measured[0].1 + 2 * lineUnit + chartDelta
 			print(String(format: "  实测推论：基线 %.1fpt · 每说明行 %.1fpt · 七天图 %.1fpt（D 预测 %.1f 实测 %.1f，残差 %+.1f）",
 						 measured[0].1, lineUnit, chartDelta, predicted, measured[3].1, measured[3].1 - predicted))
-			print(String(format: "  现行常量：基线 92/135 · 每行 %.0fpt → 若与实测差得多，改常量而不是改说法",
+			print(String(format: "  现行常量：基线 %.0f · 有图 +%.0f · 每行 %.0fpt（与实测推论不符时改常量，不是改说法）",
+						 DwellTracking.dailySummaryBaseHeight,
+						 DwellTracking.dailySummaryChartHeight,
 						 DwellTracking.noteLineHeight))
+		}
+
+		// 真档案腿：用户此刻这张卡实际渲染哪几句、声明高多少。
+		// 只看夹具会漏掉一类问题——生产文案最长那句、以及新加的有界说明给出什么天数
+		let live = BatteryHistoryRecorder(monitor: BatteryMonitor())
+		if let todayUsage = live.todayUsage {
+			let lines = DwellTracking.noteLines(todayUsage: todayUsage, history: live.dailyHistory)
+			print(String(format: "  真档案：说明行 %d 条 · 声明高 %.0fpt · 历史 %d 天",
+						 lines.count,
+						 DwellTracking.dailySummaryHeight(usage: todayUsage, history: live.dailyHistory),
+						 live.dailyHistory.count))
+			for line in lines {
+				print("    · \(line)（折行单位 \(DwellTracking.noteHeightUnits(line))）")
+			}
+		} else {
+			print("  真档案：今天还没有用电记录，跳过这一腿")
 		}
 	}
 }
