@@ -4894,6 +4894,77 @@ do {
 	)
 }
 
+// MARK: - 今日用电卡「文案↔高度」同源（v2.9.11）
+
+do {
+	let today = Date(timeIntervalSinceReferenceDate: 800_000_000)   // 2026-05-09
+	func dayKey(_ offsetDays: Int) -> String {
+		var f = DateFormatter()
+		f.locale = Locale(identifier: "en_US_POSIX")
+		f.calendar = Calendar(identifier: .gregorian)
+		f.timeZone = TimeZone(identifier: "UTC")
+		f.dateFormat = "yyyy-MM-dd"
+		return f.string(from: today.addingTimeInterval(TimeInterval(-86_400 * offsetDays)))
+	}
+	// 什么说明行都长不出来的今日（观测 180s < 30 分钟，占比与驻留双双沉默）
+	var silent = DailyUsage(dayKey: dayKey(0), drainedPercent: 10, chargedPercent: 0)
+	silent.acSeconds = 120
+	silent.batterySeconds = 60
+	// 两条：插电占比 + 当日驻留（0 分钟也算有样本）
+	var talky = DailyUsage(dayKey: dayKey(0), drainedPercent: 10, chargedPercent: 0)
+	talky.acSeconds = 3600
+	// 四条：占比 + 当日驻留 + 近 7 日合计 + 升降对比（两侧同归因窗口、各满 2 天）
+	var loud = DailyUsage(dayKey: dayKey(0), drainedPercent: 10, chargedPercent: 0)
+	loud.acSeconds = 3600
+	loud.soc80to90Seconds = 3600
+	loud.attributionGapSeconds = 180
+	var loudHistory: [DailyUsage] = []
+	for offset in 0...13 {
+		var day = DailyUsage(dayKey: dayKey(offset), drainedPercent: 5, chargedPercent: 5)
+		day.acSeconds = 3600
+		day.soc80to90Seconds = 1800 + Double(offset) * 600
+		day.attributionGapSeconds = 180
+		loudHistory.append(day)
+	}
+	// 只进七天柱图、不进任何统计窗口的历史（2020 年）
+	let chartOnlyHistory = [
+		DailyUsage(dayKey: "2020-01-01", drainedPercent: 20, chargedPercent: 10),
+		DailyUsage(dayKey: "2020-01-02", drainedPercent: 20, chargedPercent: 10)
+	]
+
+	// —— 出口本身：行数由条件决定，不多不少
+	expectEqual(DwellTracking.noteLines(todayUsage: silent, history: [], today: today).count, 0,
+				"说明行出口：观测不足 30 分钟时占比与驻留都沉默（不硬凑一行）")
+	expectEqual(DwellTracking.noteLines(todayUsage: talky, history: [], today: today).count, 2,
+				"说明行出口：占比句 + 当日驻留句各一条（变异：出口少拼一条即红）")
+	let loudLines = DwellTracking.noteLines(todayUsage: loud, history: loudHistory, today: today)
+	expectEqual(loudLines.count, 4,
+				"说明行出口：周合计与升降句同样出自出口——本卡最长态 4 行（变异：折行单位封顶或丢末条即红）")
+	expect(loudLines.first?.contains("插着电源") == true,
+		   "说明行顺序：占比句排第一（面板按此顺序渲染，改序需显式改这条）")
+
+	// —— 高度：期望值一律写字面量。数值来自 `bash 工具/离屏验收.sh cards` 离屏量真卡
+	//（实测基线 54 · 每说明行 12 · 七天图 42，四点残差 0）。写常量会让常量本身失去鉴别力。
+	expectEqual(DwellTracking.dailySummaryHeight(usage: silent, history: [], today: today), 54,
+				"标定值：无图 0 行 = 54pt（旧声明写 92，等于在配平里把这张卡看胖 38pt）")
+	expectEqual(DwellTracking.dailySummaryHeight(usage: talky, history: [], today: today), 78,
+				"标定值：无图 2 行 = 78pt（= 54 + 2×12）")
+	expectEqual(DwellTracking.dailySummaryHeight(usage: silent, history: chartOnlyHistory, today: today), 96,
+				"标定值：有图 0 行 = 96pt（七天图实测差 42pt）")
+	expectEqual(DwellTracking.dailySummaryHeight(usage: loud, history: loudHistory, today: today), 144,
+				"标定值：有图 4 行 = 144pt（本卡最长态；旧声明恒为 135，反而少报 9pt）")
+
+	// —— 折行计费（纯算术，入参即被测对象）
+	expectEqual(DwellTracking.noteHeightUnits(String(repeating: "驻", count: 28)), 1, "折行边界：恰满一行预算算一行")
+	expectEqual(DwellTracking.noteHeightUnits(String(repeating: "驻", count: 29)), 2, "折行边界：超一个字算两行（变异：不向上取整即红）")
+	expectEqual(DwellTracking.noteHeightUnits(String(repeating: "驻", count: 57)), 3, "折行：三行预算按 3 份计")
+	// —— 载体守卫打在**生产产出**上：出口今天吐出的每一条都必须在列宽内只占一行。
+	// 手抄串做守卫测不到生产文案（v2.9.10 立过的规矩），加长跨预算时这条先红。
+	expect(loudLines.allSatisfy { DwellTracking.noteHeightUnits($0) == 1 },
+		   "载体守卫：出口产出的全部说明行在列宽预算内均为一行")
+}
+
+
 // MARK: - 汇总
 
 print("")

@@ -37,6 +37,27 @@ if [ ${#EXCLUDED_MACRO[@]} -gt 0 ]; then
 	printf '    %s\n' "${EXCLUDED_MACRO[@]}"
 fi
 
+# 出口守卫：UI/ 整体不进测试编译面，所以"面板只能经出口取串"这条断言在测试面里
+# 结构上无法兑现（v2.9.10 曾误以为兑现了）。改在这里按源文件查：视图层若自己调
+# 文案生产者、或干脆不再经出口，构建直接失败。
+LEAK="$(grep -rl 'plugShareLine(' "$SRC/UI" 2>/dev/null || true)"
+if [ -n "$LEAK" ]; then
+	echo "==> 出口守卫失败：UI 层自己取了说明文案（应只经 DwellTracking.noteLines）"
+	printf '    %s\n' $LEAK
+	exit 1
+fi
+BYPASS="$(grep -rl 'summaryLines(' "$SRC/UI" 2>/dev/null || true)"
+if [ -n "$BYPASS" ]; then
+	echo "==> 出口守卫失败：UI 层绕开 noteLines 直取驻留行（高度会与渲染脱钩）"
+	printf '    %s\n' $BYPASS
+	exit 1
+fi
+if ! grep -q 'DwellTracking.noteLines' "$SRC/UI/DailySummarySection.swift" 2>/dev/null; then
+	echo "==> 出口守卫失败：今日用电卡不再经 noteLines，说明行与声明高度失去同源"
+	exit 1
+fi
+echo "==> 出口守卫：说明文案只经 noteLines（UI 层已按源文件核对）"
+
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
 # 钉的旧 SDK 是两条独立证据，回显版本免得把两者的结论混着读。

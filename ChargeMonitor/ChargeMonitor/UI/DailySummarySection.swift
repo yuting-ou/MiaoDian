@@ -28,22 +28,10 @@ struct DailySummarySection: View {
 				}
 				.padding(.vertical, 2)
 				
-				// 插电占比：长期插电党能看到自己的习惯（醒着口径，与全部历史连续）
-				if let share = usage.acShare {
-					Text(EnergyAggregation.plugShareLine(share))
-						.font(.system(size: 9))
-						.foregroundStyle(GlassTokens.labelOnGlass)
-						.padding(.top, 1)
-				}
-
-				// 高电量驻留：80%+ 停留时长是电化学应力的直接度量（C3：扩展周聚合，不新建卡）
+				// 说明行：插电占比（醒着口径，与全部历史连续）+ 高电量驻留（C3 扩展周聚合）。
+				// 行集合与列配平高度同取 DwellTracking.noteLines，这里只负责渲染
 				ForEach(
-					Array(
-						DwellTracking.summaryLines(
-							todayUsage: usage,
-							history: history
-						).enumerated()
-					),
+					Array(DwellTracking.noteLines(todayUsage: usage, history: history).enumerated()),
 					id: \.offset
 				) { _, line in
 					Text(line)

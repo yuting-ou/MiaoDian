@@ -451,7 +451,9 @@ struct BatteryPopoverView: View {
 		// —— 用电行为：今日/日历/时段/24h/功耗/续航换算/高耗电 ——
 		if options.contains(.dailySummary), let usage = historyRecorder.todayUsage,
 		   usage.drainedPercent > 0 || usage.chargedPercent > 0 {
-			result.append((.dailySummary, cardHeight(.dailySummary, expanded: historyRecorder.dailyHistory.count >= 2 ? 135 : 92)))
+			// 高度与卡内说明行同源：说明行长出来了，配平就得看见它长高了
+			let summaryHeight = DwellTracking.dailySummaryHeight(usage: usage, history: historyRecorder.dailyHistory)
+			result.append((.dailySummary, cardHeight(.dailySummary, expanded: summaryHeight)))
 		}
 		if options.contains(.usageCalendar), historyRecorder.dailyHistory.count >= 3 {
 			result.append((.usageCalendar, cardHeight(.usageCalendar, expanded: 128)))

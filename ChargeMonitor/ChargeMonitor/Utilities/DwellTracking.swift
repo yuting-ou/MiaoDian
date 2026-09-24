@@ -136,6 +136,55 @@ nonisolated enum DwellTracking {
 		return lines
 	}
 
+	/// 「今日用电」卡说明行全集（唯一出口）：插电占比 + 驻留各行。
+	/// 卡片渲染与两列配平高度都从这一条取——多一行必然多带一份高度，
+	/// 不会再出现"内容长出来了、声明高度还是旧的"那种配平失真。
+	nonisolated static func noteLines(
+		todayUsage: DailyUsage,
+		history: [DailyUsage],
+		today: Date = Date(),
+		calendar: Calendar = .current
+	) -> [String] {
+		var lines: [String] = []
+		if let share = todayUsage.acShare {
+			lines.append(EnergyAggregation.plugShareLine(share))
+		}
+		lines.append(contentsOf: summaryLines(todayUsage: todayUsage, history: history, today: today, calendar: calendar))
+		return lines
+	}
+
+	/// 说明行的单行高度。**不是估的**：`bash 工具/离屏验收.sh cards` 离屏量真卡，
+	/// 0/2 行两组差值 / 2 = 12.0pt（size-9 行高 11 + 上行距 1）
+	nonisolated static let noteLineHeight: CGFloat = 12
+	/// 无七天图时的卡体自然高（头部 + 三格统计），同样由 cards 模式量出：54pt
+	nonisolated static let dailySummaryBaseHeight: CGFloat = 54
+	/// 七天柱图带来的高度差：实测 42pt（柱框 26 + 日期标签 + 间距）
+	nonisolated static let dailySummaryChartHeight: CGFloat = 42
+
+	/// 一行放得下的全角当量数：面板 584 − 左右内边距 12×2 − 两列间距 10 = 550，每列 275，
+	/// 再扣卡片自身水平内边距 10×2 → 文字宽 255pt；说明行字号 9 → 255/9 ≈ 28
+	nonisolated static let noteFullWidthCharsPerLine = 28
+
+	/// 一条说明文案在列宽里占几个「行高」：CJK 记 1、半角记 0.52 的全角当量除以每行预算后向上取整。
+	/// 折行守卫就落在这里——以后加文案不必改高度，长度自己换算成行高单位
+	nonisolated static func noteHeightUnits(_ text: String) -> Int {
+		let fullWidthWeight = text.reduce(0.0) { $0 + ($1.isASCII ? 0.52 : 1.0) }
+		return max(1, Int(ceil(fullWidthWeight / Double(noteFullWidthCharsPerLine))))
+	}
+
+	/// 「今日用电」卡展开高度：基础（有无七天柱图）+ 每条说明行按折行后的行高单位计费。
+	nonisolated static func dailySummaryHeight(
+		usage: DailyUsage,
+		history: [DailyUsage],
+		today: Date = Date(),
+		calendar: Calendar = .current
+	) -> CGFloat {
+		let base = dailySummaryBaseHeight + (history.count >= 2 ? dailySummaryChartHeight : 0)
+		let units = noteLines(todayUsage: usage, history: history, today: today, calendar: calendar)
+			.reduce(0) { $0 + noteHeightUnits($1) }
+		return base + noteLineHeight * CGFloat(units)
+	}
+
 	nonisolated static func formatMinutes(_ minutes: Int) -> String {
 		if minutes < 60 { return "\(minutes) 分钟" }
 		let h = minutes / 60
