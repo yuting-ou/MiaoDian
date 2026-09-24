@@ -4965,6 +4965,86 @@ do {
 }
 
 
+// MARK: - 驻留升降「为什么还没有」的有界说明（v2.9.12，§7.4 沉默项）
+
+do {
+	let today = Date(timeIntervalSinceReferenceDate: 800_000_000)   // 2026-05-09
+	// 夹具键与窗口键必须出自同一 calendar：写死 UTC，免得断言在 UTC±14 一类时区里漂一天
+	// （本轮把"精确天数"钉进断言，松散夹具就会变成假红门；宪法 §4.2/§4.10）
+	var cal = Calendar(identifier: .gregorian)
+	cal.timeZone = TimeZone(identifier: "UTC")!
+	var fmt = DateFormatter()
+	fmt.locale = Locale(identifier: "en_US_POSIX")
+	fmt.calendar = cal
+	fmt.dateFormat = "yyyy-MM-dd"
+	func key(_ offset: Int) -> String { fmt.string(from: cal.date(byAdding: .day, value: -offset, to: today)!) }
+	// observed=false 让当日观测 < 30 分钟 → dwell80PlusMinutes 才是 nil；
+	// 驻留 0 分钟仍算"有样本"（本轮第一次踩到这个区别，夹具写错过一次）
+	func day(_ offset: Int, gap: Double?, dwellMinutes: Double = 40, observed: Bool = true) -> DailyUsage {
+		var d = DailyUsage(dayKey: key(offset), drainedPercent: 6, chargedPercent: 4)
+		d.acSeconds = observed ? 3600 : 0
+		d.soc80to90Seconds = dwellMinutes * 60
+		d.attributionGapSeconds = gap
+		return d
+	}
+
+	let recent7 = DwellTracking.dayKeys(endingOn: today, count: 7, calendar: cal)
+	let prior7 = DwellTracking.dayKeys(
+		endingOn: cal.date(byAdding: .day, value: -7, to: cal.startOfDay(for: today))!,
+		count: 7, calendar: cal
+	)
+	let todayUsage = day(0, gap: 180, dwellMinutes: 40)
+	// 近窗 7 天带 v2.9.5 标记、前窗 7 天是旧档（无标记）→ 挡住对比的最晚旧档日是 offset 7
+	let mixed = (0...6).map { day($0, gap: 180, dwellMinutes: 30 + Double($0)) }
+		+ (7...13).map { day($0, gap: nil, dwellMinutes: 30 + Double($0)) }
+
+	// 该出现时出现，且整行相等（子串匹配放不走追加限定词）
+	expectEqual(
+		DwellTracking.pendingComparableDays(history: mixed, recentKeys: recent7, priorKeys: prior7, today: today, calendar: cal) ?? -1,
+		7, "倒计时：由挡住并集窗口的最晚旧档日决定（变异：窗口宽度或 span 写错即红）"
+	)
+	let pendingLines = DwellTracking.summaryLines(todayUsage: todayUsage, history: mixed, today: today, calendar: cal)
+	expectEqual(pendingLines.last ?? "", "驻留升降约 7 天后可比", "有界说明整行锁定（措辞只承诺可比，不承诺届时必有结论）")
+	expectEqual(pendingLines.count, 3, "说明占的是升降句原槽位：驻留段仍 3 行（当日 + 周合计 + 说明）")
+
+	// 反向确认之一：口径已一致 → 出升降句，且这句绝不与它并列
+	let allMarked = (0...13).map { day($0, gap: 180, dwellMinutes: 30 + Double($0)) }
+	expect(DwellTracking.pendingComparableDays(history: allMarked, recentKeys: recent7, priorKeys: prior7, today: today, calendar: cal) == nil,
+		   "口径一致时不解释：已可比，没有等待可言")
+	let comparableLines = DwellTracking.summaryLines(todayUsage: todayUsage, history: allMarked, today: today, calendar: cal)
+	expect(comparableLines.contains { $0.contains("可比") } == false,
+		   "出升降句时不再出说明句（两者互斥，变异：去掉 windowsComparable 门即红）")
+	expectEqual(comparableLines.count, 3, "可比时驻留段同样 3 行：说明句没把行数撑多")
+
+	// 反向确认之二：窗口里根本没有驻留样本 → 不拿这句冒充原因
+	let noSample = (0...13).map { day($0, gap: $0 <= 6 ? 180 : nil, observed: false) }
+	expect(DwellTracking.pendingComparableDays(history: noSample, recentKeys: recent7, priorKeys: prior7, today: today, calendar: cal) == nil,
+		   "无驻留样本 → 沉默（不替一个没数据的功能许诺日期）")
+	// 反向确认之三：混桶确实挡住，但前窗有效样本不足 2 天 → 给了也兑现不了，闭嘴
+	let sparsePrior = (0...6).map { day($0, gap: 180) } + [day(7, gap: nil)]
+		+ (8...13).map { day($0, gap: nil, observed: false) }
+	expect(DwellTracking.pendingComparableDays(history: sparsePrior, recentKeys: recent7, priorKeys: prior7, today: today, calendar: cal) == nil,
+		   "样本门槛未过就不给倒计时：这句是 ETA，必须两侧都已就绪（变异：删掉样本门即红）")
+	expect(!DwellTracking.summaryLines(todayUsage: todayUsage, history: sparsePrior, today: today, calendar: cal)
+			.contains { $0.contains("可比") },
+		   "样本不足时面板保持原空态")
+
+	// 载体与高度：新句走同一出口，长度在列宽预算内，卡高仍是标定值
+	let pendingNote = DwellTracking.noteLines(todayUsage: todayUsage, history: mixed, today: today, calendar: cal)
+	expectEqual(pendingNote.count, 4, "本卡最长态 4 行不变（说明句进的是既有槽位）")
+	expect(pendingNote.allSatisfy { DwellTracking.noteHeightUnits($0) == 1 },
+		   "载体守卫：新句同样在列宽预算内一句一行")
+	expectEqual(DwellTracking.dailySummaryHeight(usage: todayUsage, history: mixed, today: today, calendar: cal), 144,
+				"声明高 = 标定值 144pt，本轮没改任何几何常量")
+
+	// 另两个读者按原设计沉默：摘要位（洞察/周报）不塞等待句
+	expect(DwellTracking.trackingInsight(history: mixed, today: today, calendar: cal) == nil,
+		   "记档：洞察侧维持沉默——整卡不出现即不解释，等待句会污染摘要")
+	expect(DwellTracking.weeklyDigestLine(history: mixed, due: today, calendar: cal) == nil,
+		   "记档：周报侧维持沉默——推送里加「还要等几天」是噪声，§7.4 要的是面板就地解释")
+}
+
+
 // MARK: - 汇总
 
 print("")

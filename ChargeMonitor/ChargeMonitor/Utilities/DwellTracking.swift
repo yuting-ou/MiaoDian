@@ -84,11 +84,15 @@ nonisolated enum DwellTracking {
 	/// 保养响应对比：recentKeys 窗口日均 vs priorKeys 窗口日均。
 	/// 两侧有效样本各 ≥ 2 才给结论；否则 nil（避免单日噪声当效果）。
 	/// 跨归因窗口口径的日子直接不给对比——口径变化不是用户行为变化。
+	/// 升降对比的样本门槛：两侧各至少这几天有效样本才给结论。**门槛与"该不该解释"同源**，
+	/// 否则会出现"倒计时结束了却仍不出结论"的假承诺（pendingComparableDays 用同一个值把关）
+	nonisolated static let comparisonMinDays = 2
+
 	nonisolated static func careResponseComparison(
 		history: [DailyUsage],
 		recentKeys: [String],
 		priorKeys: [String],
-		minDaysPerWindow: Int = 2
+		minDaysPerWindow: Int = comparisonMinDays
 	) -> CareWindowComparison? {
 		guard windowsComparable(history: history, recentKeys: recentKeys, priorKeys: priorKeys) else { return nil }
 		guard
@@ -100,6 +104,43 @@ nonisolated enum DwellTracking {
 			priorAvgMinutes: prior.averageMinutesPerDay,
 			deltaMinutes: recent.averageMinutesPerDay - prior.averageMinutesPerDay
 		)
+	}
+
+	/// 「为什么没有升降结论」的有界说明（§7.4：撤掉结论不许留纯沉默）。
+	/// 只在缺口**确由归因口径分桶**造成时给天数——样本本来就凑不够的那种不算，
+	/// 因为那不是"再等几天就有"的缺口。返回 nil = 保持原空态。
+	nonisolated static func pendingComparableDays(
+		history: [DailyUsage],
+		recentKeys: [String],
+		priorKeys: [String],
+		today: Date = Date(),
+		calendar: Calendar = .current
+	) -> Int? {
+		guard !windowsComparable(history: history, recentKeys: recentKeys, priorKeys: priorKeys) else { return nil }
+		let keys = Set(recentKeys).union(priorKeys)
+		let inWindow = history.filter { keys.contains($0.dayKey) && $0.dwell80PlusMinutes != nil }
+		// 未来日子会带的口径 = 全历史里最新一天的归因窗口；一天都没有就不许诺
+		// （写成 compactMap 而非多行 filter 链：新 SDK 上 filter 有 Predicate 重载，跨行闭包会解析歧义）
+		let marked = history.compactMap { d -> (String, Double)? in
+			guard let gap = d.attributionGapSeconds else { return nil }
+			return (d.dayKey, gap)
+		}
+		guard let target = marked.max(by: { $0.0 < $1.0 })?.1 else { return nil }
+		let blocking = inWindow.filter { $0.attributionGapSeconds != target }
+		guard !blocking.isEmpty else { return nil }
+		// 只有"其余条件都已就绪、只差旧档熬出窗口"才值得给倒计时：样本本来就凑不够时，
+		// 这句会变成一个兑现不了的 ETA（与强度侧 pendingSameBucketDays 同一纪律）
+		guard weekAggregate(history: history, dayKeys: recentKeys, minDays: comparisonMinDays) != nil,
+			  weekAggregate(history: history, dayKeys: priorKeys, minDays: comparisonMinDays) != nil
+		else { return nil }
+		// 某日要熬到 age > span−1 才离开「recent ∪ prior」并集窗口；视野盖不住就不解释
+		let horizon = dayKeys(endingOn: today, count: recentKeys.count + priorKeys.count, calendar: calendar)
+		var wait = 0
+		for day in blocking {
+			guard let age = horizon.firstIndex(of: day.dayKey) else { return nil }
+			wait = max(wait, horizon.count - age)
+		}
+		return wait > 0 ? wait : nil
 	}
 
 	/// 面板文案：周聚合一行；对比一行；数据不足返回空数组（空态=沉默，不吓人）。
@@ -132,6 +173,10 @@ nonisolated enum DwellTracking {
 			} else {
 				lines.append("与前7日日均持平")
 			}
+		} else if let wait = pendingComparableDays(history: history, recentKeys: recent7, priorKeys: prior7, today: today, calendar: calendar) {
+			// 升降句被归因口径挡住了：说清几天后两边可比。措辞刻意只承诺"可比"，
+			// 不承诺"届时一定有升降结论"——后者还要用户的用电行为配合（§1 只提示不干预）
+			lines.append("驻留升降约 \(wait) 天后可比")
 		}
 		return lines
 	}
