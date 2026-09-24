@@ -264,15 +264,15 @@ struct BatteryHeaderView: View {
 					.shadow(color: color, radius: 3)
 					.opacity(0.8)
 			} else {
-				TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
+				TimelineView(.animation(minimumInterval: PanelMotion.interval(forPeriod: PanelMotion.dotPeriodSeconds))) { context in
 					let time = context.date.timeIntervalSinceReferenceDate
-					let breathe = 0.5 + 0.5 * sin(time * 2 * .pi / 1.8)
+					let breathe = PanelMotion.breathPhase(time, period: PanelMotion.dotPeriodSeconds)
 					Circle()
 						.fill(.white)
 						.frame(width: 4.5, height: 4.5)
 						.shadow(color: color, radius: 3)
-						.opacity(0.55 + 0.45 * breathe)
-						.scaleEffect(0.9 + 0.25 * breathe)
+						.opacity(PanelMotion.dotOpacity(breathe))
+						.scaleEffect(PanelMotion.dotScale(breathe))
 				}
 			}
 		}
@@ -495,10 +495,9 @@ private struct HeatAlertBorder: ViewModifier {
 		if reduceMotion {
 			borderShape.opacity(0.55)
 		} else {
-			TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
+			TimelineView(.animation(minimumInterval: PanelMotion.interval(forPeriod: period))) { context in
 				let t = context.date.timeIntervalSinceReferenceDate
-				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
-				borderShape.opacity(0.30 + 0.28 * breathe)
+				borderShape.opacity(0.30 + 0.28 * PanelMotion.breathPhase(t, period: period))
 			}
 		}
 	}
@@ -541,10 +540,9 @@ private struct BreathPulse: ViewModifier {
 		if reduceMotion {
 			content
 		} else {
-			TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
+			TimelineView(.animation(minimumInterval: PanelMotion.interval(forPeriod: period))) { context in
 				let t = context.date.timeIntervalSinceReferenceDate
-				let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / period)
-				content.opacity(0.75 + 0.25 * breathe)
+				content.opacity(0.75 + 0.25 * PanelMotion.breathPhase(t, period: period))
 			}
 		}
 	}

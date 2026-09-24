@@ -4209,7 +4209,7 @@ do {
 // MARK: - 动效门 PanelMotion（丝滑 = 隔离 + 滚动中不跑装饰弹簧）
 
 do {
-	expectEqual(PanelMotion.timelineFPS, 30, "动效：头部小动画 30fps（12 发涩，120 全速太贵）")
+	expectEqual(PanelMotion.timelineFPS, 30, "动效：位置类小动画 30fps（呼吸类走 PanelMotion 慢档，准入由周期推）")
 	expectEqual(PanelMotion.timelineInterval, 1.0 / 30.0, "动效：fps→interval 换算")
 	expectEqual(PanelMotion.valueFadeSeconds, 0.2, "动效：数值淡化 0.2s")
 	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: false, isDragging: false), "动效门：静止时允许重排弹簧")
@@ -5042,6 +5042,58 @@ do {
 		   "记档：洞察侧维持沉默——整卡不出现即不解释，等待句会污染摘要")
 	expect(DwellTracking.weeklyDigestLine(history: mixed, due: today, calendar: cal) == nil,
 		   "记档：周报侧维持沉默——推送里加「还要等几天」是噪声，§7.4 要的是面板就地解释")
+}
+
+
+// MARK: - 头部呼吸动画参数（v2.9.13，参数与档位规则进可测层）
+
+do {
+	let dotPeriod = PanelMotion.dotPeriodSeconds
+
+	// 波形三点钉死。缺谷值那条的话，把 breathPhase 改成半波整流（0.5+0.5*|sin|，
+	// 光点以两倍频扑动——正是本轮要避免的「在抖」）仍能全绿
+	expect(abs(PanelMotion.breathPhase(0, period: dotPeriod) - 0.5) < 1e-9,
+		   "呼吸相位 t=0 取中位（波形对称；t 是绝对墙钟，不代表开面板那刻的相位）")
+	expect(abs(PanelMotion.breathPhase(dotPeriod / 4, period: dotPeriod) - 1.0) < 1e-9,
+		   "四分之一周期到峰值")
+	expect(abs(PanelMotion.breathPhase(dotPeriod * 0.75, period: dotPeriod) - 0.0) < 1e-9,
+		   "四分之三周期到谷值（半波整流／倍频变异必红）")
+	var inBounds = true
+	var t = 0.0
+	while t <= dotPeriod * 3 {
+		let p = PanelMotion.breathPhase(t, period: dotPeriod)
+		if !(p >= 0 && p <= 1) { inBounds = false }
+		t += 0.037
+	}
+	expect(inBounds, "呼吸相位在三周内始终落在 0…1（不出现负透明度或反向缩放）")
+
+	// 形状预算：只钉函数两端。不再写「两常量相减 ≤10%」——它被这两条蕴含，是假断言
+	expect(abs(PanelMotion.dotScale(0) - 0.96) < 1e-9, "呼吸点缩放下端钉死 0.96")
+	expect(abs(PanelMotion.dotScale(1) - 1.06) < 1e-9, "呼吸点缩放上限钉死 1.06（原 1.15 的 25% 摆动已收）")
+	expect(abs(PanelMotion.dotOpacity(0) - 0.60) < 1e-9 && abs(PanelMotion.dotOpacity(1) - 0.95) < 1e-9,
+		   "呼吸点透明度两端钉死 0.60／0.95（公式反相或丢掉 phase 必红）")
+
+	// 跨通道节奏排序：低电呼吸必须仍是全场最慢的那个（提醒而非催促）
+	expect(dotPeriod < BatteryVisualResolver.lowBreathPeriod,
+		   "充电光点比低电呼吸快：警示通道排序不许被反向（周期调到 >2.2s 即红）")
+	// 别与波面/流光的慢档同周期：三处读同一把墙钟，1:1 会永久锁相
+	expect(abs(dotPeriod - BatteryVisualResolver.wavePeriodSlow) > 0.05,
+		   "充电光点周期不与波面慢档 2.4s 重合（锁相后流光永远追不上光点）")
+	let gridRatio = dotPeriod / BatteryVisualResolver.arcFlowPeriodStep
+	expect(abs(gridRatio - gridRatio.rounded()) > 0.05,
+		   "充电光点周期不落进流光 0.3s 量化格（否则与流光某档严格同频）")
+
+	// 档位规则：慢档只给够慢的脉动，快脉冲留在 30fps——准入由代码算，不是调用方自选
+	expect(PanelMotion.interval(forPeriod: 0.8) == PanelMotion.timelineInterval,
+		   "热脉冲最快档 0.8s 走 30fps：警示节奏发起涩就白警告了（变异：写死慢档即红）")
+	expect(PanelMotion.interval(forPeriod: 1.6) == PanelMotion.timelineInterval,
+		   "热脉冲基准 1.6s 仍走 30fps")
+	expect(PanelMotion.interval(forPeriod: 2.2) == PanelMotion.breathInterval,
+		   "低电呼吸 2.2s 走慢速档")
+	expect(PanelMotion.interval(forPeriod: PanelMotion.breathEligiblePeriod) == PanelMotion.breathInterval,
+		   "恰等于准入周期即入慢档（边界含得起）")
+	expect(PanelMotion.breathFPS >= 12 && PanelMotion.breathFPS < PanelMotion.timelineFPS,
+		   "慢档限在 12…30fps：再低发涩，相等就等于没这一档")
 }
 
 
