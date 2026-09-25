@@ -2,6 +2,9 @@
 # 离屏验收：编真源码 + 离屏渲染工具，打印面板 fittingSize 并出 PNG（不显示窗口、不抢焦点）
 # 用法：bash 工具/离屏验收.sh [宽度pt]
 set -e
+
+# 备份重定向到临时目录：量具进程一律不许碰用户"主档损坏时的抢救源"
+export MIAODIAN_BACKUP_DIR=/tmp/miaodian_offscreen_backup
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/ChargeMonitor/ChargeMonitor"
 DEPLOYMENT_TARGET="15.0"

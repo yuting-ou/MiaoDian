@@ -253,11 +253,12 @@ struct BatteryHeaderView: View {
 	private struct ChargingBreathingDot: View {
 		let color: Color
 		@Environment(\.accessibilityReduceMotion) private var reduceMotion
+		@ObservedObject private var scrollActivity = PanelScrollActivity.shared
 
 		var body: some View {
-			// 液态玻璃的生命感：充电呼吸点常驻（仅「减少动态效果」退静）。
-			// 滚动掉帧不靠关它——由数据发布冻结与卸陪滚探针承担。
-			if reduceMotion {
+			// 液态玻璃的生命感：充电呼吸点常驻（「减少动态效果」或滚动中退静——
+			// 后者是为滚动帧预算：定相不够，TimelineView 即使内容不变也仍要每拍求值）
+			if reduceMotion || PanelMotionGate.holdsDecorativeAnimation(isScrolling: scrollActivity.isScrolling) {
 				Circle()
 					.fill(.white)
 					.frame(width: 4.5, height: 4.5)
@@ -368,10 +369,11 @@ private struct ChargingWaveFill: View {
 	let period: Double
 	let level: CGFloat   // 0...1 水位 = 电量占比
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+	@ObservedObject private var scrollActivity = PanelScrollActivity.shared
 
 	var body: some View {
 		Group {
-			if reduceMotion {
+			if reduceMotion || PanelMotionGate.holdsDecorativeAnimation(isScrolling: scrollActivity.isScrolling) {
 				waveCanvas(phase: .pi / 3)
 			} else {
 				TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
@@ -425,28 +427,41 @@ private struct ChargingWaveFill: View {
 private struct ArcFlowGlow: View {
 	let period: Double    // 走完一圈弧的周期（秒），随充电功率换档
 	let progress: CGFloat // 进度弧末端占比（0.02...1，与进度弧同一终点）
+	@ObservedObject private var scrollActivity = PanelScrollActivity.shared
 
 	var body: some View {
-		TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
-			// 相位取模成单程：0→1 对应 12 点→弧端
-			let turns = (context.date.timeIntervalSinceReferenceDate / period)
-				.truncatingRemainder(dividingBy: 1)
-			let head = progress * CGFloat(turns)
-			let tail = max(0, head - CGFloat(BatteryVisualResolver.arcGlowSegment(progress: Double(progress))))
-			let envelope = max(0, min(1, turns / 0.12, (1 - turns) / 0.12))
-			Circle()
-				.trim(from: tail, to: head)
-				.stroke(
-					AngularGradient(
-						colors: [.white.opacity(0), .white.opacity(BatteryVisualResolver.arcGlowMaxAlpha * envelope)],
-						center: .center,
-						startAngle: .degrees(360 * tail),
-						endAngle: .degrees(360 * head)
-					),
-					style: StrokeStyle(lineWidth: 4.5, lineCap: .round)
+		// 滚动期**整层不画**：这层是纯动效零信息，挂载处对「减少动态效果」就是这个处理
+		// （`!reduceMotion` 才挂）。在这里造一个"停在弧中段的最亮驻停帧"会让学生在起手/停手时
+		// 看见光带突跳到最亮再跳回墙钟相位——v2.9.15 审查抓到的正是这条
+		if PanelMotionGate.holdsDecorativeAnimation(isScrolling: scrollActivity.isScrolling) {
+			EmptyView()
+		} else {
+			TimelineView(.animation(minimumInterval: PanelMotion.timelineInterval)) { context in
+				let turns = (context.date.timeIntervalSinceReferenceDate / period)
+					.truncatingRemainder(dividingBy: 1)
+				glow(
+					head: progress * CGFloat(turns),
+					alpha: BatteryVisualResolver.arcGlowMaxAlpha
+						* max(0, min(1, turns / 0.12, (1 - turns) / 0.12))
 				)
-				.rotationEffect(.degrees(-90))
+			}
 		}
+	}
+
+	private func glow(head: CGFloat, alpha: Double) -> some View {
+		let tail = max(0, head - CGFloat(BatteryVisualResolver.arcGlowSegment(progress: Double(progress))))
+		return Circle()
+			.trim(from: tail, to: head)
+			.stroke(
+				AngularGradient(
+					colors: [.white.opacity(0), .white.opacity(alpha)],
+					center: .center,
+					startAngle: .degrees(360 * tail),
+					endAngle: .degrees(360 * head)
+				),
+				style: StrokeStyle(lineWidth: 4.5, lineCap: .round)
+			)
+			.rotationEffect(.degrees(-90))
 	}
 }
 
@@ -535,7 +550,6 @@ private struct LowPowerBreath: ViewModifier {
 private struct BreathPulse: ViewModifier {
 	let period: Double
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
-
 	func body(content: Content) -> some View {
 		if reduceMotion {
 			content

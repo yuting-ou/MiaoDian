@@ -60,6 +60,18 @@ nonisolated enum PanelMotion {
 /// 动效门（纯函数）：滚动中是否允许跑非拖拽类弹簧/折叠动画。
 /// 拖拽跟手动画始终允许——那是交互本身，不是装饰。
 nonisolated enum PanelMotionGate {
+	/// 滚动期间是否把**充电通道的持续动画**停下（呼吸点/波面退各自静态帧，弧端流光整层不画）。
+	///
+	/// 只管**充电通道**的三处墙钟动画（呼吸点、波面、弧端流光——三处都只在充电态挂载，
+	/// 电池常态一处也不跑，这也是本机在电池上量不到该改动收益的原因）；玻璃、药丸、
+	/// 级联入场照旧有生命——它们是响应式而非持续型，不驱动逐帧求值。
+	///
+	/// **警示通道刻意不进门**（热脉冲、低电呼吸）：它们的语义就在节奏里（越烫越急），
+	/// 本文件另一处立过的规矩是"警示不为省重算让路"——滚动帧预算不该拿警示信息去换。
+	/// 定相不够：TimelineView 即使内容不变也仍要每拍求值，所以必须走"无 TimelineView"的那条分支
+	/// （与各动画的「减少动态效果」静态分支同一条，不再造第二套静态态）。
+	nonisolated static func holdsDecorativeAnimation(isScrolling: Bool) -> Bool { isScrolling }
+
 	nonisolated static func allowsRepackAnimations(isScrolling: Bool, isDragging: Bool) -> Bool {
 		if isDragging { return true }
 		return !isScrolling

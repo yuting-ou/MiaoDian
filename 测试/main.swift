@@ -4192,12 +4192,35 @@ do {
 // MARK: - 滚动静默 PanelScrollIdle（120Hz：停手多久才恢复头部动画）
 
 do {
-	expectEqual(PanelScrollIdle.idleMilliseconds, 80, "滚动静默：默认 80ms")
-	expectEqual(PanelScrollIdle.idleNanoseconds, 80_000_000, "滚动静默：毫秒换算纳秒")
+	// v2.9.15：这条不是"手感阈值"，是"翻转代价阈值"。一次 true→false 翻转要把卡片区的
+	// frame 探针与把手层重新挂载。改常量重编量具、各跑一次（bash 工具/滚动成本.sh 10 40，
+	// 单位是"每格"=一次位移 + 其后 150ms 排空）：80ms = 每格 2 次翻转、每格均值 54.1ms、p95 151.7ms、占空 36%；
+	// 400ms = 整段只翻 1 次、每格均值 10.1ms、p95 10.2ms、占空 7%。
+	// 边界如实记：下面这些断言钉的是**纯函数**；静默循环（Task.sleep 那圈）不在测试面里兑现，
+	// 由量具的"翻转次数"核对——150ms 一格的节奏下读到 0 次翻转才算这条通了。
+	expectEqual(PanelScrollIdle.idleMilliseconds, 400, "滚动静默：默认 400ms（必须大于最慢的真实格子节奏）")
+	expectEqual(PanelScrollIdle.idleNanoseconds, 400_000_000, "滚动静默：毫秒换算纳秒")
 	expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 0), "滚动静默：0ms 不清位")
-	expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 79_999_999), "滚动静默：地板下界开区间")
-	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 80_000_000), "滚动静默：到点清位")
-	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 200_000_000), "滚动静默：超过清位")
+	expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 399_999_999), "滚动静默：地板下界开区间")
+	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 400_000_000), "滚动静默：到点清位")
+	// 阈值的语义：一次手势内部的间隔不许触发出入（把"这个数字"与"为什么要这个数字"绑在一起）
+	for notchInterval in [40, 80, 150, 250, 350] {
+		expect(!PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: UInt64(notchInterval) * 1_000_000),
+			   "滚动静默：格与格之间 \(notchInterval)ms 不算停手（否则每格重建一次卡片区）")
+	}
+	// 恢复窗口必须钉死在阈值本身：任务若固定睡"一整轮"，实际恢复就成了 400~800ms 的随机数
+	expectEqual(PanelScrollIdle.sleepNanoseconds(elapsedSinceLastActivityNanoseconds: 0), 400_000_000,
+				"静默醒来：刚滚过 → 睡满整个阈值")
+	expectEqual(PanelScrollIdle.sleepNanoseconds(elapsedSinceLastActivityNanoseconds: 150_000_000), 250_000_000,
+				"静默醒来：已静默 150ms → 只睡剩下的 250ms（变异：恒睡 idleNanoseconds 即红）")
+	expectEqual(PanelScrollIdle.sleepNanoseconds(elapsedSinceLastActivityNanoseconds: 399_999_999), 1,
+				"静默醒来：差 1ns 到点 → 只睡 1ns，而不是再睡一整轮")
+	expectEqual(PanelScrollIdle.sleepNanoseconds(elapsedSinceLastActivityNanoseconds: 400_000_000), 0,
+				"静默醒来：正好到点 → 睡 0，本轮判定立刻清位")
+	expectEqual(PanelScrollIdle.sleepNanoseconds(elapsedSinceLastActivityNanoseconds: 9_900_000_000), 0,
+				"静默醒来：早已过点 → 睡 0（UInt64 减法不许下溢成天文数字）")
+	// 停手后必须清位——挂起不能变成永久（探针与把手层就再也装不回来了）
+	expect(PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: 1_000_000_000), "滚动静默：停手 1 秒一定恢复")
 }
 
 // MARK: - 纵向弹性 PanelScrollElasticity（到边回弹是 120Hz 掉帧点）
@@ -5138,6 +5161,36 @@ do {
 		   "度量：半角权重明显小于全角（变异：ASCII 记作 1.0 即红）")
 }
 
+
+// MARK: - 量具的备份目录重定向（v2.9.15：量具曾覆写用户唯一的历史抢救源）
+do {
+	// 不设变量 = 老行为（用户 App Support 下的 ChargeMonitor/history-backup.plist）
+	let plain = BatteryHistoryRecorder.backupDirectoryForTooling(env: [:])
+	expect(plain?.lastPathComponent == "ChargeMonitor",
+		   "备份目录：不设变量时仍叫 ChargeMonitor（生产行为不许变）")
+	expect(plain?.path.hasSuffix("Library/Application Support/ChargeMonitor") == true,
+		   "备份目录：不设变量时仍在用户 App Support 下（变异：把它挪进临时目录即红）")
+	// 量具重定向
+	let moved = BatteryHistoryRecorder.backupDirectoryForTooling(
+		env: ["MIAODIAN_BACKUP_DIR": "/tmp/miaodian_tool_backup"])
+	expect(moved?.path == "/tmp/miaodian_tool_backup",
+		   "备份目录：量具给变量就改道，用户的抢救源不再被动")
+	expect(BatteryHistoryRecorder.backupDirectoryForTooling(env: ["MIAODIAN_BACKUP_DIR": ""]) == nil,
+		   "备份目录：空字符串 = 关闭备份（与单测同一套语义）")
+}
+
+// MARK: - 滚动期装饰动效门（v2.9.15：滚动帧预算里不留墙钟动画）
+do {
+	// 墙钟动画（TimelineView）即使内容不变也要每拍求值，定相救不了它——
+	// 省帧只有"整层走无 TimelineView 的静态分支"这一条路，也就是「减少动态效果」那条。
+	// 头部五处动画是否**全都**经这道门由 run_tests.sh 的源文件守卫核对（UI 层不进测试面）
+	expect(PanelMotionGate.holdsDecorativeAnimation(isScrolling: true), "动效门：滚动中挂起装饰性持续动画")
+	expect(!PanelMotionGate.holdsDecorativeAnimation(isScrolling: false), "动效门：停手后恢复呼吸（挂起不许变永久）")
+	// 静态分支复用同一组相位/尺度函数，取值域必须仍自洽（否则光点会被静态分支抹掉）
+	let phase = PanelMotion.breathPhase(1.0, period: 2.2)
+	expect(phase >= 0 && phase <= 1, "动效门：呼吸相位恒在 0...1")
+	expect(PanelMotion.dotScale(phase) > 0, "动效门：光点缩放恒为正（静态分支不许给 0）")
+}
 
 // MARK: - 汇总
 

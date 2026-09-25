@@ -17,7 +17,9 @@ final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		let monitor = BatteryMonitor()
 		let configurationManager = ConfigurationManager.shared
-		let historyRecorder = BatteryHistoryRecorder(monitor: monitor)
+		// backupDirectory 显式 nil：便利 init 的备份目录是硬编码的 ~/Library/Application Support/ChargeMonitor，不吃 bundle id——
+		// 预览一 save 就会把用户"主档损坏时的抢救源"换成预览进程的快照（v2.9.15 审查 round2 抓到）
+		let historyRecorder = BatteryHistoryRecorder(monitor: monitor, defaults: .standard, backupDirectory: nil)
 		let alertController = BatteryAlertController(
 			monitor: monitor,
 			configurationManager: configurationManager,

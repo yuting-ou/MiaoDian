@@ -26,7 +26,7 @@ struct OffscreenAcceptance {
 			? (Double(CommandLine.arguments[1]) ?? 584) : 584.0
 
 		let monitor = BatteryMonitor()
-		let historyRecorder = BatteryHistoryRecorder(monitor: monitor)
+		let historyRecorder = BatteryHistoryRecorder(monitor: monitor, defaults: .standard, backupDirectory: nil)
 		let alertController = BatteryAlertController(
 			monitor: monitor,
 			configurationManager: ConfigurationManager.shared,
@@ -131,7 +131,7 @@ struct OffscreenAcceptance {
 
 		// 真档案腿：用户此刻这张卡实际渲染哪几句、声明高多少。
 		// 只看夹具会漏掉一类问题——生产文案最长那句、以及新加的有界说明给出什么天数
-		let live = BatteryHistoryRecorder(monitor: BatteryMonitor())
+		let live = BatteryHistoryRecorder(monitor: BatteryMonitor(), defaults: .standard, backupDirectory: nil)
 		if let todayUsage = live.todayUsage {
 			let lines = DwellTracking.noteLines(todayUsage: todayUsage, history: live.dailyHistory)
 			print(String(format: "  真档案：说明行 %d 条 · 声明高 %.0fpt · 历史 %d 天",

@@ -1,10 +1,17 @@
 #!/bin/zsh
 # 液态玻璃预览 harness：编译真源码 + 预览入口，产出可截图的半透明窗口应用。
-# 独立 bundle ID（fun.crashsystem.MiaoDianPreview）：UserDefaults 与主应用隔离，
-# 预览里的 recorder/alert 写不进真实电池传记；再把真实偏好快照 import 进来，渲染有数据的面板。
+# 独立 bundle ID（fun.crashsystem.MiaoDianPreview）：UserDefaults 与主应用隔离。
+# ⚠ **历史备份目录不吃 bundle id**（硬编码在 App Support/ChargeMonitor），所以这个脚本必须
+#   export MIAODIAN_BACKUP_DIR 把备份改道到临时目录（见 BatteryHistoryRecorder.backupDirectoryForTooling）。
+#   只改本 harness 自己那台 recorder 的构造不够——面板渲染会经 GlassStyle 触发 AppServices.shared，
+#   它内部还有一台走默认路径的 recorder。
+# 再把真实偏好快照 import 进来，渲染有数据的面板。
 # 用法：bash 测试/预览/run_preview.sh && open /tmp/miaodian_preview/妙电预览.app
 # 验收完：pkill -x preview && defaults delete fun.crashsystem.MiaoDianPreview
 set -e
+
+# 预览进程一律不许碰用户"主档损坏时的抢救源"：把备份重定向到临时目录
+export MIAODIAN_BACKUP_DIR=/tmp/miaodian_preview_backup
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/ChargeMonitor/ChargeMonitor"

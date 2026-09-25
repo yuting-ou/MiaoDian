@@ -1251,7 +1251,18 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 设置与历史全在一个 UserDefaults plist 里，损坏即静默清零；
 	// 这里把历史键的最新编码滚到独立备份文件，主档损坏时回退备份，最多丢一个备份间隔
 	private static func defaultBackupDirectory() -> URL? {
-		FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+		backupDirectoryForTooling(env: ProcessInfo.processInfo.environment)
+	}
+
+	/// 历史备份目录。**生产不设环境变量时行为与历史完全一致**；离屏量具必须把它重定向到临时目录，
+	/// 否则量具一次 `save()` 就把用户"主档损坏时的抢救源"换成量具快照（v2.9.15 审查抓到：
+	/// 这条路径硬编码在 App Support/ChargeMonitor，**不吃 bundle id**，所以换域名挡不住它）。
+	/// 空字符串 = 关闭备份。
+	nonisolated static func backupDirectoryForTooling(env: [String: String]) -> URL? {
+		if let raw = env["MIAODIAN_BACKUP_DIR"] {
+			return raw.isEmpty ? nil : URL(fileURLWithPath: raw, isDirectory: true)
+		}
+		return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
 			.appendingPathComponent("ChargeMonitor", isDirectory: true)
 	}
 	

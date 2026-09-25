@@ -9,22 +9,51 @@ final class PanelScrollActivity: ObservableObject {
 
 	@Published private(set) var isScrolling = false
 	private var idleTask: Task<Void, Never>?
+	/// 用 `systemUptime`（开机以来的单调秒数）而不是 `Date`：`Task.sleep` 走的是连续时钟，
+	/// 混用墙钟时一旦用户改系统时间/休眠唤醒把 Date 往回拨，"剩余量"就永远算不满，
+	/// 面板会卡在滚动态里出不来（v2.9.15 审查 round2 抓到）
+	private var lastActivityUptime = ProcessInfo.processInfo.systemUptime
+
+	/// 距最后一次滚动过了多久（纳秒）。单调时钟相减不会为负；万一为负按 0 处理
+	private func elapsedSinceLastActivityNanoseconds() -> UInt64 {
+		let seconds = max(0, ProcessInfo.processInfo.systemUptime - lastActivityUptime)
+		return UInt64(seconds * 1_000_000_000)
+	}
 
 	func reset() {
 		idleTask?.cancel()
 		idleTask = nil
 		isScrolling = false
+		lastActivityUptime = ProcessInfo.processInfo.systemUptime
 	}
 
+	/// 滚动事件可以每帧一次：这里只做一次赋值——每事件取消并重建 Task，
+	/// 等于让"滚动本身"再叠一层主线程开销（120Hz 下每帧一个 Task）。
+	/// 唯一的延时任务醒来后自己比对时间戳，没到静默时长就继续睡。
 	func noteScrollActivity() {
+		lastActivityUptime = ProcessInfo.processInfo.systemUptime
 		if !isScrolling {
 			isScrolling = true
 		}
-		idleTask?.cancel()
+		guard idleTask == nil else { return }
 		idleTask = Task { @MainActor in
-			try? await Task.sleep(nanoseconds: PanelScrollIdle.idleNanoseconds)
-			if !Task.isCancelled {
-				self.isScrolling = false
+			while true {
+				// 睡前读一次，只为算"还差多少到点"；判定用的是醒来后那一次（下面 wokeAt）。
+				// 固定再睡一整轮会把实际恢复窗口变成 400~800ms 的随机数，
+				// 把手与动画的回来时间就没法承诺（v2.9.15 审查抓到）
+				let elapsed = elapsedSinceLastActivityNanoseconds()
+				try? await Task.sleep(nanoseconds: PanelScrollIdle.sleepNanoseconds(
+					elapsedSinceLastActivityNanoseconds: elapsed
+				))
+				// 被 reset 取消就直接退出，**不要**去清 idleTask：那时它可能已指向新开的那个任务
+				if Task.isCancelled { return }
+				// 醒来再读一次：睡着期间可能又来了滚动事件
+				let wokeAt = elapsedSinceLastActivityNanoseconds()
+				if PanelScrollIdle.shouldClearScrolling(elapsedNanoseconds: wokeAt) {
+					isScrolling = false
+					idleTask = nil
+					return
+				}
 			}
 		}
 	}
@@ -32,8 +61,11 @@ final class PanelScrollActivity: ObservableObject {
 
 /// 面板内容宿主：在自建 NSPanel 上承载整棵 SwiftUI 树。
 ///
-/// layout 里**不**无条件 DFS 整树（滚动时会每帧执行）；仅当
-/// 「窗口挂上后异步扫过一次」或「子孙 NSScrollView 集合签名变化」时才拧旋钮。
+/// layout() 每轮都会扫一遍子孙找 NSScrollView（签名不变时不拧旋钮）。**这条扫描不是性能问题**：
+/// 面板 AppKit 树只有 80~90 个节点，实测整树 DFS 低于本量具的时钟分辨率
+/// （`bash 工具/滚动成本.sh`），v2.9.15 曾怀疑它是掉帧大户、加过节流与"只在值不同才写"，
+/// 改完静置占空 16.9% → 17.8%（没动），故回滚——别再来查这一处。掉帧的两处真凶见
+/// `PanelScrollIdle`（翻转代价）与 `PanelMotionGate.holdsDecorativeAnimation`（墙钟动画）。
 @MainActor
 final class PanelHostingView: NSHostingView<AnyView> {
 	private var scrollObservers: [ObjectIdentifier: NSObjectProtocol] = [:]

@@ -72,6 +72,21 @@ if [ -n "$STRAY" ]; then
 fi
 echo "==> 上限守卫：洞察渲染上限与配平同源（UI 层已按源文件核对）"
 
+# 动效门守卫：头部墙钟动画是**登记表**，不是"越多越好"——
+# 期望值写死：5 处 TimelineView（呼吸点／波面／弧端流光／热脉冲／低电呼吸），
+# 其中 3 处（充电通道：呼吸点／波面／弧端流光）必须经 holdsDecorativeAnimation 停帧；
+# 警示通道那 2 处刻意**不**进门（节奏本身就是信息，见 PanelMotionGate 的说明）。
+# 所以"门控数 = 动画数"这种相等式是错的：它会把该豁免的两处也逼进门里。
+# 计数用 grep -o | wc -l：grep -c 数的是行（一行两处会漏），且无匹配时退出码 1。
+HEADER_UI="$SRC/UI/BatteryHeaderView.swift"
+TICKS="$(grep -o 'TimelineView(' "$HEADER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+GATES="$(grep -o 'PanelMotionGate.holdsDecorativeAnimation(isScrolling: scrollActivity.isScrolling)' "$HEADER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+if [ "${TICKS:-0}" != "5" ] || [ "${GATES:-0}" != "3" ]; then
+	echo "==> 动效门守卫失败：头部墙钟动画 $TICKS 处（期望 5）、滚动门控 $GATES 处（期望 3=充电三处；警示两处必须豁免）"
+	exit 1
+fi
+echo "==> 动效门守卫：头部墙钟动画 5 处、其中充电 3 处经滚动门控（警示 2 处按规矩豁免）"
+
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
 # 钉的旧 SDK 是两条独立证据，回显版本免得把两者的结论混着读。
