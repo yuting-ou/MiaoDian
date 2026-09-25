@@ -81,7 +81,7 @@ struct HabitInsightSection: View {
 				Text(insights.count > 1 ? "洞察" : "小建议")
 					.font(.system(size: 9))
 					.foregroundStyle(GlassTokens.labelOnGlass)
-				ForEach(Array(insights.prefix(3).enumerated()), id: \.offset) { index, insight in
+				ForEach(Array(insights.prefix(PanelCardHeights.visibleInsightLines).enumerated()), id: \.offset) { index, insight in
 					HStack(alignment: .top, spacing: 6) {
 						Image(systemName: insight.symbol)
 							.font(.system(size: index == 0 ? 12 : 9))

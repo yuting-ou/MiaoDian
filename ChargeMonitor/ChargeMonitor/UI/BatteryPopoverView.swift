@@ -437,14 +437,19 @@ struct BatteryPopoverView: View {
 		}
 		// —— 电池健康：状态/体检/身份证/保养建议/温度/趋势 ——
 		if !batteryItems.isEmpty { result.append((.batteryInfo, 22 + 26 * CGFloat(batteryItems.count))) }
-		if options.contains(.batteryCheckup), monitor.snapshot.healthPercent != nil { result.append((.checkup, 58)) }
+		// 出现条件与高度共用同一段解析（panelCheckup），不各写一遍 evaluate：
+		// 否则配平按"有估计项"给了高、渲染却按另一个快照算了没这行
+		if options.contains(.batteryCheckup), let checkup = panelCheckup {
+			// 有估计项时卡里多一行"含估计项：…"，声明高必须跟着长（原先恒写 58）
+			result.append((.checkup, PanelCardHeights.checkup(estimatedInputs: checkup.estimatedInputs)))
+		}
 		// 电池身份证：静态出厂信息，有跳变记录时多留一行状态位
 		if options.contains(.batteryIdentity), let identity = monitor.batteryIdentity, identity.isMeaningful {
 			let jumpExtra: CGFloat = socJumpCount30d > 0 ? 26 : 0
 			result.append((.batteryIdentity, cardHeight(.batteryIdentity, expanded: 104 + jumpExtra)))
 		}
 		if options.contains(.habitInsight), !habitInsights.isEmpty {
-			result.append((.habitInsight, cardHeight(.habitInsight, expanded: 40 + 22 * CGFloat(habitInsights.count))))
+			result.append((.habitInsight, cardHeight(.habitInsight, expanded: PanelCardHeights.habitInsight(messages: habitInsights.map(\.message)))))
 		}
 		if options.contains(.temperatureChart), monitor.temperatureSamples.count >= 2 { result.append((.temperatureChart, cardHeight(.temperatureChart, expanded: 96))) }
 		if options.contains(.healthTrend), showsHealthCurve { result.append((.healthTrend, cardHeight(.healthTrend, expanded: 142))) }
@@ -930,13 +935,7 @@ struct BatteryPopoverView: View {
 	
 	@ViewBuilder
 	private func checkupCard(_ configuration: AppConfiguration) -> some View {
-		if configuration.enabledOptions.contains(.batteryCheckup),
-		   let checkup = BatteryCheckup.evaluate(
-			healthPercent: monitor.snapshot.healthPercent,
-			cycleCount: monitor.snapshot.cycleCount,
-			temperatureC: monitor.snapshot.temperatureC,
-			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
-		   ) {
+		if configuration.enabledOptions.contains(.batteryCheckup), let checkup = panelCheckup {
 			BatteryCheckupSection(checkup: checkup)
 		}
 	}
@@ -955,7 +954,19 @@ struct BatteryPopoverView: View {
 		}
 	}
 	
-	// 最近 30 天电量跳变次数（身份证卡片与校准提醒共用同一口径）
+	// 体检评分的唯一解析处：出现条件与配平高度都读它（四项输入全取自当前快照）。
+	// 注意它仍是每次访问求值一次——跨零点那一帧与渲染侧可能见到不同的 todayUsage，
+	// 影响限于配平偏 12pt、下次采样即自愈；不为它缓存（缓存会引入新的失效问题）
+	private var panelCheckup: BatteryCheckup? {
+		BatteryCheckup.evaluate(
+			healthPercent: monitor.snapshot.healthPercent,
+			cycleCount: monitor.snapshot.cycleCount,
+			temperatureC: monitor.snapshot.temperatureC,
+			highSocDwellShare: historyRecorder.todayUsage?.highSocDwellShare
+		)
+	}
+
+		// 最近 30 天电量跳变次数（身份证卡片与校准提醒共用同一口径）
 	private var socJumpCount30d: Int {
 		UsagePatternAnalyzer.socJumpCount(historyRecorder.socJumpEvents, withinDays: 30, now: Date())
 	}

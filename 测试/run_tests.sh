@@ -57,6 +57,20 @@ if ! grep -q 'DwellTracking.noteLines' "$SRC/UI/DailySummarySection.swift" 2>/de
 	exit 1
 fi
 echo "==> 出口守卫：说明文案只经 noteLines（UI 层已按源文件核对）"
+# 上限两侧共用：渲染侧必须经 PanelCardHeights.visibleInsightLines 取上限。
+# UI/ 不进测试面，"两侧共用一个常量"这种主张只能按源文件查（v2.9.14 审查抓到我没做这点）。
+if ! grep -q 'prefix(PanelCardHeights.visibleInsightLines)' "$SRC/UI/TrendAndCalendarSections.swift" 2>/dev/null; then
+	echo "==> 上限守卫失败：洞察卡渲染侧不再经 visibleInsightLines 取上限（配平与渲染会分叉）"
+	exit 1
+fi
+# 只查洞察卡所在文件：另一处 prefix(3) 属于高耗电应用卡，是另一个上限（见其 min(3,...) 项）
+STRAY="$(grep -n 'prefix(3)' "$SRC/UI/TrendAndCalendarSections.swift" 2>/dev/null || true)"
+if [ -n "$STRAY" ]; then
+	echo "==> 上限守卫失败：洞察卡渲染侧写死 prefix(3)，与登记表上限脱钩"
+	printf '    %s\n' $STRAY
+	exit 1
+fi
+echo "==> 上限守卫：洞察渲染上限与配平同源（UI 层已按源文件核对）"
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层

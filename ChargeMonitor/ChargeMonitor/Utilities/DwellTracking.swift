@@ -206,15 +206,15 @@ nonisolated enum DwellTracking {
 	/// 七天柱图带来的高度差：实测 42pt（柱框 26 + 日期标签 + 间距）
 	nonisolated static let dailySummaryChartHeight: CGFloat = 42
 
-	/// 一行放得下的全角当量数：面板 584 − 左右内边距 12×2 − 两列间距 10 = 550，每列 275，
-	/// 再扣卡片自身水平内边距 10×2 → 文字宽 255pt；说明行字号 9 → 255/9 ≈ 28
-	nonisolated static let noteFullWidthCharsPerLine = 28
+	/// 说明行可用文字宽：面板 584 − 左右内边距 12×2 − 两列间距 10 = 550，每列 275，
+	/// 再扣卡片自身水平内边距 10×2 → 255pt；字号 9（折行换算见 PanelTextMetrics）
+	nonisolated static let noteTextWidth: CGFloat = 255
+	nonisolated static let noteFontSize: CGFloat = 9
 
 	/// 一条说明文案在列宽里占几个「行高」：CJK 记 1、半角记 0.52 的全角当量除以每行预算后向上取整。
 	/// 折行守卫就落在这里——以后加文案不必改高度，长度自己换算成行高单位
 	nonisolated static func noteHeightUnits(_ text: String) -> Int {
-		let fullWidthWeight = text.reduce(0.0) { $0 + ($1.isASCII ? 0.52 : 1.0) }
-		return max(1, Int(ceil(fullWidthWeight / Double(noteFullWidthCharsPerLine))))
+		PanelTextMetrics.visualLines(text: text, availableWidth: noteTextWidth, fontSize: noteFontSize)
 	}
 
 	/// 「今日用电」卡展开高度：基础（有无七天柱图）+ 每条说明行按折行后的行高单位计费。

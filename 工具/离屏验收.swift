@@ -144,5 +144,74 @@ struct OffscreenAcceptance {
 		} else {
 			print("  真档案：今天还没有用电记录，跳过这一腿")
 		}
+
+		// 体检卡 / 洞察卡：同样是"声明高恒值 vs 内容随数据长缩"的怀疑对象，量出来才知道
+		print("== 体检卡（含估计项那行是有条件的）==")
+		let plain = BatteryCheckup(score: 88, verdict: "状态良好", estimatedInputs: [])
+		let estimated = BatteryCheckup(score: 74, verdict: "略有老化",
+									   estimatedInputs: ["循环", "温度", "驻留"])
+		let checkupPlain = measureCard(BatteryCheckupSection(checkup: plain))
+		let checkupEst = measureCard(BatteryCheckupSection(checkup: estimated))
+		print(String(format: "  无估计项 真实 %.0f／声明 %.0f · 有估计项 真实 %.0f／声明 %.0f · 差 %.0fpt",
+					 checkupPlain, PanelCardHeights.checkup(estimatedInputs: []),
+					 checkupEst, PanelCardHeights.checkup(estimatedInputs: estimated.estimatedInputs),
+					 checkupEst - checkupPlain))
+
+		print("== 洞察卡（渲染 prefix(3)，声明按 count 算）==")
+		// 用生产里真会出现的最长句子做样本
+		let longMessage = "最近几天几乎全程插着电，偶尔用电池放到 50% 左右更利于电池保养"
+		let shortMessage = "按你平时的作息，充到 80% 睡一晚通常就够用，不必非充满"
+		let oneShort = measureCardSize(HabitInsightSection(insights: [
+			ChargingHabitInsight(message: shortMessage, symbol: "bolt.fill")
+		]))
+		let oneLong = measureCardSize(HabitInsightSection(insights: [
+			ChargingHabitInsight(message: longMessage, symbol: "bolt.fill")
+		]))
+		print(String(format: "  自然宽探针：短句 %.0f×%.0f · 长句 %.0f×%.0f（列宽上限 275）",
+					 oneShort.width, oneShort.height, oneLong.width, oneLong.height))
+		let three = measureCard(HabitInsightSection(insights: (0..<3).map { _ in
+			ChargingHabitInsight(message: longMessage, symbol: "bolt.fill")
+		}))
+		let seven = measureCard(HabitInsightSection(insights: (0..<7).map { _ in
+			ChargingHabitInsight(message: longMessage, symbol: "bolt.fill")
+		}))
+		print(String(format: "  1 条短句 %.0fpt · 1 条长句 %.0fpt（折行）· 3 条长句 %.0fpt · 7 条（仍只显 3）%.0fpt",
+					 oneShort.height, oneLong.height, three, seven))
+		print(String(format: "  登记表演示：1 条声明 %.0f／真实 %.0f · 3 条 %.0f／%.0f · 7 条 %.0f／%.0f（渲染仍只 3 条）",
+					 PanelCardHeights.habitInsight(messages: [longMessage]), oneShort.height,
+					 PanelCardHeights.habitInsight(messages: [longMessage, longMessage, longMessage]), three,
+					 PanelCardHeights.habitInsight(messages: Array(repeating: longMessage, count: 7)), seven))
+		let sixFive = String(repeating: "充", count: 65)
+		let oneLine = measureCard(HabitInsightSection(insights: [ChargingHabitInsight(message: String(repeating: "充", count: 10), symbol: "bolt.fill")]))
+		let fourLine = measureCard(HabitInsightSection(insights: [ChargingHabitInsight(message: sixFive, symbol: "bolt.fill")]))
+		print(String(format: "  按行数建模：1 行句声明 %.0f／真实 %.0f · 4 行长句声明 %.0f／真实 %.0f",
+					 PanelCardHeights.habitInsight(messages: [String(repeating: "充", count: 10)]), oneLine,
+					 PanelCardHeights.habitInsight(messages: [sixFive]), fourLine))
+		let giant = measureCard(HabitInsightSection(insights: [
+			ChargingHabitInsight(message: String(repeating: "充", count: 90), symbol: "bolt.fill")
+		]))
+		print(String(format: "  探针：1 条 90 全角超长句 = %.0fpt", giant))
+		// 行数与高度的关系要量出来，不能拿"夹具恰好都是 2 行"当普适真相
+		func lines(_ n: Int) -> String { String(repeating: "充", count: n) }
+		let l1 = measureCardSize(HabitInsightSection(insights: [ChargingHabitInsight(message: lines(10), symbol: "bolt.fill")]))
+		let l3 = measureCardSize(HabitInsightSection(insights: (0..<3).map { _ in ChargingHabitInsight(message: lines(10), symbol: "bolt.fill") }))
+		let mid = measureCardSize(HabitInsightSection(insights: [ChargingHabitInsight(message: lines(20), symbol: "bolt.fill")]))
+		print(String(format: "  行数标定：1 条 1 行句 %.0fpt · 1 条 20 字 %.0fpt · 3 条 1 行句 %.0fpt · 3 条 2 行句 %.0fpt",
+					 l1.height, mid.height, l3.height, three))
+	}
+
+	/// 单张卡在真实列宽下的自然高
+	private static func measureCard(_ card: some View) -> CGFloat {
+		let size = measureCardSize(card)
+		return size.height
+	}
+
+	/// 同时打印自然宽：宽 >275 说明文字没折行而是横向溢出（那是观感缺陷，不是标定噪声）
+	private static func measureCardSize(_ card: some View) -> NSSize {
+		let host = NSHostingView(rootView: AnyView(card.frame(width: 275)))
+		host.frame = NSRect(x: 0, y: 0, width: 275, height: 400)
+		host.layoutSubtreeIfNeeded()
+		return host.fittingSize
 	}
 }
+

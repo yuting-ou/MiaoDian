@@ -4899,7 +4899,7 @@ do {
 do {
 	let today = Date(timeIntervalSinceReferenceDate: 800_000_000)   // 2026-05-09
 	func dayKey(_ offsetDays: Int) -> String {
-		var f = DateFormatter()
+		let f = DateFormatter()
 		f.locale = Locale(identifier: "en_US_POSIX")
 		f.calendar = Calendar(identifier: .gregorian)
 		f.timeZone = TimeZone(identifier: "UTC")
@@ -4973,7 +4973,7 @@ do {
 	// （本轮把"精确天数"钉进断言，松散夹具就会变成假红门；宪法 §4.2/§4.10）
 	var cal = Calendar(identifier: .gregorian)
 	cal.timeZone = TimeZone(identifier: "UTC")!
-	var fmt = DateFormatter()
+	let fmt = DateFormatter()
 	fmt.locale = Locale(identifier: "en_US_POSIX")
 	fmt.calendar = cal
 	fmt.dateFormat = "yyyy-MM-dd"
@@ -5094,6 +5094,48 @@ do {
 		   "恰等于准入周期即入慢档（边界含得起）")
 	expect(PanelMotion.breathFPS >= 12 && PanelMotion.breathFPS < PanelMotion.timelineFPS,
 		   "慢档限在 12…30fps：再低发涩，相等就等于没这一档")
+}
+
+
+// MARK: - 卡片高度登记表（v2.9.14：按实测与真实折行数给高，不再烤进常量）
+
+do {
+	// 数值来处：bash 工具/离屏验收.sh cards（列宽 275pt、真组件真字体）
+	// 体检卡实测 无估计项 38 ／ 有估计项 50（旧声明恒 58）
+	expectEqual(PanelCardHeights.checkup(estimatedInputs: []), 38, "体检卡无估计项 = 38pt（旧值恒 58，虚高 20pt）")
+	expectEqual(PanelCardHeights.checkup(estimatedInputs: ["循环"]), 50, "体检卡有估计项 = 50pt（那一行必须计入）")
+	expectEqual(PanelCardHeights.checkup(estimatedInputs: ["循环", "温度", "驻留"]), 50,
+				"估计项几条都只多一行（joined 成一句）——变异：改成按条数累加即红")
+
+	// 洞察卡实测四点：1×1 行 36、1×2 行 48、3×1 行 64、3×2 行 102
+	// 公式 = 36 + 14×(条数−1) + 12×额外折行；3×2 行算得 100 对实测 102 是 −2pt 的保守侧
+	func msg(_ n: Int) -> String { String(repeating: "充", count: n) }
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(10)]), 36, "一条 1 行句 = 36pt（旧模型把它报成 48）")
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(34)]), 48, "一条折两行 = 48pt")
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(10), msg(10)]), 50, "两条 1 行 = 50pt（+14/条）")
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(10), msg(10), msg(10)]), 64,
+				"三条 1 行 = 64pt（与实测量点逐字相等）")
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(34), msg(34), msg(34)]), 100,
+				"三条各折两行 = 100pt（实测量点 102，−2 落在保守侧）")
+	// 关键的一条：长句按真实行数算。旧模型（48 起、每条烤定 2 行）在这里少报 24pt
+	expectEqual(PanelCardHeights.habitInsight(messages: [msg(65)]), 72,
+				"一条 65 全角长句要 4 行 = 72pt（变异：不数行数、恒按 2 行算即红）")
+	expectEqual(PanelCardHeights.habitInsight(messages: Array(repeating: msg(10), count: 7)), 64,
+				"7 条仍按 3 条算：渲染 prefix 与配平共用同一上限（旧公式在这里虚高 92pt）")
+	expectEqual(PanelCardHeights.visibleInsightLines, 3, "洞察渲染上限钉死 3 条（改它要同时改两侧）")
+	expectEqual(PanelCardHeights.habitInsight(messages: []), 36,
+				"空列表给防御值：这张卡本不出现，不许给出 0 或负高")
+
+	// 折行度量与说明行同源（同一个 PanelTextMetrics，两处不再各写一遍规则）
+	expectEqual(PanelTextMetrics.visualLines(text: msg(28), availableWidth: 255, fontSize: 9), 1, "度量：恰在一行内")
+	expectEqual(PanelTextMetrics.visualLines(text: msg(29), availableWidth: 255, fontSize: 9), 2, "度量：超一点算两行")
+	expectEqual(DwellTracking.noteHeightUnits(msg(28)), 1, "说明行折行改走共用度量后取值不变")
+	expectEqual(DwellTracking.noteHeightUnits(msg(57)), 3, "说明行折行走共用度量后仍按三行算")
+	// 半角权重必须承重：把 0.52 记成全角（1.0）时，下面两条都会多算一行而红
+	expectEqual(PanelTextMetrics.visualLines(text: String(repeating: "a", count: 40), availableWidth: 235, fontSize: 10), 1,
+				"度量：40 个半角仍是一行（半角按 ~0.5 全角算，不是逐字等宽）")
+	expect(PanelTextMetrics.fullWidthWeight("a中") < 1.6,
+		   "度量：半角权重明显小于全角（变异：ASCII 记作 1.0 即红）")
 }
 
 
