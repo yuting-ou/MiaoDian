@@ -36,7 +36,8 @@ import SwiftUI
 // 用法：bash 工具/滚动成本.sh [静置秒=10] [每种节奏步数=40]
 //      bash 工具/滚动成本.sh idle [yes|no] → 只量「面板开着不滚」的重排级联
 // 口径：改动前后各跑一次**同一组参数**；比 ①②③ 的每格分布、④ 的起手/停手/中间三堆、
-//      以及 ⓪ 的占空比/级联簇（每簇 = 一次数据发布的全面板重渲染）/发布普查
+//      以及 ⓪ 的占空比/级联簇（**只是"连续非零桶"的分布**，没在簇内打发布戳，
+//      不能直接当"一簇=一次发布"；与同窗口的发布计数并排读）/发布普查（抽若干字段）
 
 /// 宿主 layout() 轮次与探针计数（@convention(c) 的替身不能捕获上下文，一律走全局）
 nonisolated(unsafe) var layoutPasses = 0
@@ -144,18 +145,20 @@ struct ScrollCostProbe {
 		// 还是**布局不稳**（一次发布摊成几百轮）——两种病的药完全不同
 		var monitorPublishes = 0
 		var recorderPublishes = 0
-		// 发布普查：逐字段数一遍，找出"这轮到底是谁在发"——
-		// 每次 @Published 赋值都发一次，哪怕值没变；先看见才谈得上修
+		// 发布普查：抽若干字段数一遍，找出"这轮到底是谁在发"——
+		// 每次 @Published 赋值都发一次，哪怕值没变；先看见才谈得上修。
+		// 两个坑（审查抓到）：① `Published` 订阅即回放当前值，那**不是一次发布**，必须 dropFirst；
+		// ② 这些订阅活到下面所有窗口，所以计数窗口要按"实测秒数"报，别写死 idleSeconds
 		var census: [(name: String, count: Int)] = []
 		func tally<T: Equatable>(_ name: String, _ publisher: AnyPublisher<T, Never>) -> AnyCancellable {
 			census.append((name, 0))
 			let idx = census.count - 1
-			return publisher.removeDuplicates().sink { _ in census[idx].count += 1 }
+			return publisher.dropFirst().removeDuplicates().sink { _ in census[idx].count += 1 }
 		}
 		func raw<T>(_ name: String, _ publisher: AnyPublisher<T, Never>) -> AnyCancellable {
 			census.append((name, 0))
 			let idx = census.count - 1
-			return publisher.sink { _ in census[idx].count += 1 }
+			return publisher.dropFirst().sink { _ in census[idx].count += 1 }
 		}
 		let pubSubs = [
 			monitor.objectWillChange.sink { _ in monitorPublishes += 1 },
@@ -190,51 +193,23 @@ struct ScrollCostProbe {
 			cpuBuckets.append(Int(cpuMs - lastCPUms))
 			lastCPUms = cpuMs
 		}
-		let idleBusy = max(0, threadCPU() - idleCPU0)
+		// 先把静置窗口的订阅全部停下再打印：否则下面的节奏窗口会继续往同一批计数器里加，
+		// 打印出来的"静置 N 秒"就成了横跨两个窗口的账（审查抓到过这个错位）
+		let censusEndCPU = threadCPU()
+		pubSubs.forEach { $0.cancel() }
+		let idleBusy = max(0, censusEndCPU - idleCPU0)
 		let idleWall = max(0.001, Date().timeIntervalSince(idleWall0))
-		print(String(format: "  ⓪ 静置 %ds：主线程忙 %.0fms（%.1f%% 占空）· layout %.0f 轮/秒",
-					 idleSeconds, idleBusy * 1000, idleBusy / idleWall * 100, Double(layoutPasses) / idleWall))
+		print(String(format: "  ⓪ 静置 %.1fs：主线程忙 %.0fms（%.1f%% 占空）· layout %.0f 轮/秒",
+					 idleWall, idleBusy * 1000, idleBusy / idleWall * 100, Double(layoutPasses) / idleWall))
 		// 代表性别自检：开头那次打印可能赶在首帧 IO 之前，"电量读不到"若贯穿整窗，
 		// 这块表量的就是空态面板——绝对值与"用户手里那块板"不可比（v2.9.15 的数就吃过这个暗亏）
 		print("  ⓪ 窗口末状态：电量 \(monitor.snapshot.stateOfChargePercent.map { "\($0)%" } ?? "仍读不到")"
 			+ " · 功率采样 \(monitor.powerSamples.count) 点 · 温度采样 \(monitor.temperatureSamples.count) 点"
 			+ " · 面板高 \(Int(fittingSize(of: makeRoot(budget), width: 584).height))pt")
-		// 发布节奏归属（另开 6s 窗口，不掺进上面的静置读数）：每次发布到达时，报
-		// "距上次发布过了多少 ms、这期间烧掉多少轮布局"。用来分清一簇 784 轮是
-		// "每发一次各摊一轮级联"还是"多次发布被 SwiftUI 合并成一轮"——前者该减发布次数，后者减了也没用。
-		var rhythm: [String] = []
-		var lastRhythmAt = Date()
-		var lastRhythmPasses = layoutPasses
-		let rhythmSubs = [
-			monitor.objectWillChange.sink { _ in
-				let now = Date()
-				rhythm.append(String(format: "M+%.0fms/%d轮",
-									 now.timeIntervalSince(lastRhythmAt) * 1000,
-									 layoutPasses - lastRhythmPasses))
-				lastRhythmAt = now
-				lastRhythmPasses = layoutPasses
-			},
-			historyRecorder.objectWillChange.sink { _ in
-				let now = Date()
-				rhythm.append(String(format: "R+%.0fms/%d轮",
-									 now.timeIntervalSince(lastRhythmAt) * 1000,
-									 layoutPasses - lastRhythmPasses))
-				lastRhythmAt = now
-				lastRhythmPasses = layoutPasses
-			},
-		]
-		drain(seconds: 6)
-		rhythmSubs.forEach { $0.cancel() }
-		print("  ⓪ 发布节奏（6s，'+距上次ms/期间轮数'，M=monitor R=recorder）：\(rhythm.joined(separator: " "))")
-		let lateRounds = rhythm.compactMap { Int($0.split(separator: "/").last.map { $0.dropLast() } ?? "") }
-		if lateRounds.count > 3 {
-			let tail = lateRounds.dropFirst(2).reduce(0, +)
-			print(String(format: "  ⓪ 归属：稳定后 %d 次发布共摊 %d 轮 ≈ 每次发布 %.0f 轮",
-						 lateRounds.count - 2, tail, Double(tail) / Double(lateRounds.count - 2)))
-		}
 		print("  ⓪ layout 分桶（每 100ms）：\(buckets.map { String($0) }.joined(separator: " "))")
 		print("  ⓪ CPU 分桶（ms，同窗口同刻度）：\(cpuBuckets.map { String($0) }.joined(separator: " "))")
-		// 把"连续非零的 layout 桶"并成一簇 = 一次发布的级联（轮询 2s 一发，簇与簇之间应为 0）
+		// 把"连续非零的 layout 桶"并成一簇。注意：**这只是分布，不是一条簇=一次发布**——
+		// 没在簇里打到达戳，一次级联若被一个零桶劈开就会数成两簇（如实标注，别拿它当因果）
 		var clusters: [(rounds: Int, cpuMs: Int)] = []
 		var rounds = 0
 		var clusterCPU = 0
@@ -252,17 +227,48 @@ struct ScrollCostProbe {
 		if open { clusters.append((rounds, clusterCPU)) }   // 末尾被窗口切到的半簇也如实列出
 		let sortedClusterCPU = clusters.map { $0.cpuMs }.sorted()
 		let sortedClusterRounds = clusters.map { $0.rounds }.sorted()
-		print("  ⓪ 级联簇 \(clusters.count) 个（每 100ms 一桶，非零桶并簇）："
+		print("  ⓪ 级联簇 \(clusters.count) 个（非零桶并簇；未与发布对齐，仅供分布对比）："
 			+ clusters.map { "\($0.cpuMs)ms/\($0.rounds)轮" }.joined(separator: " ")
 			+ "｜中位 \(sortedClusterCPU.isEmpty ? 0 : sortedClusterCPU[sortedClusterCPU.count / 2])ms "
 			+ "\(sortedClusterRounds.isEmpty ? 0 : sortedClusterRounds[sortedClusterRounds.count / 2]) 轮")
-		// 发布普查（静置窗口内每个 @Published 字段发了几次）：
-		// raw = 每次赋值都算；去重 = 值真变了才算。两者之差就是"白发的发布"
-		print("  ⓪ 发布普查（静置 \(idleSeconds)s）："
+		print("  ⓪ 发布普查（抽若干字段；raw=每次赋值都算，去重=值真变了才算，两者之差=白发的发布）："
 			+ census.filter { $0.count > 0 }.map { "\($0.name)=\($0.count)" }.joined(separator: " · "))
 		print(String(format: "  ⓪ 同窗口发布计数：monitor %d 次 · historyRecorder %d 次（对照 %.0f 轮布局）",
 					 monitorPublishes, recorderPublishes, Double(layoutPasses)))
-		pubSubs.forEach { $0.cancel() }
+
+		// 发布节奏归属（另开 6s 窗口）：每次发布到达时，报"距上次发布过了多少 ms、
+		// 这期间烧掉多少轮布局"。用来分清一簇 ~900 轮是"每发一次各摊一轮级联"
+		// 还是"多次发布被 SwiftUI 合并成一轮"——前者该减发布次数，后者减了也没用。
+		var rhythm: [String] = []
+		var lastRhythmAt = Date()
+		var lastRhythmPasses = layoutPasses
+		let rhythmSubs = [
+			monitor.objectWillChange.dropFirst().sink { _ in
+				let now = Date()
+				rhythm.append(String(format: "M+%.0fms/%d轮",
+									 now.timeIntervalSince(lastRhythmAt) * 1000,
+									 layoutPasses - lastRhythmPasses))
+				lastRhythmAt = now
+				lastRhythmPasses = layoutPasses
+			},
+			historyRecorder.objectWillChange.dropFirst().sink { _ in
+				let now = Date()
+				rhythm.append(String(format: "R+%.0fms/%d轮",
+									 now.timeIntervalSince(lastRhythmAt) * 1000,
+									 layoutPasses - lastRhythmPasses))
+				lastRhythmAt = now
+				lastRhythmPasses = layoutPasses
+			},
+		]
+		drain(seconds: 6)
+		rhythmSubs.forEach { $0.cancel() }
+		print("  ⓪ 发布节奏（6s，'+距上次ms/期间轮数'，M=monitor R=recorder）：\(rhythm.joined(separator: " "))")
+		let lateRounds = rhythm.compactMap { Int($0.split(separator: "/").last.map { $0.dropLast() } ?? "") }
+		if lateRounds.count > 3 {
+			let tail = lateRounds.dropFirst(2).reduce(0, +)
+			print(String(format: "  ⓪ 归属：稳定后 %d 次发布共摊 %d 轮 ≈ 每次发布 %.0f 轮",
+						 lateRounds.count - 2, tail, Double(tail) / Double(lateRounds.count - 2)))
+		}
 
 		guard let scroll = findScrollView(in: host) else {
 			print("  ✗ 树里没有 NSScrollView → ①②③ 无从测量")
@@ -354,6 +360,8 @@ struct ScrollCostProbe {
 		var moved: CGFloat = 0
 		var stillScrolling = false
 		var steps = 0
+		/// 这条腿的步长（秒）——发布级联要按它算"拖尾几格"
+		var pace: TimeInterval = 0
 	}
 
 	/// 按给定节奏滚 steps 帧：每帧滚 5pt、强制 display、再让 runloop 呼吸 pace 秒
@@ -410,7 +418,7 @@ struct ScrollCostProbe {
 						 flipsPerNotch: flipsPerNotch, publishesPerNotch: publishesPerNotch,
 						 stuckSteps: stuck, flips: counter.flips, publishes: pubs.n,
 						 moved: clip.bounds.origin.y,
-						 stillScrolling: PanelScrollActivity.shared.isScrolling, steps: steps)
+						 stillScrolling: PanelScrollActivity.shared.isScrolling, steps: steps, pace: pace)
 	}
 
 	static func report(_ label: String, _ run: ScrollRun) {
@@ -425,38 +433,74 @@ struct ScrollCostProbe {
 					 fmtMs(run.perFrame * 1000), fmtMs(q(0.5)), fmtMs(q(0.95)), fmtMs(q(1.0)),
 					 run.duty * 100, run.flips, run.stuckSteps, run.stillScrolling ? "true" : "false"))
 		func mean(_ xs: [Double]) -> Double { xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count) }
-		// 2×2 归属：翻转与数据 tick 可能落进同一格，混在一起就会把 tick 的账算到翻转头上
-		// （本轮就这么错过一次：40 格的腿里必撞 2~3 次 tick，而"含翻转的格"只有 1 条）
+		// 2×2 归属。两个坑都踩过，所以口径写死在这里：
+		//   ① 翻转与数据 tick 会落进同一格 → 必须分类，不能混着数；
+		//   ② **发布"到达"和它"烧完"不在同一格**：一次级联 ~320ms，150ms 的腿里要摊到后 2~3 格。
+		//      只按到达那一格标记，就会把级联记到后面的"无发"格里，得出"发布不贵、闲格很贵"的假话。
+		//      所以这里把发布**向后拖尾** carry = ⌈级联时长 / 步长⌉ 格。
+		let carry = max(0, Int((0.32 / max(run.pace, 0.001)).rounded(.up)))
+		func publishedAtOrBefore(_ i: Int) -> Bool {
+			var k = max(0, i - carry)
+			while k <= i {
+				if k < run.publishesPerNotch.count && run.publishesPerNotch[k] > 0 { return true }
+				k += 1
+			}
+			return false
+		}
 		func cell(_ label: String, _ pred: (Int) -> Bool) -> String {
 			var xs: [Double] = []
-			for i in run.perNotch.indices
-			where pred(i) && i < run.flipsPerNotch.count && i < run.publishesPerNotch.count {
-				xs.append(run.perNotch[i])
+			for i in run.perNotch.indices where i < run.flipsPerNotch.count && i < run.publishesPerNotch.count {
+				if pred(i) { xs.append(run.perNotch[i]) }
 			}
 			let s = xs.sorted()
 			return "\(label) n=\(xs.count) 均值 \(fmtMs(mean(xs) * 1000)) p50 \(fmtMs(s.isEmpty ? 0 : s[s.count / 2] * 1000)) 峰值 \(fmtMs((s.last ?? 0) * 1000))"
 		}
 		let hasFlip: (Int) -> Bool = { run.flipsPerNotch[$0] > 0 }
-		let hasPub: (Int) -> Bool = { run.publishesPerNotch[$0] > 0 }
-		// 翻转次数也要分开数：500ms 的腿里一格常含 2 次（true→false→true），混在一起会把"一次"报成"两次"
-		print("    └ 2×2 归属｜" + cell("翻1·无发", { run.flipsPerNotch[$0] == 1 && !hasPub($0) })
-			+ "｜" + cell("翻2+·无发", { run.flipsPerNotch[$0] >= 2 && !hasPub($0) })
+		let hasPub: (Int) -> Bool = { publishedAtOrBefore($0) }
+		// 六格全列出来（缺格也会让 n 加不到 steps，看不出被谁吞了）：翻转次数×发布拖尾
+		print("    └ 归属（发布按拖尾 \(carry) 格摊宽；步长 \(String(format: "%.0f", run.pace * 1000))ms）｜"
+			+ cell("翻1·无发", { run.flipsPerNotch[$0] == 1 && !hasPub($0) })
 			+ "｜" + cell("翻1+发", { run.flipsPerNotch[$0] == 1 && hasPub($0) })
+			+ "｜" + cell("翻2+·无发", { run.flipsPerNotch[$0] >= 2 && !hasPub($0) })
+			+ "｜" + cell("翻2++发", { run.flipsPerNotch[$0] >= 2 && hasPub($0) })
 			+ "｜" + cell("无翻+发", { !hasFlip($0) && hasPub($0) })
 			+ "｜" + cell("都不含", { !hasFlip($0) && !hasPub($0) }))
 	}
 
 	// MARK: - 起停序列（一次翻转值多少，靠重复起停凑样本）
 
-	/// 每组 = 连滚 notches 格（150ms/格）→ 停 gap 秒（静默阈值到点，翻回 false）
-	/// 三类样本各凑 n 条：起手格（false→true）、停手窗（true→false）、中间格（无翻转）
+	/// 每组 = 起手格（1 格，期待 false→true）→ 若干中间格（期待无翻转）→
+	/// 停手窗（gap，期待 true→false）→ **等长静置对照窗**（再 gap，此时不该有任何翻转）。
+	/// 每个窗口都**真的去数翻转次数与方向**：名不副实的样本单独计 miss，不混进统计
+	/// （上一版按"位置"推断哪一格是起手/停手，审查抓到：一旦级联把主线程占住，
+	///  true→false 可能落在停手窗之外，标签就成了瞎话）。
 	struct FlipSeries {
-		var start: [Double] = []
-		var stop: [Double] = []
-		var middle: [Double] = []
-		var startWithPub = 0
-		var stopWithPub = 0
-		var middleWithPub = 0
+		/// 一个窗口 = 一段忙时 + 窗内到达的发布条数 + 窗内真发生的翻转方向。
+		/// `contaminated` = 本窗**或上一窗**有发布到达：一次级联 ~320ms，
+		/// 上一窗尾部到达的发布，它烧掉的账会落进本窗——只按"本窗到达"分堆，
+		/// 就会把带尾巴的窗算进"无发布"那堆（审查抓到的同一个坑，④ 里也会犯）
+		struct Sample {
+			var cost: Double
+			var pubs: Int
+			var contaminated = false
+			var flippedToTrue = false
+			var flippedToFalse = false
+			var anyFlip = false
+		}
+		var start: [Sample] = []
+		var stop: [Sample] = []
+		var middle: [Sample] = []
+		var control: [Sample] = []
+		var startMiss = 0      // 起手格里没数到 false→true
+		var stopMiss = 0       // 停手窗里没数到 true→false
+		var controlFlip = 0    // 对照窗里竟有翻转（说明上一窗没清干净）
+	}
+
+	/// 按方向数翻转（sink 收到的是新值：true=起手，false=停手）
+	final class PolarityCounter {
+		var toTrue = 0
+		var toFalse = 0
+		var cancellable: AnyCancellable?
 	}
 
 	static func runFlipSeries(scroll: NSScrollView, clip: NSClipView, window: NSWindow,
@@ -465,54 +509,97 @@ struct ScrollCostProbe {
 		var s = FlipSeries()
 		let pubs = PublishCounter()
 		pubs.subs = [
-			monitor.objectWillChange.sink { _ in pubs.n += 1 },
-			recorder.objectWillChange.sink { _ in pubs.n += 1 },
+			monitor.objectWillChange.dropFirst().sink { _ in pubs.n += 1 },
+			recorder.objectWillChange.dropFirst().sink { _ in pubs.n += 1 },
 		]
+		let flips = PolarityCounter()
+		flips.cancellable = PanelScrollActivity.shared.$isScrolling
+			.removeDuplicates().dropFirst()
+			.sink { value in if value { flips.toTrue += 1 } else { flips.toFalse += 1 } }
 		let maxY = max(0, (clip.documentView?.frame.height ?? 0) - clip.bounds.height)
 		var direction: CGFloat = 1
-		for _ in 0..<reps {
-			for n in 0..<notches {
-				var y = clip.bounds.origin.y + direction * 5
-				if y >= maxY || y <= 0 {
-					direction = -direction
-					y = clip.bounds.origin.y + direction * 5
-				}
-				let cpu0 = threadCPU()
-				let p0 = pubs.n
-				clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
-				scroll.reflectScrolledClipView(clip)
-				window.contentView?.displayIfNeeded()
-				drain(seconds: pace)
-				let cost = max(0, threadCPU() - cpu0)
-				let sawPub = pubs.n > p0
-				if n == 0 {
-					s.start.append(cost)
-					if sawPub { s.startWithPub += 1 }
-				} else {
-					s.middle.append(cost)
-					if sawPub { s.middleWithPub += 1 }
-				}
+		func step() -> FlipSeries.Sample {
+			var y = clip.bounds.origin.y + direction * 5
+			if y >= maxY || y <= 0 {
+				direction = -direction
+				y = clip.bounds.origin.y + direction * 5
 			}
-			// 停手窗：静默阈值到点就发生 true→false，这一窗的忙时即"停手那一下"
 			let cpu0 = threadCPU()
 			let p0 = pubs.n
-			drain(seconds: gap)
-			s.stop.append(max(0, threadCPU() - cpu0))
-			if pubs.n > p0 { s.stopWithPub += 1 }
+			let t0 = flips.toTrue
+			clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+			scroll.reflectScrolledClipView(clip)
+			window.contentView?.displayIfNeeded()
+			drain(seconds: pace)
+			return FlipSeries.Sample(
+				cost: max(0, threadCPU() - cpu0),
+				pubs: pubs.n - p0,
+				flippedToTrue: flips.toTrue > t0,
+				anyFlip: flips.toTrue > t0
+			)
 		}
+		func idleWindow() -> FlipSeries.Sample {
+			let cpu0 = threadCPU()
+			let p0 = pubs.n
+			let f0 = flips.toFalse
+			let t0 = flips.toTrue
+			drain(seconds: gap)
+			return FlipSeries.Sample(
+				cost: max(0, threadCPU() - cpu0),
+				pubs: pubs.n - p0,
+				flippedToFalse: flips.toFalse > f0,
+				anyFlip: flips.toFalse > f0 || flips.toTrue > t0
+			)
+		}
+		// 发布级联会跨窗烧（一次 ~320ms，而窗口只有 gap 秒）：本窗"干净"不等于上一窗的
+		// 尾巴没伸进来。所以分堆用「本窗或上一窗有发布到达」，并把拖尾单独说清楚
+		var prevPubs = 0
+		func classify(_ sample: FlipSeries.Sample) -> FlipSeries.Sample {
+			var copy = sample
+			copy.contaminated = sample.pubs > 0 || prevPubs > 0
+			prevPubs = sample.pubs
+			return copy
+		}
+		for _ in 0..<reps {
+			// 起手格：真数到 false→true 才算一条样本，否则记 miss（不混进统计）
+			let start = classify(step())
+			if start.flippedToTrue { s.start.append(start) } else { s.startMiss += 1 }
+			for _ in 0..<max(0, notches - 1) { s.middle.append(classify(step())) }
+			// 停手窗：真数到 true→false 才算
+			let stop = classify(idleWindow())
+			if stop.flippedToFalse { s.stop.append(stop) } else { s.stopMiss += 1 }
+			// 等长静置对照：同样长、同样排空，不该再有翻转
+			let control = classify(idleWindow())
+			s.control.append(control)
+			if control.anyFlip { s.controlFlip += 1 }
+		}
+		flips.cancellable?.cancel()
 		pubs.subs.forEach { $0.cancel() }
 		return s
 	}
 
 	static func reportSeries(_ label: String, _ s: FlipSeries) {
-		func stat(_ xs: [Double]) -> String {
-			let sorted = xs.sorted()
+		func stat(_ xs: [FlipSeries.Sample], requiringPub want: Bool? = nil) -> String {
+			let picked = xs.filter { want == nil ? true : $0.contaminated == want! }
+			let costs = picked.map { $0.cost }.sorted()
 			func mean(_ xs: [Double]) -> Double { xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count) }
-			return "n=\(xs.count) 均值 \(fmtMs(mean(xs) * 1000)) p50 \(fmtMs(sorted.isEmpty ? 0 : sorted[sorted.count / 2] * 1000)) 峰值 \(fmtMs((sorted.last ?? 0) * 1000))"
+			let all = xs.map { $0.cost }
+			return "n=\(picked.count)/\(xs.count) 均值 \(fmtMs(mean(costs) * 1000))"
+				+ " p50 \(fmtMs(costs.isEmpty ? 0 : costs[costs.count / 2] * 1000))"
+				+ " 峰值 \(fmtMs((costs.last ?? 0) * 1000))"
+				+ (all.isEmpty ? "" : "（全体均值 \(fmtMs(mean(all) * 1000))）")
 		}
-		print("  \(label)｜起手格(false→true) \(stat(s.start)) 其中含发布 \(s.startWithPub) 条"
-			+ "｜停手窗(true→false) \(stat(s.stop)) 其中含发布 \(s.stopWithPub) 条"
-			+ "｜中间格 \(stat(s.middle)) 其中含发布 \(s.middleWithPub) 条")
+		print("  \(label)")
+		print("    起手格 false→true \(stat(s.start))（名不副实 \(s.startMiss) 格，已剔除）")
+		print("    停手窗 true→false \(stat(s.stop))（没等到翻转 \(s.stopMiss) 窗，已剔除）")
+		print("      ├ 停手·受发布污染 \(stat(s.stop, requiringPub: true))")
+		print("      └ 停手·不受污染 \(stat(s.stop, requiringPub: false))")
+		print("    等长静置对照 \(stat(s.control))（对照里竟有翻转 \(s.controlFlip) 窗）")
+		print("      ├ 对照·受发布污染 \(stat(s.control, requiringPub: true))")
+		print("      └ 对照·不受污染 \(stat(s.control, requiringPub: false))")
+		print("    中间格（连滚中） \(stat(s.middle))")
+		print("    读法：「不受污染」两行相减 ≈ 停手这件事自己的代价；"
+			+ "污染 = 本窗**或上一窗**有发布到达（一次级联 ~320ms 会跨过窗口边界，只按本窗到达分堆会漏）")
 	}
 
 	// MARK: - 小工具
