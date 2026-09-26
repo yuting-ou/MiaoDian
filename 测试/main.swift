@@ -169,6 +169,11 @@ do {
 
 // 阈值夹紧：手改存档或异常值不能把警示线带到离谱区间
 do {
+	// 有开关门的卡数：少一张=某张卡的开关门映射被抹掉（那张卡在设置里没了开关，
+	// 却仍在资格集里被门控，用户无从关掉它——上面那个循环对这种漂移是瞎的）
+	expectEqual(LayoutCard.allCases.filter { CardList.switchGate(for: $0) != nil }.count, 15,
+				"开关门表：17 张卡里 15 张受开关门（不受门控的是充电协议/电池状态两张纯数据门卡）")
+
 	var config = AppConfiguration()
 	config.lowBatteryThresholdPercent = 3
 	config.highTemperatureThresholdC = 90
@@ -1160,19 +1165,30 @@ do {
 	let base = ChargingHabitInsight(message: "a", symbol: "s")
 	let heat = ChargingHabitInsight(message: "b", symbol: "t")
 	let charger = ChargingHabitInsight(message: "c", symbol: "u")
-	let all = UsagePatternAnalyzer.chargingInsights(habitBase: base, careHolding: true, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger)
+	// 参数表已无默认值：这里显式写满九项，新增来源时这些调用点会编译不过（正是要的效果）
+	let all = UsagePatternAnalyzer.chargingInsights(
+		habitBase: base, careHolding: true, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger,
+		careSilencedBySystemHold: false, dwellInsight: nil, storageInsight: nil, trickleInsight: nil
+	)
 	expectEqual(all.count, 4, "洞察收集：四条线全开收 4 条")
 	expectEqual(all.first?.message, "a", "洞察收集：习惯规律优先")
-	let withoutCare = UsagePatternAnalyzer.chargingInsights(habitBase: base, careHolding: false, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger)
+	let withoutCare = UsagePatternAnalyzer.chargingInsights(
+		habitBase: base, careHolding: false, careThresholdPercent: 80, heatOverlap: heat, chargerInsight: charger,
+		careSilencedBySystemHold: false, dwellInsight: nil, storageInsight: nil, trickleInsight: nil
+	)
 	expectEqual(withoutCare.count, 3, "洞察收集：保养不在线则少一条（变异：恒真必红）")
-	expect(UsagePatternAnalyzer.chargingInsights(habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil).isEmpty, "洞察收集：全空返回空")
+	expect(UsagePatternAnalyzer.chargingInsights(
+		habitBase: nil, careHolding: false, careThresholdPercent: 80, heatOverlap: nil, chargerInsight: nil,
+		careSilencedBySystemHold: false, dwellInsight: nil, storageInsight: nil, trickleInsight: nil
+	).isEmpty, "洞察收集：全空返回空")
 
 	// 打架洞察文案与 C2 静默机制对账（v2.1.0 对抗审查）：静默真的生效才许说"不再重复提醒"；
 	// 没生效（读不到系统暂缓签名的机器）就不许承诺。变异检验：三元两分支写反，两组断言同时必红
 	let careLine = { (silenced: Bool) in
 		UsagePatternAnalyzer.chargingInsights(
 			habitBase: nil, careHolding: true, careThresholdPercent: 80,
-			heatOverlap: nil, chargerInsight: nil, careSilencedBySystemHold: silenced
+			heatOverlap: nil, chargerInsight: nil, careSilencedBySystemHold: silenced,
+			dwellInsight: nil, storageInsight: nil, trickleInsight: nil
 		).first?.message ?? ""
 	}
 	expect(careLine(true).contains("已不再重复提醒"), "打架洞察：静默生效→据实说不再重复提醒")
@@ -1182,7 +1198,8 @@ do {
 	expect(careLine(true).contains("80%") && careLine(false).contains("80%"), "打架洞察：两种措辞都点明保养线电平")
 	expectEqual(UsagePatternAnalyzer.chargingInsights(
 		habitBase: base, careHolding: true, careThresholdPercent: 80,
-		heatOverlap: heat, chargerInsight: charger, careSilencedBySystemHold: true).count, 4,
+		heatOverlap: heat, chargerInsight: charger, careSilencedBySystemHold: true,
+		dwellInsight: nil, storageInsight: nil, trickleInsight: nil).count, 4,
 		"打架洞察：措辞分支不改变收集条数（只改文字）")
 
 	// —— 华容网格 PanelFlow（v4 显式行存储，纯函数）——
@@ -1361,17 +1378,18 @@ do {
 	let collapsibleCount = LayoutCard.allCases.filter { $0.collapseOption != nil }.count
 	expectEqual(collapsibleCount, 11, "折叠映射：支持折叠的卡恰为面板在案的 11 张")
 
-	// 洞察资格包装：与面板同一分析器组合——空数据无洞察，保养挂线即有
-	expect(!CardEligibility.hasHabitInsight(
-		events: [], dailyHistory: [], snapshot: BatterySnapshot(), careHolding: false,
-		careThresholdPercent: 80, drain: HourlyDrainStats(), temp: HourlyTempStats(),
-		currentCharger: nil, knownChargers: []
-	), "洞察资格：空数据无洞察")
-	expect(CardEligibility.hasHabitInsight(
-		events: [], dailyHistory: [], snapshot: BatterySnapshot(), careHolding: true,
-		careThresholdPercent: 80, drain: HourlyDrainStats(), temp: HourlyTempStats(),
-		currentCharger: nil, knownChargers: []
-	), "洞察资格：优化充电挂线即在场")
+	// 洞察资格：v2.9.16 起走唯一出口 `HabitInsights`（原来这里测的是 CardEligibility 自己
+	// 抄的那一份——它少传驻留/存放/涓流三条却全绿，正是"测试锁住了错的副本"的教材）
+	func habitInputs(careHolding: Bool) -> HabitInsightInputs {
+		HabitInsightInputs(
+			events: [], dailyHistory: [], snapshot: BatterySnapshot(), careHolding: careHolding,
+			careThresholdPercent: 80, careSilencedBySystemHold: false,
+			drain: HourlyDrainStats(), temp: HourlyTempStats(),
+			currentCharger: nil, knownChargers: []
+		)
+	}
+	expect(!HabitInsights.hasAny(habitInputs(careHolding: false)), "洞察资格：空数据无洞察")
+	expect(HabitInsights.hasAny(habitInputs(careHolding: true)), "洞察资格：优化充电挂线即在场")
 
 	// 旧配置 decode 兼容：无 panelLayout 字段 → nil（自动模式），升级不丢状态
 	let legacyConfigJSON = #"{"enabledOptions":["batteryHealth"],"menuBarContent":"percent"}"#
@@ -4560,6 +4578,7 @@ do {
 		careThresholdPercent: 80,
 		heatOverlap: ChargingHabitInsight(message: "热", symbol: "b"),
 		chargerInsight: ChargingHabitInsight(message: "慢充", symbol: "c"),
+		careSilencedBySystemHold: false,
 		dwellInsight: ChargingHabitInsight(message: "驻留", symbol: "d"),
 		storageInsight: ChargingHabitInsight(message: "存放", symbol: "e"),
 		trickleInsight: ChargingHabitInsight(message: "涓流", symbol: "f")
@@ -5191,6 +5210,177 @@ do {
 	expect(phase >= 0 && phase <= 1, "动效门：呼吸相位恒在 0...1")
 	expect(PanelMotion.dotScale(phase) > 0, "动效门：光点缩放恒为正（静态分支不许给 0）")
 }
+
+
+// MARK: - 洞察组装单一出口（v2.9.16 收口 #20：资格侧曾少传驻留/存放/涓流三条）
+do {
+	// 六个来源全部从 HabitInsightInputs 的**必填**输入派生，调用方没法"忘传一条"；
+	// 这里钉的是三条曾被丢掉的来源确实进了组装结果（符号就是来源的身份）
+	let today = Date(timeIntervalSinceReferenceDate: 800_000_000)   // 2026-05-09
+	var cal = Calendar(identifier: .gregorian)
+	cal.timeZone = TimeZone(identifier: "UTC")!
+	let fmt = DateFormatter()
+	fmt.locale = Locale(identifier: "en_US_POSIX")
+	fmt.calendar = cal
+	fmt.dateFormat = "yyyy-MM-dd"
+	func key(_ offset: Int) -> String { fmt.string(from: cal.date(byAdding: .day, value: -offset, to: today)!) }
+	func day(_ offset: Int, dwellMinutes: Double) -> DailyUsage {
+		var d = DailyUsage(dayKey: key(offset), drainedPercent: 6, chargedPercent: 4)
+		d.acSeconds = 3600
+		d.soc80to90Seconds = dwellMinutes * 60
+		d.attributionGapSeconds = 180        // 两窗同一口径，才允许对比
+		return d
+	}
+	func inputs(
+		_ snapshot: BatterySnapshot,
+		history: [DailyUsage] = [],
+		careHolding: Bool = false,
+		careSilenced: Bool = false
+	) -> HabitInsightInputs {
+		HabitInsightInputs(
+			events: [], dailyHistory: history, snapshot: snapshot,
+			careHolding: careHolding, careThresholdPercent: 80, careSilencedBySystemHold: careSilenced,
+			drain: HourlyDrainStats(), temp: HourlyTempStats(),
+			currentCharger: nil, knownChargers: [], today: today, calendar: cal
+		)
+	}
+
+	// 负向对照：什么都没发生 → 空（否则下面三条"出现了"可以靠"永远非空"蒙过）
+	var quiet = BatterySnapshot()
+	quiet.stateOfChargePercent = 30      // 存放带（45–65%）之外，且不在电上 → 六条来源全空
+	quiet.powerSource = .battery
+	expect(HabitInsights.assemble(inputs(quiet)).isEmpty, "洞察组装：无来源时应给空列表（资格判无数据）")
+	expect(!HabitInsights.hasAny(inputs(quiet)), "洞察资格：无来源时 hasAny 应为 false")
+
+	// ① 存放：插电且电量 ≥80（面板出这条，资格侧曾看不见）
+	var storage = BatterySnapshot()
+	storage.stateOfChargePercent = 90
+	storage.powerSource = .powerAdapter
+	let storageOut = HabitInsights.assemble(inputs(storage))
+	expect(storageOut.contains { $0.symbol == "archivebox.fill" },
+		   "洞察组装：存放建议进结果（曾漏传给资格侧 → 面板出卡而资格判无数据）")
+	expect(HabitInsights.hasAny(inputs(storage)), "洞察资格：只有存放建议时也算有内容")
+
+	// ② 涓流：充电中且落在涓流段
+	var trickle = BatterySnapshot()
+	trickle.stateOfChargePercent = 98
+	trickle.isCharging = true
+	trickle.powerSource = .powerAdapter
+	expect(HabitInsights.assemble(inputs(trickle)).contains { $0.symbol == "drop.fill" },
+		   "洞察组装：涓流提示进结果（同一条曾被丢）")
+
+	// ③ 驻留：近 7 日比前 7 日显著下降（这条要 14 天夹具，符号 leaf.fill）
+	let dwellHistory = (0...6).map { day($0, dwellMinutes: 20) } + (7...13).map { day($0, dwellMinutes: 90) }
+	var dwellSnap = BatterySnapshot()
+	dwellSnap.stateOfChargePercent = 30   // 别让存放/涓流串台：这一条只验驻留来源
+	dwellSnap.powerSource = .battery
+	expect(HabitInsights.assemble(inputs(dwellSnap, history: dwellHistory)).contains { $0.symbol == "leaf.fill" },
+		   "洞察组装：驻留升降进结果（曾被丢的第三条来源）")
+
+	// ③′ 热叠加：用电峰值小时正好压着一年里最热的时段（要 3 天以上的双边样本）
+	var hotDrain = HourlyDrainStats()
+	hotDrain.accumulatedDays = 5
+	hotDrain.drainedByHour[14] = 9            // 14 点是用电高峰
+	var hotTemp = HourlyTempStats()
+	hotTemp.accumulatedDays = 5
+	hotTemp.maxTempByHour[14] = 41            // 同一小时也是温度峰值
+	let hotInputs = HabitInsightInputs(
+		events: [], dailyHistory: [], snapshot: quiet, careHolding: false, careThresholdPercent: 80,
+		careSilencedBySystemHold: false, drain: hotDrain, temp: hotTemp,
+		currentCharger: nil, knownChargers: [], today: today, calendar: cal
+	)
+	expect(HabitInsights.assemble(hotInputs).contains { $0.symbol == "thermometer.sun.fill" },
+		   "洞察组装：热叠加建议进结果（曾被删而全绿）")
+
+	// ③″ 充电器：当前这只头明显比历史同头慢
+	var slowSnap = BatterySnapshot()
+	slowSnap.stateOfChargePercent = 30
+	slowSnap.powerSource = .powerAdapter
+	slowSnap.isCharging = true
+	slowSnap.negotiatedVoltageMV = 5000
+	slowSnap.negotiatedCurrentMA = 1500       // 5V×1.5A = 7.5W < 额定 18W 的 60% → 判"偏慢"
+	let epoch = Date(timeIntervalSinceReferenceDate: 0)
+	let bigCharger = ChargerProfile(key: "apple-96", name: "Apple 96W", ratedWatts: 96,
+								   firstSeen: epoch, lastSeen: epoch, connectCount: 30)
+	let currentCharger = ChargerProfile(key: "gank-18", name: "18W 第三方", ratedWatts: 18,
+										firstSeen: epoch, lastSeen: epoch, connectCount: 4)
+	let chargerInputs = HabitInsightInputs(
+		events: [], dailyHistory: [], snapshot: slowSnap, careHolding: false, careThresholdPercent: 80,
+		careSilencedBySystemHold: false, drain: HourlyDrainStats(), temp: HourlyTempStats(),
+		currentCharger: currentCharger, knownChargers: [bigCharger], today: today, calendar: cal
+	)
+	expect(HabitInsights.assemble(chargerInputs).contains { $0.symbol == "bolt.badge.clock" },
+		   "洞察组装：充电器偏慢建议进结果（曾被删而全绿）")
+
+	// ④ 保养暂停：文案还要按"静默是否真生效"分叉，故这个开关必须传到
+	//（参数表已无默认值，"不传"编译不过；反向那条测的是标志真被读进去，不是默认值兜出来的）
+	var careOnly = BatterySnapshot()
+	careOnly.stateOfChargePercent = 30
+	careOnly.powerSource = .battery
+	let careLoud = HabitInsights.assemble(inputs(careOnly, careHolding: true, careSilenced: true))
+	let careSilent = HabitInsights.assemble(inputs(careOnly, careHolding: true, careSilenced: false))
+	expect(careLoud.contains { $0.message.contains("已不再重复提醒") },
+		   "洞察组装：careSilencedBySystemHold=true 时给「已不再重复提醒」的措辞")
+	expect(!careSilent.contains { $0.message.contains("已不再重复提醒") },
+		   "洞察组装：静默未生效时不许承诺「不再重复提醒」（开关必须真传进去）")
+	// ⑤ 阅读顺序是既有契约（暂停 → 驻留 → 涓流）：这里比**相对位置**，
+	//    14 天历史也会产出习惯基线，所以不能钉 first
+	let stacked = HabitInsights.assemble(inputs(trickle, history: dwellHistory, careHolding: true))
+	func indexOf(_ sym: String) -> Int { stacked.firstIndex { $0.symbol == sym } ?? .max }
+	// 先钉三条都在场：缺一条时 indexOf 会退回 .max，"A < B" 就变成永真式（假绿）
+	let orderSymbols = ["gearshape.2.fill", "leaf.fill", "drop.fill"]
+	expect(orderSymbols.allSatisfy { s in stacked.contains { $0.symbol == s } },
+		   "洞察组装：顺序断言的三条都在场（否则下面的相对位置是永真式）")
+	expect(indexOf("gearshape.2.fill") < indexOf("leaf.fill"), "洞察组装：保养暂停排在驻留之前")
+	expect(indexOf("leaf.fill") < indexOf("drop.fill"), "洞察组装：驻留排在涓流之前（场景提示不抢主线）")
+}
+
+
+
+// MARK: - 资格三副本互锁（v2.9.16 #20 收口时顺手加的护栏）
+do {
+	// 同一判断在仓里有三份：面板 visibleCards、资格 eligibleCards、设置开关门 switchGate。
+	// 洞察那条已用"唯一出口"根治；这两条仍是手写表，所以这里**用表证表**：
+	// ① 全开全有数据时，资格集必须正好等于卡表（漏一张=判定与卡表脱钩；重复一张=配平会排出行）；
+	// ② 逐张卡关掉它的开关门 → 它必须离开资格集，且其余卡一张都不许掉（门控过宽/互相牵连）；
+	// ③ 设置稳定清单的三态与资格集不矛盾（「显示中」= 资格集 − 已隐藏，被隐藏的卡永远留在清单里）。
+	// 注：数据门事实字段（hasXxx）与卡名**没有**一张可对表，所以这里只能证开关门与三态，
+	// 事实字段错了要靠逐来源夹具那一段（洞察六源）与各卡自己的判定断言兜。
+	var config = AppConfiguration()
+	config.enabledOptions = Set(DisplayOption.allCases)
+	let allOnArray = CardEligibility.eligibleCards(configuration: config, facts: .allPresent)
+	let allOn = Set(allOnArray)
+	expectEqual(allOn.count, LayoutCard.allCases.count,
+				"资格表：全开 + 全有数据时全部卡片都该有资格（漏一张=判定与卡表脱钩）")
+	// 集合会吞掉重复：eligibleCards 若把同一张卡塞两次，配平就会排出重复行，这里单独钉
+	expectEqual(allOnArray.count, allOn.count, "资格表：全开时不许出现重复卡（Set 断言看不见重复）")
+
+	// 逐卡关开关：关了门还出现 = 该卡没走开关门；开着门却消失 = 开关门与判定不一致
+	for card in LayoutCard.allCases {
+		guard let gate = CardList.switchGate(for: card) else { continue }   // 无开关门的卡（信息行/纯数据门）
+		var off = AppConfiguration()
+		off.enabledOptions = Set(DisplayOption.allCases).subtracting([gate])
+		let withGateOff = CardEligibility.eligibleCards(configuration: off, facts: .allPresent)
+		expect(!withGateOff.contains(card),
+			   "开关门一致：关掉「\(gate.title)」后 \(card.title) 不许还在资格集里（面板会留着卡而预设认为无资格）")
+		let survivors = CardEligibility.eligibleCards(configuration: off, facts: .allPresent)
+		let othersOk = Set(CardEligibility.eligibleCards(configuration: config, facts: .allPresent)
+			.filter { $0 != card })
+		expect(othersOk.isSubset(of: Set(survivors)),
+			   "开关门互不牵连：只关「\(gate.title)」时其余 \(othersOk.count) 张卡一张都不许掉（过宽的门控会在这里红）")
+	}
+
+	// 稳定清单：显示中集合必须等于资格集减去 hidden（三态不许互相矛盾）
+	var hiddenCfg = config
+	hiddenCfg.panelLayout = PanelLayout(rows: [["powerInfo"]], hidden: [LayoutCard.bluetooth.rawValue, LayoutCard.chargeHistory.rawValue])
+	let listed = CardList.stableList(configuration: hiddenCfg, facts: .allPresent)
+	let shownFromList = Set(listed.compactMap { $0.status == .shown ? $0.card : nil })
+	let expectedShown = Set(CardEligibility.eligibleCards(configuration: hiddenCfg, facts: .allPresent))
+		.subtracting([.bluetooth, .chargeHistory])
+	expectEqual(shownFromList, expectedShown, "三态一致：清单「显示中」= 资格集 − 已隐藏")
+	expect(listed.filter { $0.status == .hidden }.count == 2, "三态一致：被隐藏的卡永远留在清单里（恢复通道）")
+}
+
 
 // MARK: - 汇总
 

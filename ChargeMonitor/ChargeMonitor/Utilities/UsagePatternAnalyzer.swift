@@ -145,8 +145,11 @@ nonisolated enum UsagePatternAnalyzer {
 	// MARK: - 充电速度对比
 
 	// 本次充电 vs 历史平均充速（%/分钟）；时长太短、涨得太少或样本不足不给结论。
-	// 洞察链 v2：不再只挑第一条说——把四条洞察线的可用项按优先级全收上来，
-	// 由面板渲染成一条洞察卡的多行列表。纯函数：输入各分析器结果，输出排序后的列表
+	// 洞察链 v2：不再只挑第一条说——把六条洞察线的可用项按优先级全收上来，
+	// 由面板渲染成一条洞察卡的多行列表。纯函数：输入各分析器结果，输出排序后的列表。
+	// **参数一律无默认值**（v2.9.16 审查）：这里曾有四个带默认值的尾巴，
+	// 任务 #20 那条缺陷（资格侧少传驻留/存放/涓流三条）正是被默认值吞掉的——少传不报错，
+	// 编译器不拦、人眼漏看。新增来源时必须显式过一遍每个调用方。
 	nonisolated static func chargingInsights(
 		habitBase: ChargingHabitInsight?,
 		careHolding: Bool,
@@ -154,10 +157,10 @@ nonisolated enum UsagePatternAnalyzer {
 		heatOverlap: ChargingHabitInsight?,
 		chargerInsight: ChargingHabitInsight?,
 		// 我方静默是否真的在生效（本机读到过系统暂缓签名且电平覆盖保养线）
-		careSilencedBySystemHold: Bool = false,
-		dwellInsight: ChargingHabitInsight? = nil,
-		storageInsight: ChargingHabitInsight? = nil,
-		trickleInsight: ChargingHabitInsight? = nil
+		careSilencedBySystemHold: Bool,
+		dwellInsight: ChargingHabitInsight?,
+		storageInsight: ChargingHabitInsight?,
+		trickleInsight: ChargingHabitInsight?
 	) -> [ChargingHabitInsight] {
 		var result: [ChargingHabitInsight] = []
 		if let habitBase { result.append(habitBase) }

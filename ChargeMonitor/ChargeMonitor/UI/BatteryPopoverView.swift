@@ -1005,43 +1005,23 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	// 充电习惯建议（有可用洞察才显示）；先看习惯规律，再看热叠加，最后看当前充电器是否偏慢
-	// 洞察链 v2：四条洞察线的可用项全收（不再只挑第一条说），按优先级排列
+	// 充电习惯建议（有可用洞察才显示）。组装逻辑不在这里——洞察卡的内容与"这张卡有没有内容"
+	// 必须同出一个函数（HabitInsights），否则设置侧的资格判定会与面板脱钩（v2.9.16 收口 #20）
 	private var habitInsights: [ChargingHabitInsight] {
-		let base = ChargingHabitAnalyzer.analyze(
+		HabitInsights.assemble(HabitInsightInputs(
 			events: historyRecorder.powerEvents,
 			dailyHistory: historyRecorder.dailyHistory,
-			snapshot: monitor.snapshot
-		)
-		let careHolding = configurationManager.configuration.enabledOptions.contains(.chargeCareReminder)
-			&& alertController.isOptimizedChargingHolding
-		let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(
-			drain: historyRecorder.hourlyDrainStats,
-			temp: historyRecorder.hourlyTempStats
-		).map { ChargingHabitInsight(message: $0, symbol: "thermometer.sun.fill") }
-		let charger = ChargingHabitAnalyzer.analyzeCharger(
 			snapshot: monitor.snapshot,
-			currentCharger: historyRecorder.currentChargerProfile,
-			knownChargers: historyRecorder.chargerProfiles
-		)
-		return UsagePatternAnalyzer.chargingInsights(
-			habitBase: base,
-			careHolding: careHolding,
+			careHolding: configurationManager.configuration.enabledOptions.contains(.chargeCareReminder)
+				&& alertController.isOptimizedChargingHolding,
 			careThresholdPercent: configurationManager.configuration.chargeCareThresholdPercent,
-			heatOverlap: heat,
-			chargerInsight: charger,
 			// 静默真的生效过才用"已不再重复提醒"的措辞（读不到签名的机器不承诺）
 			careSilencedBySystemHold: alertController.hasSilencedCareForSystemHold,
-			dwellInsight: DwellTracking.trackingInsight(history: historyRecorder.dailyHistory),
-			storageInsight: StorageGuide.advice(
-				socPercent: monitor.snapshot.stateOfChargePercent,
-				isOnAC: monitor.snapshot.powerSource == .powerAdapter
-			).map { ChargingHabitInsight(message: $0, symbol: "archivebox.fill") },
-			trickleInsight: TrickleNotice.liveNotice(
-				socPercent: monitor.snapshot.stateOfChargePercent,
-				isCharging: monitor.snapshot.isCharging
-			)
-		)
+			drain: historyRecorder.hourlyDrainStats,
+			temp: historyRecorder.hourlyTempStats,
+			currentCharger: historyRecorder.currentChargerProfile,
+			knownChargers: historyRecorder.chargerProfiles
+		))
 	}
 	
 	@ViewBuilder

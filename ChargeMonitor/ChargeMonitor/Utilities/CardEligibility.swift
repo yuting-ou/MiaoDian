@@ -144,32 +144,12 @@ nonisolated enum CardEligibility {
 		return result
 	}
 
-	/// 洞察卡资格：与面板 habitInsights 同一套分析器组合（面板那份是 private，这里供设置窗口复用）
-	static func hasHabitInsight(
-		events: [PowerEvent],
-		dailyHistory: [DailyUsage],
-		snapshot: BatterySnapshot,
-		careHolding: Bool,
-		careThresholdPercent: Int,
-		drain: HourlyDrainStats,
-		temp: HourlyTempStats,
-		currentCharger: ChargerProfile?,
-		knownChargers: [ChargerProfile]
-	) -> Bool {
-		let base = ChargingHabitAnalyzer.analyze(events: events, dailyHistory: dailyHistory, snapshot: snapshot)
-		let heat = UsagePatternAnalyzer.heatUsageOverlapInsight(drain: drain, temp: temp)
-			.map { ChargingHabitInsight(message: $0, symbol: "thermometer.sun.fill") }
-		let charger = ChargingHabitAnalyzer.analyzeCharger(
-			snapshot: snapshot, currentCharger: currentCharger, knownChargers: knownChargers
-		)
-		return !UsagePatternAnalyzer.chargingInsights(
-			habitBase: base,
-			careHolding: careHolding,
-			careThresholdPercent: careThresholdPercent,
-			heatOverlap: heat,
-			chargerInsight: charger
-		).isEmpty
-	}
+	/// 洞察卡资格：**不在本文件组装**。这张卡"有没有内容"与面板渲染的是同一句
+	/// `HabitInsights.hasAny(...)` / `HabitInsights.assemble(...)`（见 HabitInsightAssembly.swift）。
+	/// 这里曾自己抄了一遍 `chargingInsights` 的参数表并少传驻留/存放/涓流三条，
+	/// 于是"面板出卡、资格判无数据"：那张卡没进预设的 rows，被 `PanelFlow.normalize`
+	/// 追加到行表尾 → 甩在面板最底独占整行，且「极简」也赶不走它（v2.9.16 收口）。
+	/// 新增洞察来源时只改 HabitInsights 一处，两侧自动同步。
 }
 
 // MARK: - 预设

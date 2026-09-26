@@ -77,7 +77,8 @@ echo "==> 上限守卫：洞察渲染上限与配平同源（UI 层已按源文�
 # 其中 3 处（充电通道：呼吸点／波面／弧端流光）必须经 holdsDecorativeAnimation 停帧；
 # 警示通道那 2 处刻意**不**进门（节奏本身就是信息，见 PanelMotionGate 的说明）。
 # 所以"门控数 = 动画数"这种相等式是错的：它会把该豁免的两处也逼进门里。
-# 计数用 grep -o | wc -l：grep -c 数的是行（一行两处会漏），且无匹配时退出码 1。
+# 计数用 grep -o | wc -l：grep -c 数的是行（一行两处会漏），且无匹配时退出码 1
+# ——那会让 "[ x -lt 1 ]" 整型比较报错、if 判假、守卫反而打印"通过"（第一轮就假绿过一次）。
 HEADER_UI="$SRC/UI/BatteryHeaderView.swift"
 TICKS="$(grep -o 'TimelineView(' "$HEADER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
 GATES="$(grep -o 'PanelMotionGate.holdsDecorativeAnimation(isScrolling: scrollActivity.isScrolling)' "$HEADER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
@@ -86,6 +87,29 @@ if [ "${TICKS:-0}" != "5" ] || [ "${GATES:-0}" != "3" ]; then
 	exit 1
 fi
 echo "==> 动效门守卫：头部墙钟动画 5 处、其中充电 3 处经滚动门控（警示 2 处按规矩豁免）"
+
+# 单一出口守卫：v2.9.16 收口的 #20 起源于"同一判断抄了两遍"——面板传全 8 条来源、
+# 资格侧只传 5 条，于是"面板出着洞察卡、资格集判无数据"，那张卡没落进 rows，
+# 被 PanelFlow.normalize 追加到行表尾 → 甩在面板最底独占整行，连「极简」都赶不走它。
+# 参数表已改成全部必填（漏传=编译错误），这条守卫管的是另一半：**不许再抄一遍组装形状**——
+# 面板与设置两侧必须各自出现对 HabitInsights 的真实调用（不是注释里提一句名字）。
+# 注：模式必须转义 `.`，否则注释里的"（HabitInsights）"也算命中（审查 round2 实测到这条假绿）。
+LEAKY_INSIGHT="$(grep -rl 'chargingInsights(' "$SRC" 2>/dev/null \
+	| grep -v 'Utilities/UsagePatternAnalyzer.swift$' | grep -v 'Utilities/HabitInsightAssembly.swift$' || true)"
+if [ -n "$LEAKY_INSIGHT" ]; then
+	echo "==> 单一出口守卫失败：有人绕过 HabitInsights 自己拼洞察参数表（新增来源时这条会漏）"
+	printf '    %s\n' $LEAKY_INSIGHT
+	exit 1
+fi
+if ! grep -qE 'HabitInsights\.assemble\(HabitInsightInputs\(' "$SRC/UI/BatteryPopoverView.swift" 2>/dev/null; then
+	echo "==> 单一出口守卫失败：面板洞察卡不再经 HabitInsights.assemble，资格与内容会脱钩"
+	exit 1
+fi
+if ! grep -qE 'facts\.hasHabitInsight *= *HabitInsights\.hasAny\(' "$SRC/Settings/SettingsView.swift" 2>/dev/null; then
+	echo "==> 单一出口守卫失败：设置侧资格不再把 facts 交给 HabitInsights.hasAny，会与面板内容重新分叉"
+	exit 1
+fi
+echo "==> 单一出口守卫：洞察组装只经 HabitInsights（面板与设置同调一处，且必须是真调用）"
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层

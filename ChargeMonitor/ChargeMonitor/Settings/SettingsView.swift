@@ -8,6 +8,14 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
 	@ObservedObject private var configurationManager = ConfigurationManager.shared
 	@ObservedObject private var historyRecorder: BatteryHistoryRecorder
+	// 卡片资格的输入里有两项不归 configurationManager/historyRecorder 管：
+	// 存放与涓流读的是 `monitor.snapshot`，保养暂停与静默读的是 `alertController`。
+	// 补观察是为了**不再靠巧合保鲜**：过去设置窗口每轮询重画一次，是因为录制器顺带把
+	// `hourlyTempStats` 整体重发（审查 round2 更正：我原写成"一直停在旧答案上"，不成立——
+	// 插拔电源本身会写 `powerEvents`，那条也会触发重画）。缺源的真正代价是：一旦那条
+	// 顺带发布被收紧（v2.9.15 已给 monitor 加过滚动期零发布），资格判定就会真的读到旧答案。
+	@ObservedObject private var monitor = AppServices.shared.monitor
+	@ObservedObject private var alertController = AppServices.shared.alertController
 	@State private var searchText = ""
 
 	init(historyRecorder: BatteryHistoryRecorder) {
@@ -429,8 +437,8 @@ struct SettingsView: View {
 
 	/// 资格事实快照：与面板 visibleCards 同源的数据在场判定（设置窗口打开时才计算）
 	private func eligibilityFacts(configuration: AppConfiguration) -> CardEligibilityFacts {
-		let services = AppServices.shared
-		let monitor = services.monitor
+		// monitor/alertController 走属性上的 @ObservedObject，不在函数里重新取单例：
+		// 局部同名绑定会把观察者遮掉，资格判定就又是"读到旧答案的那一份"
 		let showsHealthCurve = configuration.enabledOptions.contains(.healthTrend) && historyRecorder.healthSamples.count >= 2
 		let formatter = BatteryInfoFormatter(
 			snapshot: monitor.snapshot,
@@ -448,18 +456,20 @@ struct SettingsView: View {
 		facts.hasChargeHistory = !historyRecorder.recentSessions.isEmpty
 		facts.hasCheckup = monitor.snapshot.healthPercent != nil
 		facts.hasBatteryIdentity = monitor.batteryIdentity?.isMeaningful ?? false
-		facts.hasHabitInsight = CardEligibility.hasHabitInsight(
+		// 洞察卡资格与面板内容同出一个函数（HabitInsights）：这里只负责把当下事实喂进去
+		facts.hasHabitInsight = HabitInsights.hasAny(HabitInsightInputs(
 			events: historyRecorder.powerEvents,
 			dailyHistory: historyRecorder.dailyHistory,
 			snapshot: monitor.snapshot,
 			careHolding: configuration.enabledOptions.contains(.chargeCareReminder)
-				&& services.alertController.isOptimizedChargingHolding,
+				&& alertController.isOptimizedChargingHolding,
 			careThresholdPercent: configuration.chargeCareThresholdPercent,
+			careSilencedBySystemHold: alertController.hasSilencedCareForSystemHold,
 			drain: historyRecorder.hourlyDrainStats,
 			temp: historyRecorder.hourlyTempStats,
 			currentCharger: historyRecorder.currentChargerProfile,
 			knownChargers: historyRecorder.chargerProfiles
-		)
+		))
 		facts.hasTemperatureSamples = monitor.temperatureSamples.count >= 2
 		facts.showsHealthCurve = showsHealthCurve
 		facts.hasDailySummary = historyRecorder.todayUsage.map { $0.drainedPercent > 0 || $0.chargedPercent > 0 } ?? false
