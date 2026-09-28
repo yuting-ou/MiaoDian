@@ -30,7 +30,7 @@ struct PowerEventTimelineSection: View {
 					let times = PowerEventTimeline.times(in: events, of: row)
 					HStack(spacing: 8) {
 						Image(systemName: style.symbol)
-							.font(.system(size: 10, weight: .medium))
+							.font(.system(size: PanelText.caption, weight: .regular))
 							.symbolRenderingMode(.hierarchical)
 							.foregroundStyle(style.color)
 							.frame(width: 16)
@@ -100,7 +100,7 @@ struct BluetoothDevicesSection: View {
 					
 					VStack(alignment: .leading, spacing: 1) {
 						Text(device.name)
-							.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.lineLimit(1)
 						
 						Text(Self.kindTitle(device.kind))
@@ -113,7 +113,7 @@ struct BluetoothDevicesSection: View {
 					batteryBar(percent: device.percent)
 					
 					Text("\(device.percent)%")
-						.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium).monospacedDigit())
+						.font(.system(size: PanelText.secondary, weight: .regular).monospacedDigit())
 						.foregroundStyle(Color.primary)  // 低电由电量条图形与提醒承担，文字不靠颜色分级
 						.frame(width: 34, alignment: .trailing)
 				}
@@ -126,7 +126,7 @@ struct BluetoothDevicesSection: View {
 	private func deviceBadge(for kind: BluetoothDeviceKind) -> some View {
 		let style = Self.badgeStyle(kind)
 		return Image(systemName: style.symbol)
-			.font(.system(size: 11, weight: .semibold))
+			.font(.system(size: PanelText.secondary, weight: .semibold))
 			.foregroundStyle(style.color)
 			.frame(width: 24, height: 24)
 			.tintedTile(style.color, cornerRadius: 7)
@@ -206,14 +206,14 @@ struct ChargeHistorySection: View {
 					} label: {
 						HStack(spacing: 8) {
 							Image(systemName: "bolt.badge.clock")
-								.font(.system(size: 11, weight: .medium))
+								.font(.system(size: PanelText.secondary, weight: .regular))
 								.foregroundStyle(Color.green)
 								.frame(width: 16)
 
 							// 两行式：第一行电量变化（核心信息不可被截），第二行时长·峰值·时间
 							VStack(alignment: .leading, spacing: 1) {
 								Text("\(session.startPercent)% → \(session.endPercent)%")
-									.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
+									.font(.system(size: PanelText.secondary, weight: .regular))
 									.lineLimit(1)
 								Text(ChargeSessionText.detail(session, chargerName: session.chargerKey.flatMap { chargerNames[$0] }))
 									.font(.system(size: 9))
@@ -230,7 +230,7 @@ struct ChargeHistorySection: View {
 							}
 
 							Image(systemName: "chevron.right")
-								.font(.system(size: 8, weight: .semibold))
+								.font(.system(size: PanelText.micro, weight: .regular))
 								.foregroundStyle(.tertiary)
 						}
 						.padding(.vertical, 3)

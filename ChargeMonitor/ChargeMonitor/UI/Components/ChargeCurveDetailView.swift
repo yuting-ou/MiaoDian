@@ -113,7 +113,7 @@ struct ChargeCurveDetailView: View {
 		HStack(alignment: .center) {
 			VStack(alignment: .leading, spacing: 3) {
 				Text("充电曲线")
-					.font(.system(size: 13, weight: .semibold))
+					.font(.system(size: PanelText.primary, weight: .regular))
 				Text(summaryText)
 					.font(.system(size: 11))
 					.foregroundStyle(GlassTokens.labelOnGlass)
@@ -123,7 +123,7 @@ struct ChargeCurveDetailView: View {
 
 			Button(action: { dismiss() }) {
 				Image(systemName: "xmark")
-					.font(.system(size: 11, weight: .semibold))
+					.font(.system(size: PanelText.secondary, weight: .semibold))
 					.foregroundStyle(GlassTokens.labelOnGlass)
 					.frame(width: 24, height: 24)
 					.controlGlass(in: .circle)
@@ -210,7 +210,7 @@ struct ChargeCurveDetailView: View {
 					if let label = hoverLabel(at: index) {
 						let resolved = context.resolve(
 							Text(label)
-								.font(.system(size: 9, weight: .medium).monospacedDigit())
+								.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 								.foregroundStyle(Color.primary)
 						)
 						let textSize = resolved.measure(in: size)
@@ -283,7 +283,7 @@ struct ChargeCurveDetailView: View {
 			// 标注文字走已证明的自适应色；归属哪条线由紧邻的橙色虚线（图形）说明
 			let resolved = context.resolve(
 				Text(label)
-					.font(.system(size: 8, weight: .medium).monospacedDigit())
+					.font(.system(size: PanelText.micro, weight: .regular).monospacedDigit())
 					.foregroundStyle(.primary)
 			)
 			// 标注放线上方右端，不挡曲线主体

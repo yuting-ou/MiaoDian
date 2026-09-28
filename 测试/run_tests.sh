@@ -111,6 +111,65 @@ if ! grep -qE 'facts\.hasHabitInsight *= *HabitInsights\.hasAny\(' "$SRC/Setting
 fi
 echo "==> 单一出口守卫：洞察组装只经 HabitInsights（面板与设置同调一处，且必须是真调用）"
 
+# 淡变白名单守卫（轮17）：面板一次数据发布的 ~830 轮布局来自"在飞的值淡变"——
+# 一条 .animation(_:value:) 在动，宿主就按帧重跑整树布局（同进程配对实测 830 轮/358ms → 2 轮/82ms）。
+# 所以"哪些行淡变"是性能口径，不是审美细节。UI/ 不进测试编译面，接线只能按源文件查：
+# ① 视图层必须真的按标记取动画（删掉这处 = 标记变成死字段，性能回归没人报警）；
+# ② 每拍重算的读数登记数写死 6 条（多一条=白损观感，少一条=级联回来）；
+# ③ 两条迷你曲线副标题（每拍刷新）不许再挂 value 动画。
+# 计数一律 grep -o | wc -l（grep -c 数行、一行两处会漏），模式里的点全部转义，
+# 并且**剔掉以 // 开头的行**——否则有人把真调用删掉、留一行写着同样内容的注释，守卫照样绿
+# （v2.9.16 审查实测过这条假绿）。
+ROW_UI="$SRC/UI/Components/PopoverComponents.swift"
+ROW_CALLS="$(grep -E '\.animation\(item\.animatesOnChange \? \.easeInOut\(duration: PanelMotion\.valueFadeSeconds\) : nil, value: item\.value\)' "$ROW_UI" 2>/dev/null | grep -vE '^[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+if [ "${ROW_CALLS:-0}" != "1" ]; then
+	echo "==> 淡变守卫失败：信息行没有真的按 item.animatesOnChange 取动画（命中 $ROW_CALLS 处，期望 1 处代码；标记成了死字段则级联无人挡）"
+	exit 1
+fi
+LIVE="$(grep -E 'animatesOnChange: false' "$SRC/UI/BatteryInfoFormatter.swift" 2>/dev/null | grep -vE '^[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+if [ "${LIVE:-0}" != "6" ]; then
+	echo "==> 淡变守卫失败：登记为「每拍重算、不淡变」的行有 $LIVE 处（期望 6：输入功率/充电功率/当前功耗/电池温度/电流电压/掉电速度）"
+	exit 1
+fi
+CHART_TICKS="$(grep -o 'value: currentText' "$SRC/UI/MiniChartSections.swift" 2>/dev/null | wc -l | tr -d '[:space:]')"
+if [ "${CHART_TICKS:-0}" != "0" ]; then
+	echo "==> 淡变守卫失败：迷你曲线副标题重新挂了 value 动画 $CHART_TICKS 处（该值每 2 秒就变）"
+	exit 1
+fi
+echo "==> 淡变守卫：实时读数 6 行不挂淡变、视图层按标记取动画、曲线副标题零 value 动画"
+
+# 字阶守卫（轮19）：字阶与字重预算是**写死的设计纪律**，不是"越多越好"——
+# 层次由字号/颜色/位置承担，字重是最后手段。两条硬线：
+# ① 面板与设置窗里不许出现 .bold（圆角设计本身有辨识度，bold 只是噪音）；
+# ② 信息行的值必须走 PanelText.primary（那 19 行是全屏最显眼的文字，曾整批 semibold）。
+# 计数一律 grep -o | wc -l，并剔掉注释行（v2.9.16 假绿教训）。
+BOLD="$(grep -rE 'weight: \.bold' "$SRC/UI" "$SRC/Settings" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+if [ "${BOLD:-0}" != "0" ]; then
+	echo "==> 字阶守卫失败：面板/设置里还有 $BOLD 处 .bold（字重预算只到 semibold，且仅限区块标题/头部主数字/表格值列/按钮标题）"
+	grep -rnE 'weight: \.bold' "$SRC/UI" "$SRC/Settings" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | sed 's/^/    /'
+	exit 1
+fi
+ROW_CALL="$(grep -E 'size: PanelText\.primary, weight: \.regular' "$SRC/UI/Components/PopoverComponents.swift" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+if [ "${ROW_CALL:-0}" != "1" ]; then
+	echo "==> 字阶守卫失败：信息行的值没有真的走 PanelText.primary/regular（命中 $ROW_CALL 处，期望 1 处代码；删掉留注释同样算失败）"
+	exit 1
+fi
+echo "==> 字阶守卫：无 .bold、信息行值走 PanelText.primary/regular（字重预算写死）"
+
+# 空态守卫（轮19）：卡片全被藏掉时，卡片区原来整块塌成 0 高度——面板变成「头部 + 一片虚空
+# + 控制行」，像坏了一样。空态视图 + 判据都必须还在，且判据必须是 cardIDs 而不是 segments
+# （单列路径下 segments 恒为 []，拿它当判据会把单列卡片列表整个换成空态——这个 bug 我犯过）。
+if ! grep -q 'emptyCardsState' "$SRC/UI/BatteryPopoverView.swift" 2>/dev/null; then
+	echo "==> 空态守卫失败：没有空态视图了（无卡片时面板会剩一片虚空）"
+	exit 1
+fi
+EMPTY_COND="$(grep -E 'if cardIDs\.isEmpty, !isEditingLayout' "$SRC/UI/BatteryPopoverView.swift" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+if [ "${EMPTY_COND:-0}" != "1" ]; then
+	echo "==> 空态守卫失败：空态判据被改坏（命中 $EMPTY_COND 处，期望 1 处；必须按 cardIDs 判，按 segments 判会误伤单列）"
+	exit 1
+fi
+echo "==> 空态守卫：无卡片有空态、判据按 cardIDs（不误伤单列）"
+
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
 # 钉的旧 SDK 是两条独立证据，回显版本免得把两者的结论混着读。

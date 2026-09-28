@@ -21,7 +21,7 @@ struct SignificantEnergySection: View {
 							.font(.system(size: 12))
 							.foregroundStyle(GlassTokens.labelOnGlass)
 						Text("正在积累样本（约 2 分钟）…")
-							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
 							.lineLimit(1)
 					}
@@ -34,7 +34,7 @@ struct SignificantEnergySection: View {
 							.font(.system(size: 12))
 							.foregroundStyle(Color.green)
 						Text("没有明显的耗电大户")
-							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
 							.lineLimit(1)
 					}
@@ -60,7 +60,7 @@ struct SignificantEnergySection: View {
 				ForEach(Array(weeklyTop.enumerated()), id: \.offset) { index, entry in
 					HStack(spacing: 8) {
 						Text("\(index + 1)")
-							.font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+							.font(.system(size: PanelText.caption, weight: .regular, design: .rounded).monospacedDigit())
 							.foregroundStyle(index == 0 ? Color.primary : GlassTokens.labelOnGlass)
 							.frame(width: 12)
 
@@ -72,7 +72,7 @@ struct SignificantEnergySection: View {
 							.frame(maxWidth: 180, alignment: .leading)
 
 						Text(DurationFormatter.chinese(minutes: Int(entry.seconds / 60)))
-							.font(.system(size: 11, weight: .semibold).monospacedDigit())
+							.font(.system(size: PanelText.secondary, weight: .semibold).monospacedDigit())
 							.foregroundStyle(.primary)
 							.frame(width: 62, alignment: .trailing)
 
@@ -105,7 +105,7 @@ struct HourlyDrainSection: View {
 			CollapsibleSectionHeader(title: "时段用电", isCollapsed: isCollapsed, onToggle: onToggle) {
 				if let peak = UsagePatternAnalyzer.peakDrainHour(stats) {
 					Text("高峰 \(peak) 点")
-						.font(.system(size: 10, weight: .semibold).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(.primary)  // "高峰 X 点"的语义在字里，颜色不承担（玻璃优先裁决）
 				} else if isCollapsed {
 					Text("统计中")
@@ -201,7 +201,7 @@ struct RuntimeScenarioSection: View {
 				ForEach(scenarioRows, id: \.scenario) { row in
 					HStack(spacing: 6) {
 						Image(systemName: row.scenario.symbolName)
-							.font(.system(size: 10, weight: .medium))
+							.font(.system(size: PanelText.caption, weight: .regular))
 							.foregroundStyle(tint(for: row.scenario))
 							.frame(width: 14)
 						Text(row.scenario.title)
@@ -209,7 +209,7 @@ struct RuntimeScenarioSection: View {
 							.foregroundStyle(GlassTokens.labelOnGlass)
 						Spacer()
 						Text("约 \(DurationFormatter.chinese(minutes: row.minutes))")
-							.font(.system(size: 10.5, weight: .medium).monospacedDigit())
+							.font(.system(size: 10.5, weight: .regular).monospacedDigit())
 					}
 					.padding(.top, 6)
 				}
@@ -316,7 +316,7 @@ struct BatteryIdentitySection: View {
 	private var jumpStatus: some View {
 		HStack(alignment: .top, spacing: 5) {
 			Image(systemName: needsCalibration ? "exclamationmark.triangle.fill" : "waveform.path.ecg")
-				.font(.system(size: 9, weight: .semibold))
+				.font(.system(size: PanelText.caption, weight: .regular))
 				.foregroundStyle(needsCalibration ? Color.orange : Color.secondary)
 				.padding(.top, 1)
 			Text(jumpText)
@@ -348,7 +348,7 @@ struct BatteryIdentitySection: View {
 				.foregroundStyle(GlassTokens.labelOnGlass)
 				.frame(width: 50, alignment: .leading)
 			Text(value)
-				.font(monospaced ? .system(size: 10, weight: .medium).monospaced() : .system(size: 10.5))
+				.font(monospaced ? .system(size: PanelText.caption, weight: .regular).monospaced() : .system(size: 10.5))
 				.foregroundStyle(tint ?? .primary)
 				.lineLimit(1)
 				.truncationMode(.middle)

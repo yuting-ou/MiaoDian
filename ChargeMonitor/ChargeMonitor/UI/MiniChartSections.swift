@@ -9,14 +9,14 @@ struct PowerChartSection: View {
 	var body: some View {
 		PopoverCard {
 			CollapsibleSectionHeader(title: "功耗曲线", isCollapsed: isCollapsed, onToggle: onToggle) {
-				// 当前功率是最受关注的数字，用字重突出（彩色小字坐玻璃面不达 AA，见证明表文字色锁）；
-				// 峰值作为参照置于后
-				// 此值每 2 秒刷新，转场用淡入淡出而非 numericText，避免插值字形位图持续堆积
+				// 当前功率是最受关注的数字：靠**排在前面**突出，不靠字重（字阶预算见 PanelText；
+				// 彩色小字坐玻璃面不达 AA 见证明表文字色锁）。峰值作为参照置于后，同为 10pt——
+				// 曾把当前值加到 semibold，被强调的那个反而比参照小一号，已收回。
+				// 此值每 2 秒刷新：不做值淡变（numericText 会堆插值字形位图，淡入淡出的在飞动画
+				// 会让宿主按帧重跑整树布局）——数字直接更新
 				Text(currentText)
-					.font(.system(size: 10, weight: .semibold).monospacedDigit())
+					.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 					.foregroundStyle(.primary)
-					.contentTransition(.opacity)
-					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
 					.font(.system(size: 10).monospacedDigit())
 					.foregroundStyle(GlassTokens.labelOnGlass)
@@ -74,10 +74,8 @@ struct TemperatureChartSection: View {
 			CollapsibleSectionHeader(title: "温度曲线", isCollapsed: isCollapsed, onToggle: onToggle) {
 				// 超警示线由文案说「偏高」——彩色小字坐玻璃面实测只有 1.1~2.2:1，语义不能靠一个看不见的颜色
 				Text(isOverThreshold ? currentText + "（偏高）" : currentText)
-					.font(.system(size: 10, weight: .semibold).monospacedDigit())
+					.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 					.foregroundStyle(.primary)
-					.contentTransition(.opacity)
-					.animation(.easeInOut(duration: 0.3), value: currentText)
 				Text(peakText)
 					.font(.system(size: 10).monospacedDigit())
 					.foregroundStyle(GlassTokens.labelOnGlass)
@@ -139,17 +137,17 @@ struct BatteryCheckupSection: View {
 						.stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
 						.rotationEffect(.degrees(-90))
 					Text("\(checkup.score)")
-						.font(.system(size: 11, weight: .bold, design: .rounded).monospacedDigit())
+						.font(.system(size: PanelText.secondary, weight: .regular, design: .rounded).monospacedDigit())
 						.foregroundStyle(.primary)
 				}
 				.frame(width: 30, height: 30)
 				
 				VStack(alignment: .leading, spacing: 1) {
 					Text("电池体检")
-						.font(.system(size: 11, weight: .semibold))
+						.font(.system(size: PanelText.secondary, weight: .semibold))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 					Text(checkup.verdict)
-						.font(.system(size: PopoverLayout.bodyFontSize, weight: .medium))
+						.font(.system(size: PanelText.secondary, weight: .regular))
 					// 冷启动如实标注：这个分数里有几成是数据读不到时的中性估计
 					if !checkup.estimatedInputs.isEmpty {
 						Text("含估计项：\(checkup.estimatedInputs.joined(separator: "、"))")
@@ -198,11 +196,11 @@ struct SOCChartSection: View {
 			CollapsibleSectionHeader(title: "24小时电量", isCollapsed: isCollapsed, onToggle: onToggle) {
 				if let hoverText {
 					Text(hoverText)
-						.font(.system(size: 10, weight: .semibold).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(.primary)
 				} else if let last = samples.last {
 					Text("现在 \(last.percent)%")
-						.font(.system(size: 10, weight: .semibold).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}

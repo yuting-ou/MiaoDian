@@ -137,7 +137,7 @@ struct DailySummarySection: View {
 				.foregroundStyle(color)
 			VStack(alignment: .leading, spacing: 0) {
 				Text(value)
-					.font(.system(size: PopoverLayout.bodyFontSize, weight: .semibold).monospacedDigit())
+					.font(.system(size: PanelText.secondary, weight: .regular).monospacedDigit())
 				Text(label)
 					.font(.system(size: 9))
 					.foregroundStyle(GlassTokens.labelOnGlass)

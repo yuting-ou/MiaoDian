@@ -17,6 +17,13 @@ struct BatteryInfoItem: Identifiable {
 	// 颜色只留给图标（图形，且与文字冗余）
 	// 悬停 tooltip：充电功率行用它解释"为什么功率小"这类读数疑惑
 	var helpText: String? = nil
+	// 值变化时要不要做交叉淡入。淡变本身不是装饰而是代价：一条在飞的 `.animation(value:)`
+	// 会让宿主按帧重跑整树布局。实测（PROGRESS.md 轮17 的同进程配对 A/B）：
+	// 这些行留淡变时一次数据发布烧 830 轮布局/358ms，撤掉后同一段只剩 2 轮/82ms。
+	// 数字照常即时更新，只是不再淡变。边界按实测划，不按"看起来像不像实时读数"划——
+	// 充电器均值这类滚动量留了淡变，实测稳态下它们每拍不翻新文本；新增行若要标 false，
+	// 得先按同一套办法量一遍（测试钉不住"该关没登记"的行）
+	var animatesOnChange: Bool = true
 
 	var id: String { label }
 }
@@ -204,7 +211,8 @@ struct BatteryInfoFormatter {
 			symbol: "arrow.down.circle.fill",
 			label: "输入功率",
 			value: formatWatts(watts),
-			iconTint: .teal
+			iconTint: .teal,
+			animatesOnChange: false
 		)
 	}
 	
@@ -225,7 +233,8 @@ struct BatteryInfoFormatter {
 			label: "充电功率",
 			value: formatWatts(watts) + phaseSuffix,
 			iconTint: .green,
-			helpText: help
+			helpText: help,
+			animatesOnChange: false
 		)
 	}
 	
@@ -237,7 +246,8 @@ struct BatteryInfoFormatter {
 			symbol: "cpu",
 			label: "当前功耗",
 			value: formatWatts(watts),
-			iconTint: .purple
+			iconTint: .purple,
+			animatesOnChange: false
 		)
 	}
 	
@@ -370,7 +380,8 @@ struct BatteryInfoFormatter {
 			symbol: "thermometer.medium",
 			label: "电池温度",
 			value: String(format: "%.1f°C", temperature) + (isHot ? "（偏高）" : ""),
-			iconTint: .orange
+			iconTint: .orange,
+			animatesOnChange: false
 		)
 	}
 	
@@ -388,7 +399,8 @@ struct BatteryInfoFormatter {
 			symbol: "bolt.ring.closed",
 			label: "电流电压",
 			value: String(format: "%.2fV · %@A", volts, ampsText),
-			iconTint: .cyan
+			iconTint: .cyan,
+			animatesOnChange: false
 		)
 	}
 	
@@ -424,7 +436,8 @@ struct BatteryInfoFormatter {
 			symbol: "arrow.down.right.circle",
 			label: "掉电速度",
 			value: value,
-			iconTint: .red
+			iconTint: .red,
+			animatesOnChange: false
 		)
 	}
 	

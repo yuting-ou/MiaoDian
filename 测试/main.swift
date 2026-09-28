@@ -250,6 +250,85 @@ do {
 	expectEqual(items.first { $0.label == "掉电速度" }?.value, "5.0%/小时 · 约可用2小时", "信息行：掉电速度格式化")
 }
 
+// 哪些信息行挂值淡变，是面板一次数据发布的布局轮数的主因（在飞的 .animation(value:)
+// 让宿主按帧重跑整树布局：同进程配对实测 830 轮/358ms → 2 轮/82ms，见 PROGRESS.md 轮17）。
+// 这条断言钉的是"登记在每拍集合里的行必须真的不淡变"——漏标必红；
+// 反过来"新行该不该登记"测试看不见（UI/ 不进测试面，视图层消费点也没有源文件级门）
+do {
+	// 每 2 秒一拍就会重算出不同文本的读数：一律不淡变
+	let perTick: Set<String> = ["输入功率", "充电功率", "当前功耗", "电池温度", "电流电压", "掉电速度"]
+	// 只在事件里变（插拔/换充电器/改档位）或分钟粒度：保留淡变，那一下才值得演。
+	// 「充满还需/剩余可用时间」面板不渲染（BatteryPopoverView 传 omitsTimeEstimates: true），
+	// 列在这里只为让下面的相交检查有意义
+	let eventRows: Set<String> = ["当前档位", "可选档位", "适配器名称", "制造商", "充电器", "循环次数", "电池健康", "开机时长", "充满还需", "剩余可用时间"]
+
+	func checkFade(_ items: [BatteryInfoItem], _ scene: String) {
+		var seen = Set<String>()
+		for item in items {
+			// 同一个标签不许出现两次：Set 断言看不见重复，数组级去重才看得见
+			expect(!seen.contains(item.label), "淡变白名单·\(scene)：标签「\(item.label)」重复出现")
+			seen.insert(item.label)
+			expect(item.animatesOnChange == !perTick.contains(item.label),
+				"淡变白名单·\(scene)：「\(item.label)」淡变开关与它的更新节奏不符")
+		}
+		// 分类表自洽：两集不许相交。这条由夹具真实产出的行来喂——如果某个标签根本
+		// 不在 items 里，上面那条已经逐行钉过它了，这里只防"同一个标签被两边同时登记"
+		for label in perTick.intersection(eventRows) {
+			expect(false, "淡变白名单·\(scene)：「\(label)」同时登记在每拍集与事件集里")
+		}
+		// 反向：夹具**产出了**的事件行必须真的在淡变（否则"保留淡变"只是嘴上说）
+		for item in items where eventRows.contains(item.label) {
+			expect(item.animatesOnChange, "淡变白名单·\(scene)：产出的「\(item.label)」属于事件行，应保留淡变")
+		}
+		// 覆盖度自报：每拍集里有几条真被夹具产出过（全为 0 说明夹具根本没覆盖到）
+		let covered = perTick.intersection(seen)
+		expect(!covered.isEmpty, "淡变白名单·\(scene)：夹具一条每拍行都没产出，白名单是空转的")
+	}
+
+	var s = BatterySnapshot()
+	s.powerSource = .powerAdapter
+	s.isCharging = true
+	s.stateOfChargePercent = 50
+	s.timeToFullChargeMinutes = 90
+	s.cycleCount = 163
+	s.designCapacityMAh = 4720
+	s.maxCapacityMAh = 4500
+	s.temperatureC = 40.0
+	s.negotiatedVoltageMV = 20000
+	s.negotiatedCurrentMA = 3000
+	s.adapterRatedWatts = 100
+	s.adapterInputPowerW = 12.5
+	s.chargingPowerW = 30.0
+	s.currentPowerW = 8.4
+	s.batteryVoltageMV = 12_800
+	s.batteryAmperageMA = 2_400
+	s.systemUptimeSeconds = 3_600
+	let chargeItems = BatteryInfoFormatter(snapshot: s, configuration: fullConfig).makeItems()
+	checkFade(chargeItems, "充电")
+	// 这四条必须真出现在夹具产出的行里（不出现就白标，所以逐条点名）
+	for label in ["输入功率", "充电功率", "当前功耗", "电池温度"] {
+		expect(chargeItems.contains { $0.label == label && !$0.animatesOnChange }, "淡变白名单·充电：「\(label)」这一拍就不该淡变")
+	}
+	// 撤淡变不许动任何读数文本
+	expectEqual(chargeItems.first { $0.label == "输入功率" }?.value, "12.50W", "淡变白名单·充电：不淡变的行值照旧格式化")
+	expect(chargeItems.first { $0.label == "循环次数" }?.animatesOnChange == true, "淡变白名单·充电：事件行仍淡变")
+
+	var d = batterySnap(percent: 80)
+	d.timeToEmptyMinutes = 125
+	d.batteryVoltageMV = 12_800
+	d.batteryAmperageMA = -2_400
+	d.systemUptimeSeconds = 3_600
+	let drainItems = BatteryInfoFormatter(
+		snapshot: d,
+		configuration: fullConfig,
+		drainEstimate: DrainRateEstimate(percentPerHour: 5.0, estimatedMinutesRemaining: 120)
+	).makeItems()
+	checkFade(drainItems, "放电")
+	expect(drainItems.contains { $0.label == "掉电速度" && !$0.animatesOnChange }, "淡变白名单·放电：掉电速度不淡变")
+	// 分钟粒度的行（开机时长：DateComponentsFormatter 只到 minute）一拍不翻新文本，留着淡变
+	expect(drainItems.first { $0.label == "开机时长" }?.animatesOnChange == true, "淡变白名单·放电：分钟粒度的开机时长仍淡变")
+}
+
 // 时长格式化边界：整小时不带分钟，不满一小时不带小时
 do {
 	var s = batterySnap(percent: 80)
@@ -888,8 +967,10 @@ do {
 
 do {
 	// 半宽卡里值列可用宽 = 卡内容 252 - 图标 16 - 间距 8 - 标签列 64 - 间距 8 = 156pt；
-	// 值字号 12.5 semibold，两行上限。凡是把语义写进文案的值（偏低/偏高/偏快/疑似慢充），
-	// 标记必须落在两行之内——否则"文案说了"是假的（这正是撤掉染色后新引入的风险）
+	// 值字号 12.5、两行上限。凡是把语义写进文案的值（偏低/偏高/偏快/疑似慢充），
+	// 标记必须落在两行之内——否则"文案说了"是假的（这正是撤掉染色后新引入的风险）。
+	// 量宽故意按 **semibold**：生产已降到 regular（更窄），用更宽的字重当余量，
+	// 断言只会更严、不会假绿；哪天生产又加粗，这条照样拦得住
 	let avail: CGFloat = 156
 	let font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
 	func width(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }

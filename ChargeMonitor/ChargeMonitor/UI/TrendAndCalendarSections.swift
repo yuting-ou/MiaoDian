@@ -62,7 +62,7 @@ struct HealthTrendChart: View {
 				let ring = Path(ellipseIn: CGRect(x: endPoint.x - 3, y: endPoint.y - 3, width: 6, height: 6))
 				context.stroke(ring, with: .color(.orange), lineWidth: 1.3)
 				// 标注文字走已证明的自适应色；它归属哪条线由紧邻的橙色虚线与圆点（图形）说明
-				let label = context.resolve(Text("80%").font(.system(size: 8, weight: .semibold)).foregroundStyle(.primary))
+				let label = context.resolve(Text("80%").font(.system(size: PanelText.micro, weight: .regular)).foregroundStyle(.primary))
 				let ls = label.measure(in: size)
 				context.draw(label, at: CGPoint(x: size.width - ls.width / 2 - 1, y: max(endPoint.y - 9, ls.height / 2)), anchor: .center)
 			}
@@ -117,7 +117,7 @@ struct UsageCalendarSection: View {
 			CollapsibleSectionHeader(title: "用电日历", isCollapsed: isCollapsed, onToggle: onToggle) {
 				if let peak = history.map(\.drainedPercent).max(), peak > 0 {
 					Text("峰值 \(peak)%")
-						.font(.system(size: 10, weight: .semibold).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 			}
@@ -207,7 +207,7 @@ struct HealthTrendSection: View {
 					Text(first.healthPercent == last.healthPercent
 						? "稳定在 \(last.healthPercent)%"
 						: "\(first.healthPercent)% → \(last.healthPercent)%")
-						.font(.system(size: 10, weight: .semibold).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(.primary)
 				}
 			}

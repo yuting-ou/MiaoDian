@@ -93,7 +93,7 @@ struct SparkAreaChart: View {
 				
 				let resolved = context.resolve(
 					Text(label)
-						.font(.system(size: 9, weight: .medium).monospacedDigit())
+						.font(.system(size: PanelText.caption, weight: .regular).monospacedDigit())
 						.foregroundStyle(Color.primary)
 				)
 				let textSize = resolved.measure(in: size)

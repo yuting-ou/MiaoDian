@@ -70,7 +70,7 @@ struct SettingsView: View {
 				}
 			}
 			Text("当前：\(configurationManager.configuration.panelMaterial.title) —— \(configurationManager.configuration.panelMaterial.detail)。更改后面板立即切换。")
-				.font(.system(size: 11))
+				.font(.system(size: PanelText.secondary))
 				.foregroundStyle(.secondary)
 		}
 
@@ -80,7 +80,7 @@ struct SettingsView: View {
 			Button("导出历史存档…") { exportArchive() }
 			Button("导入历史存档…") { importArchive() }
 			Text("包含充电记录、健康趋势、用电历史等全部本地数据，换机或重装 macOS 前先导出一份。")
-				.font(.system(size: 11))
+				.font(.system(size: PanelText.secondary))
 				.foregroundStyle(.secondary)
 				.fixedSize(horizontal: false, vertical: true)
 		} header: {
@@ -97,7 +97,7 @@ struct SettingsView: View {
 
 		Section {
 			Text("所有数据只保存在本机，不会上传到任何服务器，也不访问任何网络接口。")
-				.font(.system(size: 11))
+				.font(.system(size: PanelText.secondary))
 				.foregroundStyle(.secondary)
 				.fixedSize(horizontal: false, vertical: true)
 		} header: {
@@ -135,7 +135,7 @@ struct SettingsView: View {
 					VStack(alignment: .leading, spacing: 2) {
 						Text(entry.card.title)
 						Text(entry.status == .hidden ? "已隐藏 · \(entry.card.detail)" : entry.card.detail)
-							.font(.system(size: 11))
+							.font(.system(size: PanelText.secondary))
 							.foregroundStyle(.secondary)
 					}
 				}
@@ -146,7 +146,7 @@ struct SettingsView: View {
 						.foregroundStyle(.secondary)
 					if case .unavailable(let reason) = entry.status {
 						Text("暂不可用：\(reason)")
-							.font(.system(size: 11))
+							.font(.system(size: PanelText.secondary))
 							.foregroundStyle(.tertiary)
 					}
 				}
@@ -161,7 +161,7 @@ struct SettingsView: View {
 			VStack(alignment: .leading, spacing: 2) {
 				Text(option.title)
 				Text(option.detail)
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 			}
 		}
@@ -194,7 +194,7 @@ struct SettingsView: View {
 		Section {
 			HStack {
 				Text("调位置在面板拖卡片把手，这里管批量开关与预设。下面的行就是面板里的行，并排的两张卡显示在同一行。")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
 			}
@@ -205,7 +205,7 @@ struct SettingsView: View {
 							VStack(alignment: .leading, spacing: 1) {
 								Text(preset.title)
 								Text(preset.detail)
-									.font(.system(size: 11))
+									.font(.system(size: PanelText.secondary))
 									.foregroundStyle(.secondary)
 							}
 						}
@@ -249,7 +249,7 @@ struct SettingsView: View {
 			if !hiddenCards.isEmpty {
 				Divider()
 				Text("已隐藏")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 				ForEach(hiddenCards, id: \.id) { card in
 					hiddenCardRow(card, eligible: eligible)
@@ -258,7 +258,7 @@ struct SettingsView: View {
 			if !unavailableEntries.isEmpty {
 				Divider()
 				Text("暂不可用（数据够了会自动出现）")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 				ForEach(unavailableEntries.indices, id: \.self) { index in
 					unavailableCardRow(unavailableEntries[index].card, status: unavailableEntries[index].status)
@@ -277,7 +277,7 @@ struct SettingsView: View {
 			VStack(alignment: .leading, spacing: 2) {
 				Text(card.title)
 				Text(card.detail)
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 					.lineLimit(2)
 			}
@@ -285,7 +285,7 @@ struct SettingsView: View {
 			if let option = card.collapseOption {
 				Toggle("默认折叠", isOn: collapseBinding(option))
 					.toggleStyle(.checkbox)
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.labelsHidden()
 					.help("默认折叠「\(card.title)」")
 			}
@@ -296,7 +296,7 @@ struct SettingsView: View {
 					.disabled(readingOrderPosition(card, in: eligible).map { $0.index == $0.count - 1 } ?? true)
 			} label: {
 				Image(systemName: "arrow.up.arrow.down")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 			}
 			.menuIndicator(.hidden)
 			.fixedSize()
@@ -304,7 +304,7 @@ struct SettingsView: View {
 			.help("阅读序兜底微调（排位置在面板拖卡片把手）")
 			Toggle(isOn: visibleBinding(card, eligible: eligible)) {
 				Text("面板显示")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 			}
 		}
 		.padding(.vertical, 2)
@@ -326,7 +326,7 @@ struct SettingsView: View {
 				Text(card.title)
 					.foregroundStyle(.secondary)
 				Text(card.detail)
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.tertiary)
 			}
 			Spacer()
@@ -351,7 +351,7 @@ struct SettingsView: View {
 					.foregroundStyle(.tertiary)
 				if case .unavailable(let reason) = status {
 					Text(reason)
-						.font(.system(size: 11))
+						.font(.system(size: PanelText.secondary))
 						.foregroundStyle(.tertiary)
 						.lineLimit(2)
 				}
@@ -489,15 +489,15 @@ struct SettingsView: View {
 	private var aboutRow: some View {
 		HStack(spacing: 12) {
 			Image(systemName: "battery.100percent")
-				.font(.system(size: 30, weight: .medium))
+				.font(.system(size: 30, weight: .regular))
 				.symbolRenderingMode(.hierarchical)
 				.foregroundStyle(.tint)
 
 			VStack(alignment: .leading, spacing: 2) {
 				Text("妙电")
-					.font(.system(size: 15, weight: .semibold))
+					.font(.system(size: PanelText.displaySub, weight: .semibold))
 				Text("版本 \(appVersion)")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 			}
 		}
@@ -517,7 +517,7 @@ struct SettingsView: View {
 		Section {
 			if historyRecorder.chargerProfiles.isEmpty {
 				Text("还没有见过充电器。插上电源后，这里会列出每只充电器，给认不出的起个名字。")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 			} else {
 				ForEach(historyRecorder.chargerProfiles.sorted { $0.lastSeen > $1.lastSeen }, id: \.key) { profile in
@@ -533,10 +533,10 @@ struct SettingsView: View {
 		VStack(alignment: .leading, spacing: 5) {
 			HStack {
 				Text(profile.displayName)
-					.font(.system(size: 13, weight: .medium))
+					.font(.system(size: PanelText.primary, weight: .regular))
 				Spacer()
 				Text("见过 \(profile.connectCount) 次")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 					// 口径可溯源（v1.19.2）：N 怎么来的悬停即答——30 分钟内重连（重启/唤醒）不虚增
 					.help("拔插超过 30 分钟算新的一次；30 分钟内的重启、唤醒不重复计次")
@@ -607,19 +607,19 @@ struct SettingsView: View {
 			}
 			if let active {
 				Text("已生效：\(active.detail)。手动改动任一阈值或开关后自动回到「自定义」。")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
 				// 诚实送达警告：承诺了提醒就要交代送达条件——总开关关着时一条都不会响
 				if let deliveryWarning = ScenarioPreset.deliveryWarning(for: configurationManager.configuration) {
 					Text(deliveryWarning)
-						.font(.system(size: 11))
+						.font(.system(size: PanelText.secondary))
 						.foregroundStyle(.orange)
 						.fixedSize(horizontal: false, vertical: true)
 				}
 			} else {
 				Text("当前配置不属于四档预设。选择任一预设会覆盖保养提醒线、低电警示线、相关提醒开关与夜间免打扰组合；其余设置不受影响。")
-					.font(.system(size: 11))
+					.font(.system(size: PanelText.secondary))
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
 			}

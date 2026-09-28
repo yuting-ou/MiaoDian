@@ -111,10 +111,11 @@ struct GlassBadge: View {
 		HStack(spacing: 3) {
 			if let systemImage {
 				Image(systemName: systemImage)
-					.font(.system(size: 9, weight: .bold))
+					// 图标与相邻文字同号：SF Symbols 比文字小一号会显得"没对齐"
+					.font(.system(size: 10.5, weight: .regular))
 			}
 			Text(text)
-				.font(.system(size: 10.5, weight: .medium))
+				.font(.system(size: 10.5, weight: .regular))
 		}
 		.foregroundStyle(.primary)
 		.padding(.horizontal, 7)

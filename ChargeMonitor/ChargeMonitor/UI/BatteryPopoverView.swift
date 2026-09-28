@@ -160,7 +160,7 @@ struct BatteryPopoverView: View {
 						exitLayoutEdit(save: true)
 					} label: {
 						Text("完成")
-							.font(.system(size: 11, weight: .semibold))
+							.font(.system(size: PanelText.secondary, weight: .semibold))
 							.foregroundStyle(.primary)  // 可供性由玻璃药丸材质承担，不靠字色
 					}
 					.buttonStyle(.plain)
@@ -234,7 +234,7 @@ struct BatteryPopoverView: View {
 		.overlay(alignment: .topLeading) {
 			if ProcessInfo.processInfo.environment["MIAODIAN_DEBUG_OPEN_PANEL"] != nil {
 				Text("调试")
-					.font(.system(size: 8, weight: .bold))
+					.font(.system(size: PanelText.micro, weight: .regular))
 					.foregroundStyle(.black.opacity(0.85))  // 调试标记：白字坐实橙底只有 2.2:1，改深字（实心底，非玻璃）
 					.padding(.horizontal, 5)
 					.padding(.vertical, 2)
@@ -304,6 +304,28 @@ struct BatteryPopoverView: View {
 
 	/// 卡片 + 编辑隐藏托盘。高度不够时由 body 外面的 ScrollView 包住；
 	/// 这里不感知滚动，只负责布局本身（与非滚动路径同一份代码）。
+	/// 空态：没有卡片可显示时的一句说明。文案走 noteLines 那套"说人话"的规矩：
+	/// 先讲现状，再给一条出路（去哪放回来），不堆感叹号。
+	/// 视觉按本项目纪律：一律 labelOnGlass（primary@0.85，最坏 4.5:1 已证明）。
+	/// 三行的层次靠**字号**（15/11/9.5）不靠透明度——叠 opacity 会掉到证明线以下，
+	/// 系统 .secondary 也不行（2.7:1）。想要"更暗"只能靠小字号
+	private var emptyCardsState: some View {
+		VStack(spacing: 6) {
+			Image(systemName: "rectangle.on.rectangle.slash")
+				.font(.system(size: PanelText.displaySub, weight: .regular))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+			Text("没有要显示的卡片")
+				.font(.system(size: PanelText.secondary, weight: .regular))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+			Text("在「隐藏卡片」里可以把它们放回来")
+				.font(.system(size: PanelText.caption, weight: .regular))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+		}
+		.frame(maxWidth: .infinity)
+		.padding(.vertical, 44)
+		.accessibilityElement(children: .combine)
+	}
+
 	@ViewBuilder
 	private func cardRegion(
 		twoColumns: Bool,
@@ -317,7 +339,15 @@ struct BatteryPopoverView: View {
 		batteryItems: [BatteryInfoItem],
 		showsHealthCurve: Bool
 	) -> some View {
-		if twoColumns {
+		// 空态：卡片全被藏掉（或都不够资格）时，原来这里整块塌成 0 高度——面板变成
+		// 「头部 + 一片虚空 + 控制行」，像坏了一样。给一句居中的说明 + 一条回退路径。
+		// 注意它**会改面板自然高**（实测 261→417pt）；有预算（可滚）那条路径外高仍由
+		// cardBudgetHeight 定，所以只影响"不滚"的形态
+		// 注意判据是 cardIDs 不是 segments：单列路径下 segments 恒为 []（见 body 里的
+		// `usingRows ? ... : []`），拿它当判据会把单列卡片列表整个换成空态
+		if cardIDs.isEmpty, !isEditingLayout {
+			emptyCardsState
+		} else if twoColumns {
 			// 头部玻璃板分区自带下缘，旧的细分隔线退场——层级交给材质，不靠发丝线。
 			// 卡片不再各自成玻璃（避免玻璃汤+内容糊底），故无需 GlassEffectContainer
 			if usingRows {
@@ -576,7 +606,7 @@ struct BatteryPopoverView: View {
 	private func controlButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
 		Button(action: action) {
 			Image(systemName: symbol)
-				.font(.system(size: 8, weight: .bold))
+				.font(.system(size: PanelText.micro, weight: .regular))
 				.foregroundStyle(GlassTokens.labelOnGlass)
 				.frame(width: 16, height: 16)
 				.contentShape(Rectangle())
@@ -792,7 +822,7 @@ struct BatteryPopoverView: View {
 	/// v1.13.0 回归修复：把手此前只挂在拖动中的卡上，常态无处可抓，拖拽实际无法发起
 	private func dragHandle(_ id: CardID) -> some View {
 		Image(systemName: "line.3.horizontal")
-			.font(.system(size: 9, weight: .semibold))
+			.font(.system(size: PanelText.caption, weight: .regular))
 			.foregroundStyle(GlassTokens.labelOnGlass.opacity(0.45))
 			.padding(5)
 			// v2.1.2 观感：常驻白色胶囊底让每张图片上顶着一个浮块、还压在首行"标签与值之间"，
@@ -1255,11 +1285,11 @@ struct BatteryPopoverView: View {
 				GlassRow {
 					HStack(spacing: 6) {
 						Image(systemName: "gear")
-							.font(.system(size: 11, weight: .medium))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
 							.frame(width: 16)
 						Text("设置")
-							.font(.system(size: PopoverLayout.bodyFontSize, weight: .regular))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(.primary)
 						Spacer(minLength: 8)
 					}
@@ -1328,7 +1358,7 @@ struct BatteryPopoverView: View {
 			GlassRow {
 				HStack(spacing: 6) {
 					Image(systemName: "bell.slash.fill")
-						.font(.system(size: 11, weight: .medium))
+						.font(.system(size: PanelText.secondary, weight: .regular))
 						.foregroundStyle(Color.orange)
 						.frame(width: 16)
 					Text("通知权限未开启，提醒收不到 · 点此开启")

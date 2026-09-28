@@ -25,12 +25,12 @@ struct BatteryHeaderView: View {
 			VStack(alignment: .leading, spacing: 3) {
 				HStack(alignment: .firstTextBaseline, spacing: 2) {
 					Text(percentDisplay)
-						.font(.system(size: 27, weight: .bold, design: .rounded))
+						.font(.system(size: PanelText.display, weight: .semibold, design: .rounded))
 						// 与信息行同一结论：numericText 插值字形持续吃内存，转场用淡入淡出
 						.contentTransition(.opacity)
 						.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: percentDisplay)
 					Text("%")
-						.font(.system(size: 15, weight: .semibold, design: .rounded))
+						.font(.system(size: PanelText.displaySub, weight: .semibold, design: .rounded))
 						.foregroundStyle(GlassTokens.labelOnGlass)
 				}
 				
@@ -59,7 +59,7 @@ struct BatteryHeaderView: View {
 			} else if let adapterName {
 				VStack(alignment: .trailing, spacing: 2) {
 					Text(adapterName)
-						.font(.system(size: 11, weight: .semibold))
+						.font(.system(size: PanelText.secondary, weight: .semibold))
 						.lineLimit(1)
 						.frame(maxWidth: 190, alignment: .trailing)
 					if let adapterDetail {
@@ -111,7 +111,7 @@ struct BatteryHeaderView: View {
 					.stroke(checkupColor(checkup.score), style: StrokeStyle(lineWidth: 3, lineCap: .round))
 					.rotationEffect(.degrees(-90))
 				Text("\(checkup.score)")
-					.font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+					.font(.system(size: PanelText.primary, weight: .regular, design: .rounded).monospacedDigit())
 					.foregroundStyle(.primary)
 			}
 			.frame(width: 34, height: 34)
@@ -121,7 +121,7 @@ struct BatteryHeaderView: View {
 					.font(.system(size: 9))
 					.foregroundStyle(GlassTokens.labelOnGlass)
 				Text(checkup.verdict)
-					.font(.system(size: 10.5, weight: .medium))
+					.font(.system(size: 10.5, weight: .regular))
 					.foregroundStyle(.primary)
 					.fixedSize(horizontal: false, vertical: true)
 			}
@@ -195,7 +195,7 @@ struct BatteryHeaderView: View {
 			}
 
 			Image(systemName: centerSymbol)
-				.font(.system(size: 14, weight: .semibold))
+				.font(.system(size: PanelText.primary, weight: .regular))
 				.foregroundStyle(gaugeColor)
 		}
 		.frame(width: 46, height: 46)

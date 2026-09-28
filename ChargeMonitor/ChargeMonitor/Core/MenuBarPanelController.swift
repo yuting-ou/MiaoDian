@@ -271,7 +271,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 	private func setTitle(_ text: String, tint: NSColor) {
 		guard let button = statusItem?.button else { return }
 		button.attributedTitle = NSAttributedString(string: text, attributes: [
-			.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+			.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
 			.foregroundColor: tint,
 		])
 	}
