@@ -3,8 +3,10 @@
 # 用法：bash 工具/离屏验收.sh [宽度pt]
 set -e
 
-# 备份重定向到临时目录：量具进程一律不许碰用户"主档损坏时的抢救源"
+# 备份与历史主档都重定向到临时目录：量具进程一律不许碰用户的真数据
+# （历史主档本身有兜底——只设 BACKUP 时历史跟着改道；显式写出来是为了让隔离**看得见**）
 export MIAODIAN_BACKUP_DIR=/tmp/miaodian_offscreen_backup
+export MIAODIAN_HISTORY_DIR=/tmp/miaodian_offscreen_history
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/ChargeMonitor/ChargeMonitor"
 DEPLOYMENT_TARGET="15.0"

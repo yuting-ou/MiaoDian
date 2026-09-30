@@ -116,7 +116,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			.store(in: &cancellables)
 		
 		// 睡眠掉电记录更新时检查是否异常；启动时从磁盘捧出的旧记录靠时间窗口过滤
-		historyRecorder?.$lastSleepDrain
+		historyRecorder?.sleep.$lastSleepDrain
 			.compactMap { $0 }
 			.removeDuplicates()
 			.sink { [weak self] record in
@@ -125,7 +125,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			.store(in: &cancellables)
 
 		// H3：健康样本更新时评估降幅/循环异常
-		historyRecorder?.$healthSamples
+		historyRecorder?.health.$healthSamples
 			.removeDuplicates()
 			.sink { [weak self] _ in
 				guard let self, let snap = self.monitor?.snapshot else { return }
@@ -134,7 +134,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			.store(in: &cancellables)
 
 		// 电量跳变攒够阈值时提醒校准电量计
-		historyRecorder?.$socJumpEvents
+		historyRecorder?.soc.$socJumpEvents
 			.removeDuplicates()
 			.sink { [weak self] events in
 				self?.evaluateGaugeCalibration(events)

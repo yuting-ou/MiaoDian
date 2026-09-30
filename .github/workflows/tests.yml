@@ -22,3 +22,20 @@ jobs:
       # import 被抽走），靠这一步在门上拦住。runner 的完整 Xcode 自带宏插件。
       - name: 全量源码 Swift 6 审计（含 UI 层）
         run: swiftc -swift-version 6 -default-isolation MainActor -target arm64-apple-macosx15.0 -typecheck -parse-as-library $(find ChargeMonitor/ChargeMonitor -name '*.swift' | sort)
+      # 量具编译审计。工具/ 下的量具**不在任何既有编译面里**：run_tests.sh 不收它们，
+      # build.sh 只编主程序，上一个名字的步骤也只扫 ChargeMonitor/。
+      # 于是它们可以静默烂掉到"要用的那一刻才发现"——轮20 拆历史记录器时正是如此：
+      # 滚动成本量具用了门面 @Published 的 `$` 投影，拆完投影没了，是跑量具时才炸的。
+      # 而这套量具正是"性能/布局有没有回归"的唯一证据来源，烂掉等于证据链断了。
+      # 带 @main 的量具要 -parse-as-library；顶层脚本（对比度测量）反而不能用它。
+      - name: 量具编译审计（工具/ 不在其他任何编译面里）
+        run: |
+          set -e
+          SRC=$(find ChargeMonitor/ChargeMonitor -name '*.swift' ! -name 'ChargeMonitorApp.swift' ! -name 'MenuBarPanelController.swift' | sort)
+          COMMON="-swift-version 6 -default-isolation MainActor -target arm64-apple-macosx15.0 -typecheck"
+          for tool in 工具/滚动成本.swift 工具/离屏验收.swift; do
+            echo "== $tool（@main，走 -parse-as-library）"
+            swiftc $COMMON -parse-as-library $SRC "$tool"
+          done
+          echo "== 工具/对比度测量.swift（顶层脚本，不能加 -parse-as-library）"
+          swiftc $COMMON 工具/对比度测量.swift

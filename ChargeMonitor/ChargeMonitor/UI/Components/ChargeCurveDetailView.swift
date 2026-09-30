@@ -20,7 +20,7 @@ struct ChargeCurveWindowHost: View {
 		if let date = selection.startDate,
 		   let session = historyRecorder.recentSessions.first(where: { $0.startDate == date }) {
 			let aliases = session.chargerKey.flatMap { key in
-				BatteryHistoryRecorder.chargerProfile(matching: key, in: historyRecorder.chargerProfiles)?.aliases
+				ChargerProfileRecorder.chargerProfile(matching: key, in: historyRecorder.chargerProfiles)?.aliases
 			} ?? nil
 			ChargeCurveDetailView(
 				session: session,

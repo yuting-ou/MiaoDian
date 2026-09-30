@@ -42,7 +42,7 @@ struct BatteryReportBuilder {
 		
 		// 别名感知查找：降档归并后 raw 键可能只在 aliases 里，直接 first(where key==) 会整段消失
 		if let key = currentChargerKey,
-		   let charger = BatteryHistoryRecorder.chargerProfile(matching: key, in: chargerProfiles) {
+		   let charger = ChargerProfileRecorder.chargerProfile(matching: key, in: chargerProfiles) {
 			sections.append("")
 			sections.append("【当前充电器】")
 			var line = charger.displayName
@@ -163,7 +163,7 @@ struct BatteryReportBuilder {
 	// 当前接着的充电器身份键：与 recorder 的建档规则同源，不再各拼一份
 	private var currentChargerKey: String? {
 		guard snapshot.powerSource == .powerAdapter else { return nil }
-		return BatteryHistoryRecorder.chargerKey(
+		return ChargerProfileRecorder.chargerKey(
 			name: snapshot.adapterName ?? "",
 			manufacturer: snapshot.adapterManufacturer ?? "",
 			ratedWatts: snapshot.adapterRatedWatts ?? 0,

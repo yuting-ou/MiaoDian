@@ -329,6 +329,111 @@ do {
 	expect(drainItems.first { $0.label == "开机时长" }?.animatesOnChange == true, "淡变白名单·放电：分钟粒度的开机时长仍淡变")
 }
 
+// 淡变登记表的**完备性**（把 run_tests.sh 里那条 grep 换成行为断言）。
+//
+// 上面那组断言钉的是「产出的行，淡变开关对不对」，钉不住「有没有第 7 行被悄悄标成
+// 不淡变、却从没被夹具产出过」——grep 数的是源码里 `animatesOnChange: false` 的条数，
+// 是数文本不是数行为，而且新行标 false 时它只报「7≠6」看不出是谁。
+// 这里改成行为版：用一套**穷尽夹具**把 formatter 能产出的标签全逼出来，
+// 再断言「标签全集」与「淡变登记」完全对应。新增任何一行都会改变这个全集，
+// 于是必须来这儿显式登记——比数源码条数强，因为它同时钉住了行本身。
+do {
+	// 每 2 秒一拍就会重算出不同文本的读数：一律不淡变（与上面那组同源，这里是完备性视角）
+	let perTick: Set<String> = ["输入功率", "充电功率", "当前功耗", "电池温度", "电流电压", "掉电速度"]
+	// formatter 源码里全部 19 个标签。少一个说明夹具没逼出来（断言会红），
+	// 多一个说明新增了行却没登记（断言也会红）
+	let allLabels: Set<String> = [
+		"充电协议", "当前档位", "可选档位", "适配器名称", "制造商", "充电器",
+		"输入功率", "充电功率", "当前功耗", "循环次数", "电池健康", "健康趋势",
+		"电池温度", "电流电压", "充满还需", "开机时长", "睡眠掉电",
+		"剩余可用时间", "掉电速度",
+	]
+
+	// 所有显示项全开：夹具要能触到每一条行的门
+	var everyOption = AppConfiguration()
+	everyOption.enabledOptions = Set(DisplayOption.allCases)
+
+	// 相位一：插电充电（能产出「充电功率」，但与「掉电速度/剩余可用时间」互斥）
+	var ac = BatterySnapshot()
+	ac.powerSource = .powerAdapter
+	ac.isCharging = true
+	ac.stateOfChargePercent = 50
+	ac.chargingProtocol = "USB PD"
+	ac.powerTiers = [
+		PowerTier(maxVoltageMV: 20_000, maxCurrentMA: 5_000),
+		PowerTier(maxVoltageMV: 9_000, maxCurrentMA: 3_000),
+	]
+	ac.activeTierIndex = 0
+	ac.negotiatedVoltageMV = 20_000
+	ac.negotiatedCurrentMA = 3_000
+	ac.adapterRatedWatts = 100
+	ac.adapterName = "酷态科 100W"
+	ac.adapterManufacturer = "Cuktech"
+	ac.adapterInputPowerW = 12.5
+	ac.chargingPowerW = 30.0
+	ac.currentPowerW = 8.4
+	ac.cycleCount = 163
+	ac.designCapacityMAh = 4_720
+	ac.maxCapacityMAh = 4_500
+	ac.temperatureC = 40.0
+	ac.batteryVoltageMV = 12_800
+	ac.batteryAmperageMA = 2_400
+	ac.timeToFullChargeMinutes = 90
+	ac.systemUptimeSeconds = 3_600
+
+	let chargerFixture = ChargerProfile(
+		key: "k", name: "酷态科 100W", ratedWatts: 100,
+		firstSeen: t0, lastSeen: t0, connectCount: 3
+	)
+	let trendFixture = (
+		earliest: HealthSample(date: t0, healthPercent: 92, cycleCount: 150),
+		latest: HealthSample(date: t0.addingTimeInterval(30 * 86_400), healthPercent: 90, cycleCount: 163)
+	)
+	// 睡眠掉电行自带 24 小时内的时间窗（用的是真实 Date()），夹具必须贴着现在造
+	let sleepFixture = SleepDrainRecord(
+		sleepDate: Date().addingTimeInterval(-9 * 3_600),
+		wakeDate: Date().addingTimeInterval(-1 * 3_600),
+		startPercent: 92, endPercent: 84
+	)
+	let acItems = BatteryInfoFormatter(
+		snapshot: ac,
+		configuration: everyOption,
+		healthTrend: trendFixture,
+		sleepDrain: sleepFixture,
+		chargerProfile: chargerFixture
+	).makeItems()
+
+	// 相位二：电池放电（能产出「掉电速度/剩余可用时间」）
+	var bat = batterySnap(percent: 80)
+	bat.isCharging = false
+	bat.timeToEmptyMinutes = 125
+	bat.temperatureC = 31.0
+	bat.cycleCount = 163
+	bat.designCapacityMAh = 4_720
+	bat.maxCapacityMAh = 4_500
+	bat.systemUptimeSeconds = 3_600
+	bat.batteryVoltageMV = 11_500
+	bat.batteryAmperageMA = -1_800
+	bat.currentPowerW = 12.0
+	let batItems = BatteryInfoFormatter(
+		snapshot: bat,
+		configuration: everyOption,
+		drainEstimate: DrainRateEstimate(percentPerHour: 5.0, estimatedMinutesRemaining: 120)
+	).makeItems()
+
+	let produced = Set((acItems + batItems).map(\.label))
+	expectEqual(produced, allLabels,
+				"淡变登记表完备性：穷尽夹具必须逼出 formatter 的全部 19 个标签（少了=夹具没覆盖，多了=新增行没登记）")
+	expect(perTick.isSubset(of: produced),
+		   "淡变登记表完备性：6 条每拍行必须都被夹具产出过（否则「不淡变」是空转的）")
+
+	// 逐行映射：产出的每一行，淡变开关必须与登记表一致（这条同时覆盖了 allLabels 的补集）
+	for item in acItems + batItems {
+		expect(item.animatesOnChange == !perTick.contains(item.label),
+			   "淡变登记表完备性：「\(item.label)」淡变开关与登记表不符（每拍行不淡变、事件行保留淡变）")
+	}
+}
+
 // 时长格式化边界：整小时不带分钟，不满一小时不带小时
 do {
 	var s = batterySnap(percent: 80)
@@ -920,36 +1025,36 @@ do {
 do {
 	// 落盘才过 5 分钟 → 续接
 	let recent = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(300), startPercent: 40, endPercent: 45, peakInputW: 30)
-	expect(BatteryHistoryRecorder.shouldResumeRestoredSession(recent, now: t0.addingTimeInterval(600)), "会话续接：落盘后半小时内续接")
+	expect(ChargeSessionRecorder.shouldResumeRestoredSession(recent, now: t0.addingTimeInterval(600)), "会话续接：落盘后半小时内续接")
 	
 	// 落盘已过 1 小时 → 视为中间拔过电，不续接
-	expect(!BatteryHistoryRecorder.shouldResumeRestoredSession(recent, now: t0.addingTimeInterval(3900)), "会话续接：超半小时断档不续接")
+	expect(!ChargeSessionRecorder.shouldResumeRestoredSession(recent, now: t0.addingTimeInterval(3900)), "会话续接：超半小时断档不续接")
 	
 	// 归档过滤：不足 2 分钟且电量没涨 → 弃
 	let blink = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(30), startPercent: 40, endPercent: 40, peakInputW: 10)
-	expect(!BatteryHistoryRecorder.isSessionWorthArchiving(blink), "会话归档：插拔瞬间的无效会话不归档")
+	expect(!ChargeSessionRecorder.isSessionWorthArchiving(blink), "会话归档：插拔瞬间的无效会话不归档")
 	
 	// 不足 2 分钟但电量涨了（闪充）→ 留
 	let flashCharge = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(30), startPercent: 40, endPercent: 41, peakInputW: 60)
-	expect(BatteryHistoryRecorder.isSessionWorthArchiving(flashCharge), "会话归档：时长短但电量涨了仍保留")
+	expect(ChargeSessionRecorder.isSessionWorthArchiving(flashCharge), "会话归档：时长短但电量涨了仍保留")
 }
 
 // MARK: - 电源事件合并
 
 do {
 	var events: [PowerEvent] = []
-	events = BatteryHistoryRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0)
+	events = PowerEventRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0)
 	expectEqual(events.count, 1, "事件合并：首条正常记录")
 	
 	// 同类 2 分钟内连发只留最新
-	events = BatteryHistoryRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0.addingTimeInterval(30))
+	events = PowerEventRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0.addingTimeInterval(30))
 	expectEqual(events.count, 1, "事件合并：同类连发合并")
 	expectEqual(events.last?.date, t0.addingTimeInterval(30), "事件合并：合并后留最新时刻")
 	
-	events = BatteryHistoryRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0.addingTimeInterval(180))
+	events = PowerEventRecorder.appendingPowerEvent(events, kind: .pluggedIn, now: t0.addingTimeInterval(180))
 	expectEqual(events.count, 2, "事件合并：超 2 分钟不再合并")
 	
-	events = BatteryHistoryRecorder.appendingPowerEvent(events, kind: .unplugged, now: t0.addingTimeInterval(190))
+	events = PowerEventRecorder.appendingPowerEvent(events, kind: .unplugged, now: t0.addingTimeInterval(190))
 	expectEqual(events.count, 3, "事件合并：不同类不合并")
 	
 	// 封顶：塞满 50 条后新的挤掉最旧的
@@ -957,7 +1062,7 @@ do {
 	for i in 0..<50 {
 		full.append(PowerEvent(date: t0.addingTimeInterval(Double(i) * 300), kind: i % 2 == 0 ? .pluggedIn : .unplugged))
 	}
-	let capped = BatteryHistoryRecorder.appendingPowerEvent(full, kind: .chargedFull, now: t0.addingTimeInterval(50 * 300))
+	let capped = PowerEventRecorder.appendingPowerEvent(full, kind: .chargedFull, now: t0.addingTimeInterval(50 * 300))
 	expectEqual(capped.count, 50, "事件合并：总数封顶 50")
 	expectEqual(capped.first?.date, t0.addingTimeInterval(300), "事件合并：超出挤掉最旧")
 	expectEqual(capped.last?.kind, .chargedFull, "事件合并：最新一条在末尾")
@@ -1074,9 +1179,9 @@ do {
 do {
 	// 测试侧辅助：与真实调用方一样先算键再建档
 	func upsert(_ profiles: [ChargerProfile], name: String, manufacturer: String, ratedWatts: Int, now: Date) -> [ChargerProfile] {
-		BatteryHistoryRecorder.upsertingChargerProfile(
+		ChargerProfileRecorder.upsertingChargerProfile(
 			profiles,
-			key: BatteryHistoryRecorder.chargerKey(name: name, manufacturer: manufacturer, ratedWatts: ratedWatts),
+			key: ChargerProfileRecorder.chargerKey(name: name, manufacturer: manufacturer, ratedWatts: ratedWatts),
 			name: name, manufacturer: manufacturer, ratedWatts: ratedWatts, now: now
 		)
 	}
@@ -1099,7 +1204,7 @@ do {
 	let anon = upsert([], name: "", manufacturer: "", ratedWatts: 30, now: t0)
 	expectEqual(anon.first?.name, "30W 充电器", "充电器建档：无名按瓦数兜底")
 
-	expectEqual(BatteryHistoryRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65), "a|b|65", "充电器身份键：格式单一数据源")
+	expectEqual(ChargerProfileRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65), "a|b|65", "充电器身份键：格式单一数据源")
 
 	// 档案满了挤掉最久没见过的
 	var crowded: [ChargerProfile] = []
@@ -1129,23 +1234,23 @@ do {
 		PowerTier(maxVoltageMV: 15000, maxCurrentMA: 3000),
 		PowerTier(maxVoltageMV: 20000, maxCurrentMA: 3500),
 	]
-	expect(BatteryHistoryRecorder.tiers(degraded, degradationOf: full), "降档形态：同数量同电压阶梯，电流只降不增")
-	expect(!BatteryHistoryRecorder.tiers(full, degradationOf: degraded), "降档形态：母集不是降档（变异检验：≥ 写反必红）")
-	expect(!BatteryHistoryRecorder.tiers([], degradationOf: full), "降档形态：空集不算")
+	expect(ChargerProfileRecorder.tiers(degraded, degradationOf: full), "降档形态：同数量同电压阶梯，电流只降不增")
+	expect(!ChargerProfileRecorder.tiers(full, degradationOf: degraded), "降档形态：母集不是降档（变异检验：≥ 写反必红）")
+	expect(!ChargerProfileRecorder.tiers([], degradationOf: full), "降档形态：空集不算")
 
 	// 签名反解析往返一致
-	let roundTrip = BatteryHistoryRecorder.tiers(fromSignature: BatteryHistoryRecorder.tierSignature(full))
-	expectEqual(BatteryHistoryRecorder.tierSignature(roundTrip), BatteryHistoryRecorder.tierSignature(full), "签名反解析：往返一致")
+	let roundTrip = ChargerProfileRecorder.tiers(fromSignature: ChargerProfileRecorder.tierSignature(full))
+	expectEqual(ChargerProfileRecorder.tierSignature(roundTrip), ChargerProfileRecorder.tierSignature(full), "签名反解析：往返一致")
 
-	let motherKey = BatteryHistoryRecorder.chargerKey(name: "酷态科10号 Ultra", manufacturer: "", ratedWatts: 100, tiers: full)
+	let motherKey = ChargerProfileRecorder.chargerKey(name: "酷态科10号 Ultra", manufacturer: "", ratedWatts: 100, tiers: full)
 	let mother = ChargerProfile(
 		key: motherKey, name: "酷态科10号 Ultra", ratedWatts: 100,
-		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: BatteryHistoryRecorder.tierSignature(full)
+		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: ChargerProfileRecorder.tierSignature(full)
 	)
-	let orphanKey = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 70, tiers: degraded)
+	let orphanKey = ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 70, tiers: degraded)
 
 	// 无名降档会话 → 投靠有名母档案：正式键=母键、次数相加、降档键入别名、观察瓦数并集
-	let (folded, canonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let (folded, canonical) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: [mother], orphanKey: orphanKey, orphanName: "", orphanConnectCount: 0,
 		orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
 	)
@@ -1156,7 +1261,7 @@ do {
 	expectEqual(folded.first?.observedWatts, [70, 100], "归并：观察瓦数并集升序")
 
 	// 幂等：再次调用命中别名直接返回母键，档案不动
-	let (again, canonicalAgain) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let (again, canonicalAgain) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: folded, orphanKey: orphanKey, orphanName: "", orphanConnectCount: 0,
 		orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
 	)
@@ -1169,8 +1274,8 @@ do {
 		PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000),
 		PowerTier(maxVoltageMV: 20000, maxCurrentMA: 3250),
 	]
-	let otherKey = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65, tiers: other)
-	let (notMerged, newKey) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let otherKey = ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65, tiers: other)
+	let (notMerged, newKey) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: [mother], orphanKey: otherKey, orphanName: "", orphanConnectCount: 1,
 		orphanRatedWatts: 65, orphanTiers: other, isWireless: false
 	)
@@ -1178,8 +1283,8 @@ do {
 	expectEqual(newKey, otherKey, "非子集：独立建档")
 
 	// 有名新键 = 真新头，不归并（哪怕档位成子集）
-	let (namedNew, _) = BatteryHistoryRecorder.foldingOrphanCharger(
-		profiles: [mother], orphanKey: BatteryHistoryRecorder.chargerKey(name: "小米 120W", manufacturer: "", ratedWatts: 120, tiers: degraded),
+	let (namedNew, _) = ChargerProfileRecorder.foldingOrphanCharger(
+		profiles: [mother], orphanKey: ChargerProfileRecorder.chargerKey(name: "小米 120W", manufacturer: "", ratedWatts: 120, tiers: degraded),
 		orphanName: "小米 120W", orphanConnectCount: 0, orphanRatedWatts: 120, orphanTiers: degraded, isWireless: false
 	)
 	expectEqual(namedNew.count, 1, "有名新键：真新头不归并（未建新档）")
@@ -1188,9 +1293,9 @@ do {
 	let orphanProfile = ChargerProfile(
 		key: orphanKey, name: "", ratedWatts: 70,
 		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
-		connectCount: 2, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+		connectCount: 2, tierSignature: ChargerProfileRecorder.tierSignature(degraded)
 	)
-	let (migrated, mCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let (migrated, mCanonical) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: [mother, orphanProfile], orphanKey: orphanKey, orphanName: "",
 		orphanConnectCount: 2, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
 	)
@@ -1200,18 +1305,18 @@ do {
 
 	// 用户真实形态：母档案名字段是兜底名但 customName 非空（酷态科10号Ultra）——也算有名母档案
 	var realMother = ChargerProfile(
-		key: BatteryHistoryRecorder.chargerKey(name: "100W 充电器", manufacturer: "", ratedWatts: 100, tiers: full),
+		key: ChargerProfileRecorder.chargerKey(name: "100W 充电器", manufacturer: "", ratedWatts: 100, tiers: full),
 		name: "100W 充电器", ratedWatts: 100,
-		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: BatteryHistoryRecorder.tierSignature(full)
+		firstSeen: t0, lastSeen: t0, connectCount: 8, tierSignature: ChargerProfileRecorder.tierSignature(full)
 	)
 	realMother.customName = "酷态科10号Ultra"
 	var realOrphan = ChargerProfile(
 		key: orphanKey, name: "70W 充电器", ratedWatts: 70,
 		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
-		connectCount: 5, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+		connectCount: 5, tierSignature: ChargerProfileRecorder.tierSignature(degraded)
 	)
 	realOrphan.observedWatts = [70]
-	let (foldedReal, realCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let (foldedReal, realCanonical) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: [realMother, realOrphan], orphanKey: orphanKey, orphanName: "70W 充电器",
 		orphanConnectCount: 5, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
 	)
@@ -1221,14 +1326,14 @@ do {
 	expectEqual(foldedReal.first?.displayName, "酷态科10号Ultra", "真实形态归并：显示名保持用户命名")
 
 	// 兜底名（"70W 充电器"）也算未识别：用户实测里降档会话的档案名正是兜底名
-	expect(BatteryHistoryRecorder.isFallbackChargerName("70W 充电器", ratedWatts: 70), "兜底名：N瓦 充电器模式算未识别")
-	expect(!BatteryHistoryRecorder.isFallbackChargerName("酷态科10号 Ultra", ratedWatts: 100), "兜底名：真名不算未识别")
+	expect(ChargerProfileRecorder.isFallbackChargerName("70W 充电器", ratedWatts: 70), "兜底名：N瓦 充电器模式算未识别")
+	expect(!ChargerProfileRecorder.isFallbackChargerName("酷态科10号 Ultra", ratedWatts: 100), "兜底名：真名不算未识别")
 	let fallbackOrphan = ChargerProfile(
 		key: orphanKey, name: "70W 充电器", ratedWatts: 70,
 		firstSeen: t0.addingTimeInterval(3600), lastSeen: t0.addingTimeInterval(7200),
-		connectCount: 5, tierSignature: BatteryHistoryRecorder.tierSignature(degraded)
+		connectCount: 5, tierSignature: ChargerProfileRecorder.tierSignature(degraded)
 	)
-	let (foldedFallback, fbCanonical) = BatteryHistoryRecorder.foldingOrphanCharger(
+	let (foldedFallback, fbCanonical) = ChargerProfileRecorder.foldingOrphanCharger(
 		profiles: [mother, fallbackOrphan], orphanKey: orphanKey, orphanName: "70W 充电器",
 		orphanConnectCount: 5, orphanRatedWatts: 70, orphanTiers: degraded, isWireless: false
 	)
@@ -1237,7 +1342,7 @@ do {
 	expectEqual(foldedFallback.first?.observedWatts, [70, 100], "兜底名归并：观察瓦数并集")
 
 	// 名称后到补全：兜底名可被真名覆盖
-	let backfilled = BatteryHistoryRecorder.backfillingChargerName(
+	let backfilled = ChargerProfileRecorder.backfillingChargerName(
 		profiles: [fallbackOrphan], key: orphanKey, name: "酷态科10号 Ultra"
 	)
 	expectEqual(backfilled.first?.name, "酷态科10号 Ultra", "名称回填：兜底名可被真名覆盖")
@@ -2018,92 +2123,92 @@ do {
 
 do {
 	var usage = DailyUsage(dayKey: "2026-08-08")
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(usage, percent: 78, lastPercent: 80, powerSource: .battery, isCharging: false, secondsSinceLastSample: 10)
+	usage = DailyUsageRecorder.accumulatingDailyUsage(usage, percent: 78, lastPercent: 80, powerSource: .battery, isCharging: false, secondsSinceLastSample: 10)
 	expectEqual(usage.drainedPercent, 2, "今日用电：电池模式掉电计入")
 	expectEqual(usage.chargedPercent, 0, "今日用电：充入不误计")
 	
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 78, powerSource: .powerAdapter, isCharging: true, secondsSinceLastSample: 10)
+	usage = DailyUsageRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 78, powerSource: .powerAdapter, isCharging: true, secondsSinceLastSample: 10)
 	expectEqual(usage.chargedPercent, 4, "今日用电：充电时涨的计入充入")
 	
 	// 反向不计：电池模式回升（校准波动）
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(usage, percent: 83, lastPercent: 82, powerSource: .battery, isCharging: false, secondsSinceLastSample: 10)
+	usage = DailyUsageRecorder.accumulatingDailyUsage(usage, percent: 83, lastPercent: 82, powerSource: .battery, isCharging: false, secondsSinceLastSample: 10)
 	expectEqual(usage.drainedPercent, 2, "今日用电：电池模式回升不计")
 	
 	// 插电时掉电（供电不足）不算用户用电
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 83, powerSource: .powerAdapter, isCharging: false, secondsSinceLastSample: 10)
+	usage = DailyUsageRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 83, powerSource: .powerAdapter, isCharging: false, secondsSinceLastSample: 10)
 	expectEqual(usage.drainedPercent, 2, "今日用电：插电时掉电不计")
 	
 	// 时长累计 + 睡眠断档不计
 	expect(usage.batterySeconds > 0, "今日用电：电池时长累计")
 	let before = usage
-	let afterSleepGap = BatteryHistoryRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 82, powerSource: .battery, isCharging: false, secondsSinceLastSample: 3600)
+	let afterSleepGap = DailyUsageRecorder.accumulatingDailyUsage(usage, percent: 82, lastPercent: 82, powerSource: .battery, isCharging: false, secondsSinceLastSample: 3600)
 	expectEqual(afterSleepGap.batterySeconds, before.batterySeconds, "今日用电：睡过的时间不计")
 }
 
 // MARK: - SOC 采样判定
 
 do {
-	expect(BatteryHistoryRecorder.shouldRecordSOCSample(last: nil, percent: 80, isCharging: false, now: t0), "SOC采样：首点必记")
+	expect(SocSampleRecorder.shouldRecordSOCSample(last: nil, percent: 80, isCharging: false, now: t0), "SOC采样：首点必记")
 	
 	let sample = SOCSample(date: t0, percent: 80, isCharging: false)
-	expect(!BatteryHistoryRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: false, now: t0.addingTimeInterval(60)), "SOC采样：常规间隔内无变化不记")
-	expect(BatteryHistoryRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: true, now: t0.addingTimeInterval(5)), "SOC采样：充电状态翻转立即记")
-	expect(!BatteryHistoryRecorder.shouldRecordSOCSample(last: sample, percent: 79, isCharging: false, now: t0.addingTimeInterval(60)), "SOC采样：电量变化但不足最小间隔不记")
-	expect(BatteryHistoryRecorder.shouldRecordSOCSample(last: sample, percent: 79, isCharging: false, now: t0.addingTimeInterval(4 * 60)), "SOC采样：电量变化超最小间隔记")
-	expect(BatteryHistoryRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: false, now: t0.addingTimeInterval(10 * 60)), "SOC采样：到常规间隔记定点")
+	expect(!SocSampleRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: false, now: t0.addingTimeInterval(60)), "SOC采样：常规间隔内无变化不记")
+	expect(SocSampleRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: true, now: t0.addingTimeInterval(5)), "SOC采样：充电状态翻转立即记")
+	expect(!SocSampleRecorder.shouldRecordSOCSample(last: sample, percent: 79, isCharging: false, now: t0.addingTimeInterval(60)), "SOC采样：电量变化但不足最小间隔不记")
+	expect(SocSampleRecorder.shouldRecordSOCSample(last: sample, percent: 79, isCharging: false, now: t0.addingTimeInterval(4 * 60)), "SOC采样：电量变化超最小间隔记")
+	expect(SocSampleRecorder.shouldRecordSOCSample(last: sample, percent: 80, isCharging: false, now: t0.addingTimeInterval(10 * 60)), "SOC采样：到常规间隔记定点")
 }
 
 // MARK: - 睡眠结算
 
 do {
-	let record = BatteryHistoryRecorder.settledSleepDrain(sleepDate: t0, startPercent: 80, wakeDate: t0.addingTimeInterval(2 * 3600), endPercent: 74)
+	let record = SleepDrainRecorder.settledSleepDrain(sleepDate: t0, startPercent: 80, wakeDate: t0.addingTimeInterval(2 * 3600), endPercent: 74)
 	expect(record != nil, "睡眠结算：合盖超 20 分钟记录")
 	expectEqual(record?.droppedPercent, 6, "睡眠结算：掉电计算正确")
 	
-	let nap = BatteryHistoryRecorder.settledSleepDrain(sleepDate: t0, startPercent: 80, wakeDate: t0.addingTimeInterval(10 * 60), endPercent: 79)
+	let nap = SleepDrainRecorder.settledSleepDrain(sleepDate: t0, startPercent: 80, wakeDate: t0.addingTimeInterval(10 * 60), endPercent: 79)
 	expect(nap == nil, "睡眠结算：不足 20 分钟的小憩不记")
 }
 
 // MARK: - 时长与掉电同窗（v2.9.4 修 30 秒小帽）
 
 do {
-	let napped = BatteryHistoryRecorder.accumulatingDailyUsage(
+	let napped = DailyUsageRecorder.accumulatingDailyUsage(
 		DailyUsage(dayKey: "2026-09-23"), percent: 79, lastPercent: 80,
 		powerSource: .battery, isCharging: false, secondsSinceLastSample: 60)
 	expectEqual(napped.drainedPercent, 1, "同窗：60 秒间隔的掉电照记")
 	expectEqual(napped.batterySeconds, 60.0, "同窗：60 秒电池时长不被 30 秒小帽吞掉")
 
-	let acNap = BatteryHistoryRecorder.accumulatingDailyUsage(
+	let acNap = DailyUsageRecorder.accumulatingDailyUsage(
 		DailyUsage(dayKey: "2026-09-23"), percent: 80, lastPercent: 80,
 		powerSource: .powerAdapter, isCharging: true, secondsSinceLastSample: 120)
 	expectEqual(acNap.acSeconds, 120.0, "同窗：120 秒插电时长计入 acSeconds")
 
-	let edge = BatteryHistoryRecorder.accumulatingDailyUsage(
+	let edge = DailyUsageRecorder.accumulatingDailyUsage(
 		DailyUsage(dayKey: "2026-09-23"), percent: 80, lastPercent: 80,
 		powerSource: .powerAdapter, isCharging: false, secondsSinceLastSample: 180)
 	expectEqual(edge.acSeconds, 180.0, "分界：恰好 180 秒仍归帧路径")
 
-	let slept = BatteryHistoryRecorder.accumulatingDailyUsage(
+	let slept = DailyUsageRecorder.accumulatingDailyUsage(
 		DailyUsage(dayKey: "2026-09-23"), percent: 75, lastPercent: 80,
 		powerSource: .battery, isCharging: false, secondsSinceLastSample: 181)
 	expectEqual(slept.drainedPercent, 0, "超窗：跨睡眠的掉电不计入瞬时帧")
 	expectEqual(slept.batterySeconds, 0.0, "超窗：跨睡眠的时长也不计入帧（交给睡眠路径）")
 
 	let rows = [DailyUsage(dayKey: "2026-09-23")]
-	let shortNap = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+	let shortNap = DailyUsageRecorder.creditingSleepTime(rows, parts: [
 		SleepSegmentPart(dayKey: "2026-09-23", seconds: 100, startPercent: 88, endPercent: 87)
 	], onAC: false)
 	expectEqual(shortNap, rows, "短觉（≤窗口）不双计：睡眠路径原样返回")
 	expectEqual(shortNap.first?.soc80to90Seconds, 0.0, "短觉跳过时不动驻留桶")
 
-	let longSleep = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+	let longSleep = DailyUsageRecorder.creditingSleepTime(rows, parts: [
 		SleepSegmentPart(dayKey: "2026-09-23", seconds: 600, startPercent: 88, endPercent: 87)
 	], onAC: false)
 	expectEqual(longSleep.first?.batterySeconds, 600.0, "长觉（>窗口）由睡眠路径独占计入")
 	expectEqual(longSleep.first?.sleepBatterySeconds, 600.0, "长觉仍登记睡眠电池时长（供醒着强度减分母）")
 	expect((longSleep.first?.soc80to90Seconds ?? 0) > 0, "长觉驻留桶照常分摊")
 
-	let missing = BatteryHistoryRecorder.creditingSleepTime(rows, parts: [
+	let missing = DailyUsageRecorder.creditingSleepTime(rows, parts: [
 		SleepSegmentPart(dayKey: "2026-09-20", seconds: 600, startPercent: 88, endPercent: 87)
 	], onAC: true)
 	expectEqual(missing, rows, "缺行仍然跳过（不因窗口改动而放宽）")
@@ -2127,27 +2232,27 @@ do {
 	let wakeDate = at(sh, 2026, 9, 23, 7)
 
 	// 跨午夜拆两段：日键与长度都跟随注入日历，段端点电量按时间线性插值
-	let parts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 90, wakeDate: wakeDate, endPercent: 78, calendar: sh)
+	let parts = SleepDrainRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 90, wakeDate: wakeDate, endPercent: 78, calendar: sh)
 	expectEqual(parts.count, 2, "睡眠归因：跨午夜拆成两天")
 	expectEqual(parts.map(\.dayKey), ["2026-09-22", "2026-09-23"], "睡眠归因：日键与注入日历同日")
 	expectEqual(parts[0].seconds, 3600, "睡眠归因：前段长度 = 到午夜的实际秒数")
 	expectEqual(parts[1].seconds, 25200, "睡眠归因：后段长度 = 午夜到醒来")
 	expect(abs(parts[1].startPercent - 88.5) < 0.001, "睡眠归因：段端点电量按时间线性插值")
-	expect(BatteryHistoryRecorder.sleepSegmentParts(sleepDate: wakeDate, startPercent: 90, wakeDate: sleepDate, endPercent: 78, calendar: sh).isEmpty, "睡眠归因：时钟回拨不产生片段")
+	expect(SleepDrainRecorder.sleepSegmentParts(sleepDate: wakeDate, startPercent: 90, wakeDate: sleepDate, endPercent: 78, calendar: sh).isEmpty, "睡眠归因：时钟回拨不产生片段")
 
 	// 驻留占比：单调线性路径下电量区间与时间区间成正比，闭式解
-	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 95, to: 85), 0.5, "睡眠驻留：穿越阈值时按落差比例计")
-	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 92, to: 95), 1, "睡眠驻留：全程在阈值之上")
-	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 70, to: 60), 0, "睡眠驻留：全程在阈值之下")
-	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 90, to: 90), 1, "睡眠驻留：恒定值恰在阈值上算驻留")
-	expectEqual(BatteryHistoryRecorder.dwellShareAbove(90, from: 88, to: 88), 0, "睡眠驻留：恒定值在阈值下不算")
+	expectEqual(DailyUsageRecorder.dwellShareAbove(90, from: 95, to: 85), 0.5, "睡眠驻留：穿越阈值时按落差比例计")
+	expectEqual(DailyUsageRecorder.dwellShareAbove(90, from: 92, to: 95), 1, "睡眠驻留：全程在阈值之上")
+	expectEqual(DailyUsageRecorder.dwellShareAbove(90, from: 70, to: 60), 0, "睡眠驻留：全程在阈值之下")
+	expectEqual(DailyUsageRecorder.dwellShareAbove(90, from: 90, to: 90), 1, "睡眠驻留：恒定值恰在阈值上算驻留")
+	expectEqual(DailyUsageRecorder.dwellShareAbove(90, from: 88, to: 88), 0, "睡眠驻留：恒定值在阈值下不算")
 
 	let rows = [
 		DailyUsage(dayKey: "2026-09-22", drainedPercent: 5, chargedPercent: 3),
 		DailyUsage(dayKey: "2026-09-23", drainedPercent: 1, chargedPercent: 0),
 	]
-	let nightOnBattery = BatteryHistoryRecorder.creditingSleepTime(rows, parts: parts, onAC: false)
-	let nightOnAC = BatteryHistoryRecorder.creditingSleepTime(rows, parts: parts, onAC: true)
+	let nightOnBattery = DailyUsageRecorder.creditingSleepTime(rows, parts: parts, onAC: false)
+	let nightOnAC = DailyUsageRecorder.creditingSleepTime(rows, parts: parts, onAC: true)
 	expectEqual(nightOnBattery[0].batterySeconds, 3600, "睡眠归因：拔电过夜记入电池时长（前夜段）")
 	expectEqual(nightOnBattery[1].batterySeconds, 25200, "睡眠归因：拔电过夜记入电池时长（醒来日）")
 	expectEqual(nightOnBattery[1].acSeconds, 0, "睡眠归因：拔电过夜不记插电时长")
@@ -2159,22 +2264,22 @@ do {
 
 	// 两档不重不漏 + 低电量睡眠不记驻留
 	let flat = [DailyUsage(dayKey: "2026-09-22")]
-	let highSleep = BatteryHistoryRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 3600, startPercent: 95, endPercent: 85)], onAC: true)
+	let highSleep = DailyUsageRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 3600, startPercent: 95, endPercent: 85)], onAC: true)
 	expectEqual(highSleep[0].soc90to100Seconds, 1800, "睡眠驻留：90%+ 档只算阈值以上那段")
 	expectEqual(highSleep[0].soc80to90Seconds, 1800, "睡眠驻留：80–90 档算余下那段")
-	let lowSleep = BatteryHistoryRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 600, startPercent: 70, endPercent: 60)], onAC: false)
+	let lowSleep = DailyUsageRecorder.creditingSleepTime(flat, parts: [SleepSegmentPart(dayKey: "2026-09-22", seconds: 600, startPercent: 70, endPercent: 60)], onAC: false)
 	expectEqual(lowSleep[0].soc90to100Seconds + lowSleep[0].soc80to90Seconds, 0, "睡眠驻留：低电量睡眠不记驻留")
 
 	// 那天没有日行 → 只跳过该段，绝不凭空造天（否则"记录 N 天"与月报日均分母虚增）
-	let missing = BatteryHistoryRecorder.creditingSleepTime([DailyUsage(dayKey: "2026-09-22")], parts: parts, onAC: false)
+	let missing = DailyUsageRecorder.creditingSleepTime([DailyUsage(dayKey: "2026-09-22")], parts: parts, onAC: false)
 	expectEqual(missing.count, 1, "睡眠归因：缺行时不凭空造天")
 	expectEqual(missing[0].batterySeconds, 3600, "睡眠归因：缺行只跳过该段，已有段仍记")
-	expectEqual(BatteryHistoryRecorder.creditingSleepTime(rows, parts: [], onAC: false), rows, "睡眠归因：无片段时原样返回")
+	expectEqual(DailyUsageRecorder.creditingSleepTime(rows, parts: [], onAC: false), rows, "睡眠归因：无片段时原样返回")
 
 	// ≥20 分钟那道门只管"睡眠掉电记录/告警"，不该顺带吞掉时长归因
-	let napParts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83, calendar: sh)
-	expect(BatteryHistoryRecorder.settledSleepDrain(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83) == nil, "睡眠归因：小憩仍不进出电记录")
-	expectEqual(BatteryHistoryRecorder.creditingSleepTime(rows, parts: napParts, onAC: false)[0].batterySeconds, 600, "睡眠归因：小憩时长照记")
+	let napParts = SleepDrainRecorder.sleepSegmentParts(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83, calendar: sh)
+	expect(SleepDrainRecorder.settledSleepDrain(sleepDate: sleepDate, startPercent: 84, wakeDate: sleepDate.addingTimeInterval(600), endPercent: 83) == nil, "睡眠归因：小憩仍不进出电记录")
+	expectEqual(DailyUsageRecorder.creditingSleepTime(rows, parts: napParts, onAC: false)[0].batterySeconds, 600, "睡眠归因：小憩时长照记")
 
 	// 时区跟随：同一批绝对时刻，UTC+14 与 UTC 的午夜分界不同
 	var utcCal = Calendar(identifier: .gregorian)
@@ -2183,8 +2288,8 @@ do {
 	plus14.timeZone = TimeZone(secondsFromGMT: 14 * 3600)!
 	let absSleep = at(utcCal, 2026, 9, 22, 12)
 	let absWake = at(utcCal, 2026, 9, 23, 2)
-	let utcParts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: utcCal)
-	let plus14Parts = BatteryHistoryRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: plus14)
+	let utcParts = SleepDrainRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: utcCal)
+	let plus14Parts = SleepDrainRecorder.sleepSegmentParts(sleepDate: absSleep, startPercent: 80, wakeDate: absWake, endPercent: 70, calendar: plus14)
 	expectEqual(utcParts.map(\.dayKey), ["2026-09-22", "2026-09-23"], "睡眠归因：UTC 下午夜把 14 小时切成两天")
 	expectEqual(plus14Parts.map(\.dayKey), ["2026-09-23"], "睡眠归因：UTC+14 下同一段整夜落在一天（变异：日键不绑 calendar.timeZone 即红）")
 	expectEqual(plus14Parts.reduce(0) { $0 + $1.seconds }, 50400, "睡眠归因：换时区不改变总时长")
@@ -2231,7 +2336,7 @@ do {
 	expectEqual(RuntimeScenarioCalibration.intensityFactor(history: legacyOnly), 1.25, "口径桶：纯旧档的因子与升级前一致（40/20=2 夹到上限 1.25）")
 
 	// 建行即钉窗口：新的一天必须带上当时生效的归因窗口
-	let inserted = BatteryHistoryRecorder.insertingDailyUsage([], dayKey: "2026-09-24", maxDays: 30)
+	let inserted = DailyUsageRecorder.insertingDailyUsage([], dayKey: "2026-09-24", maxDays: 30)
 	expectEqual(inserted.first?.attributionGapSeconds, 180.0, "口径桶：建行时写入生效中的归因窗口（变异：建行漏传该字段即红）")
 
 	// 旧档兼容与往返（§1 复利数据：字段可选，缺键=nil）
@@ -2324,12 +2429,12 @@ do {
 	let night = [SleepSegmentPart(dayKey: "2026-09-22", seconds: 3600, startPercent: 88, endPercent: 85),
 				 SleepSegmentPart(dayKey: "2026-09-23", seconds: 25200, startPercent: 85, endPercent: 78)]
 	let rows = [DailyUsage(dayKey: "2026-09-22"), DailyUsage(dayKey: "2026-09-23")]
-	let onBattery = BatteryHistoryRecorder.creditingSleepTime(rows, parts: night, onAC: false)
+	let onBattery = DailyUsageRecorder.creditingSleepTime(rows, parts: night, onAC: false)
 	expectEqual(onBattery[0].sleepBatterySeconds, 3600.0, "强度同源：拔电睡眠登记电池睡眠时长（前夜段）")
 	expectEqual(onBattery[1].sleepBatterySeconds, 25200.0, "强度同源：拔电睡眠登记电池睡眠时长（醒来日）")
-	let plugged = BatteryHistoryRecorder.creditingSleepTime(rows, parts: night, onAC: true)
+	let plugged = DailyUsageRecorder.creditingSleepTime(rows, parts: night, onAC: true)
 	expect(plugged[0].sleepBatterySeconds == nil, "强度同源：插电睡眠不登记电池睡眠时长")
-	let twice = BatteryHistoryRecorder.creditingSleepTime(onBattery, parts: [night[0]], onAC: false)
+	let twice = DailyUsageRecorder.creditingSleepTime(onBattery, parts: [night[0]], onAC: false)
 	expectEqual(twice[0].sleepBatterySeconds, 7200.0, "强度同源：一天多觉累加睡眠电池时长")
 
 	// 旧档兼容与往返
@@ -2353,17 +2458,17 @@ do {
 	let good = try PropertyListEncoder().encode([session])
 	let garbage = Data([0xFF, 0xFE, 0xFD, 0xFC])
 	
-	let rescued = BatteryHistoryRecorder.decodingWithFallback([ChargeSession].self, primaryData: garbage, backupData: good)
+	let rescued = HistoryPersistence.decodingWithFallback([ChargeSession].self, primaryData: garbage, backupData: good)
 	expectEqual(rescued?.count, 1, "备份抢救：主档损坏回退备份")
 	expectEqual(rescued?.first?.endPercent, 50, "备份抢救：备份内容读取正确")
 	
-	let normal = BatteryHistoryRecorder.decodingWithFallback([ChargeSession].self, primaryData: good, backupData: nil)
+	let normal = HistoryPersistence.decodingWithFallback([ChargeSession].self, primaryData: good, backupData: nil)
 	expectEqual(normal?.count, 1, "备份抢救：主档正常直接解码")
 	
-	let lost = BatteryHistoryRecorder.decodingWithFallback([ChargeSession].self, primaryData: garbage, backupData: nil)
+	let lost = HistoryPersistence.decodingWithFallback([ChargeSession].self, primaryData: garbage, backupData: nil)
 	expect(lost == nil, "备份抢救：双份都坏返回 nil 不崩")
 	
-	let missing = BatteryHistoryRecorder.decodingWithFallback([ChargeSession].self, primaryData: nil, backupData: good)
+	let missing = HistoryPersistence.decodingWithFallback([ChargeSession].self, primaryData: nil, backupData: good)
 	expect(missing == nil, "备份抢救：主档无数据不碰备份")
 } catch {
 	expect(false, "备份抢救：测试构造不应失败（\(error)）")
@@ -2506,7 +2611,7 @@ do {
 			   "口径同源：强度校准的醒着电池时长已减掉睡眠段（变异：漏减或另写一份即红）")
 
 	// 建行处补记睡眠插电秒：没有这一笔，醒着口径在真实数据里无从还原
-	let credited = BatteryHistoryRecorder.creditingSleepTime(
+	let credited = DailyUsageRecorder.creditingSleepTime(
 		[DailyUsage(dayKey: "2026-09-23", acSeconds: 3600)],
 		parts: [SleepSegmentPart(dayKey: "2026-09-23", seconds: 7200, startPercent: 90, endPercent: 88)],
 		onAC: true
@@ -2793,7 +2898,7 @@ do {
 
 do {
 	// 首次累计：建档并计入当日秒数
-	var records = BatteryHistoryRecorder.appendingEnergySeconds(
+	var records = DailyUsageRecorder.appendingEnergySeconds(
 		[], ids: ["com.a"], names: ["com.a": "应用A"], seconds: 10,
 		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0, maxApps: 50
@@ -2802,7 +2907,7 @@ do {
 	expect(abs(records[0].secondsByDay["2026-08-10"]! - 10) < 0.001, "应用耗电：秒数计入当日")
 
 	// 再次累计：同日累加
-	records = BatteryHistoryRecorder.appendingEnergySeconds(
+	records = DailyUsageRecorder.appendingEnergySeconds(
 		records, ids: ["com.a", "com.b"], names: ["com.a": "应用A", "com.b": "应用B"], seconds: 5,
 		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0, maxApps: 50
@@ -2816,7 +2921,7 @@ do {
 	for i in 0..<60 {
 		crowded.append(AppEnergyUsage(bundleId: "com.\(i)", name: "应用\(i)", secondsByDay: ["2026-06-01": 10, "2026-08-10": 5], lastSeen: t0.addingTimeInterval(Double(i))))
 	}
-	let capped = BatteryHistoryRecorder.appendingEnergySeconds(
+	let capped = DailyUsageRecorder.appendingEnergySeconds(
 		crowded, ids: ["com.0"], names: ["com.0": "应用0"], seconds: 5,
 		hour: 14,
 		dayKey: "2026-08-10", cutoffDayKey: "2026-07-11", now: t0.addingTimeInterval(999), maxApps: 50
@@ -3104,7 +3209,7 @@ do {
 	// 累计与封顶
 	var events: [SocJumpEvent] = []
 	for i in 0..<4 {
-		events = BatteryHistoryRecorder.appendingSocJump(events, from: 90, to: 88, at: t0.addingTimeInterval(Double(i) * 60), maxEvents: 3)
+		events = SocSampleRecorder.appendingSocJump(events, from: 90, to: 88, at: t0.addingTimeInterval(Double(i) * 60), maxEvents: 3)
 	}
 	expectEqual(events.count, 3, "跳变：事件数封顶")
 	expectEqual(events.first?.fromPercent, 90, "跳变：封顶后丢最旧")
@@ -3216,7 +3321,7 @@ do {
 	]
 	stats["ghost|g|30"]?.sampleCount = 10
 
-	let pruned = BatteryHistoryRecorder.pruningChargerPowerStats(stats, keeping: [profiled])
+	let pruned = ChargerProfileRecorder.pruningChargerPowerStats(stats, keeping: [profiled])
 	expectEqual(pruned.count, 1, "统计清理：不在档案的充电器统计被清掉")
 	expect(pruned["a|b|65"] != nil, "统计清理：在档统计保留")
 	expect(pruned["ghost|g|30"] == nil, "统计清理：孤儿统计移除")
@@ -3237,35 +3342,35 @@ do {
 do {
 	// 睡了一小时醒来掉 2%：不算“今天用电”——夜间掉电由睡眠掉电卡片负责
 	var usage = DailyUsage(dayKey: "2026-08-29")
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(
+	usage = DailyUsageRecorder.accumulatingDailyUsage(
 		usage, percent: 78, lastPercent: 80, powerSource: .battery, isCharging: false,
 		secondsSinceLastSample: 3600
 	)
 	expectEqual(usage.drainedPercent, 0, "跨睡眠归因：睡一小时的掉电不计入今日用电")
 
 	// 整夜插电充电醒来涨 8%：同理不计入今日充入
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(
+	usage = DailyUsageRecorder.accumulatingDailyUsage(
 		usage, percent: 86, lastPercent: 78, powerSource: .powerAdapter, isCharging: true,
 		secondsSinceLastSample: 8 * 3600
 	)
 	expectEqual(usage.chargedPercent, 0, "跨睡眠归因：整夜充电不计入今日充入")
 
 	// 醒着时正常采样（间隔 ≤3 分钟）照常累计
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(
+	usage = DailyUsageRecorder.accumulatingDailyUsage(
 		usage, percent: 84, lastPercent: 86, powerSource: .battery, isCharging: false,
 		secondsSinceLastSample: 120
 	)
 	expectEqual(usage.drainedPercent, 2, "跨睡眠归因：3 分钟内正常采样照常计入")
 
 	// 恰好 3 分钟算连续（边界锁死）
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(
+	usage = DailyUsageRecorder.accumulatingDailyUsage(
 		usage, percent: 83, lastPercent: 84, powerSource: .battery, isCharging: false,
 		secondsSinceLastSample: 180
 	)
 	expectEqual(usage.drainedPercent, 3, "跨睡眠归因：恰好 3 分钟视为连续")
 
 	// 超窗 1 秒即断开
-	usage = BatteryHistoryRecorder.accumulatingDailyUsage(
+	usage = DailyUsageRecorder.accumulatingDailyUsage(
 		usage, percent: 82, lastPercent: 83, powerSource: .battery, isCharging: false,
 		secondsSinceLastSample: 181
 	)
@@ -3280,7 +3385,7 @@ do {
 		AppEnergyUsage(bundleId: "com.a", name: "A1", secondsByDay: ["2026-08-29": 5], lastSeen: t0),
 		AppEnergyUsage(bundleId: "com.a", name: "A2", secondsByDay: ["2026-08-29": 7], lastSeen: t0)
 	]
-	let merged = BatteryHistoryRecorder.appendingEnergySeconds(
+	let merged = DailyUsageRecorder.appendingEnergySeconds(
 		duplicated, ids: ["com.a"], names: ["com.a": "A"], seconds: 3,
 		hour: 14,
 		dayKey: "2026-08-29", cutoffDayKey: "2026-08-01", now: t0, maxApps: 50
@@ -3381,14 +3486,14 @@ do {
 	}
 
 	// 封顶 400：最旧一个月（1 月 31 个日样本）折成 1 点
-	let folded = BatteryHistoryRecorder.foldingHealthSamples(samples, maxRawCount: 400)
+	let folded = HealthTrendRecorder.foldingHealthSamples(samples, maxRawCount: 400)
 	expectEqual(folded.count, 390, "健康折叠：最旧一个月折成 1 点")
 	expectEqual(folded.first?.healthPercent, samples[30].healthPercent, "健康折叠：保留当月最后读数")
 	expectEqual(folded.first?.cycleCount, samples[30].cycleCount, "健康折叠：循环数同点保留")
 	expectEqual(folded.last?.healthPercent, samples.last?.healthPercent, "健康折叠：近期数据原样保留")
 
 	// 最旧月已是单点时跳过它，折下一个多月——封顶不停滞（状态机边界）
-	let stagnationGuard = BatteryHistoryRecorder.foldingHealthSamples(folded, maxRawCount: 380)
+	let stagnationGuard = HealthTrendRecorder.foldingHealthSamples(folded, maxRawCount: 380)
 	expect(stagnationGuard.count < folded.count, "健康折叠：跳过单点月继续折，封顶不停滞")
 	expectEqual(stagnationGuard.first, folded.first, "健康折叠：前面的单点月原样保留")
 
@@ -3396,7 +3501,7 @@ do {
 	let allSingles = stride(from: 0, to: 400, by: 31).map {
 		HealthSample(date: start.addingTimeInterval(Double($0) * 86400), healthPercent: 90, cycleCount: 1)
 	}
-	expectEqual(BatteryHistoryRecorder.foldingHealthSamples(allSingles, maxRawCount: 380).count, allSingles.count, "健康折叠：全单点原样返回")
+	expectEqual(HealthTrendRecorder.foldingHealthSamples(allSingles, maxRawCount: 380).count, allSingles.count, "健康折叠：全单点原样返回")
 }
 
 // MARK: - 历史存档编解码
@@ -3514,7 +3619,7 @@ do {
 			}
 
 			let before = days[days.count - 1]
-			days[days.count - 1] = BatteryHistoryRecorder.accumulatingDailyUsage(
+			days[days.count - 1] = DailyUsageRecorder.accumulatingDailyUsage(
 				before,
 				percent: sampled,
 				lastPercent: previousSampled,
@@ -3563,8 +3668,8 @@ do {
 	expect(!BatteryAlertController.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(-60), now: now), "通知交互:延后过期解除")
 
 	// 会话归档:优化充电的暂停(仍插着电)不算结束,拔电才算
-	expect(!BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .powerAdapter), "会话归档:暂停充电不归档")
-	expect(BatteryHistoryRecorder.shouldArchiveActiveSession(powerSource: .battery), "会话归档:拔电归档")
+	expect(!ChargeSessionRecorder.shouldArchiveActiveSession(powerSource: .powerAdapter), "会话归档:暂停充电不归档")
+	expect(ChargeSessionRecorder.shouldArchiveActiveSession(powerSource: .battery), "会话归档:拔电归档")
 }
 
 // MARK: - 充电器命名
@@ -3581,9 +3686,9 @@ do {
 
 	// 重连更新档案时用户命名必须存活（只动 lastSeen/connectCount）
 	let profiles = [claimed]
-	let after = BatteryHistoryRecorder.upsertingChargerProfile(
+	let after = ChargerProfileRecorder.upsertingChargerProfile(
 		profiles,
-		key: BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65),
+		key: ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 65),
 		name: "", manufacturer: "", ratedWatts: 65, now: t0.addingTimeInterval(3600)
 	)
 	expectEqual(after.first?.customName, "Anker · 桌面", "命名：重连保留用户命名")
@@ -3591,12 +3696,12 @@ do {
 
 	// 「见过 N 次」口径 v1.19.2（可溯源）：30 分钟重连窗口内再见不计次
 	// （应用重启/睡眠唤醒不虚增）；窗口边界（>30min）恰好计次
-	let recount = BatteryHistoryRecorder.upsertingChargerProfile(
+	let recount = ChargerProfileRecorder.upsertingChargerProfile(
 		[claimed], key: claimed.key, name: "", manufacturer: "", ratedWatts: 65,
 		now: t0.addingTimeInterval(29 * 60)
 	)
 	expectEqual(recount.first?.connectCount, 1, "见过N次口径：30 分钟窗口内重连不计次（重启不虚增）")
-	let atBoundary = BatteryHistoryRecorder.upsertingChargerProfile(
+	let atBoundary = ChargerProfileRecorder.upsertingChargerProfile(
 		[claimed], key: claimed.key, name: "", manufacturer: "", ratedWatts: 65,
 		now: t0.addingTimeInterval(30 * 60 + 1)
 	)
@@ -3613,19 +3718,19 @@ do {
 	// 同瓦数不同充电器：PD 档位表不同 → 身份键分开，不再合并成一只
 	let tiersA = [PowerTier(maxVoltageMV: 20000, maxCurrentMA: 5000), PowerTier(maxVoltageMV: 15000, maxCurrentMA: 3000)]
 	let tiersB = [PowerTier(maxVoltageMV: 20000, maxCurrentMA: 5000), PowerTier(maxVoltageMV: 9000, maxCurrentMA: 3000)]
-	let keyA = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA)
-	let keyB = BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersB)
+	let keyA = ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA)
+	let keyB = ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersB)
 	expect(keyA != keyB, "身份键：不同档位表分开建档")
 	// 档位顺序无关（排序稳定）
-	expectEqual(BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA.reversed()), keyA, "身份键：档位顺序无关")
+	expectEqual(ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 100, tiers: tiersA.reversed()), keyA, "身份键：档位顺序无关")
 	// 非 PD 头无档位表 → 键退回旧格式，存量档案不重置
-	expectEqual(BatteryHistoryRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65, tiers: []), "a|b|65", "身份键：无档位保持旧格式")
+	expectEqual(ChargerProfileRecorder.chargerKey(name: "a", manufacturer: "b", ratedWatts: 65, tiers: []), "a|b|65", "身份键：无档位保持旧格式")
 	// 无线头带标记，与同瓦数有线头区分
-	expect(BatteryHistoryRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 0, isWireless: true).hasSuffix("|无线"), "身份键：无线标记")
+	expect(ChargerProfileRecorder.chargerKey(name: "", manufacturer: "", ratedWatts: 0, isWireless: true).hasSuffix("|无线"), "身份键：无线标记")
 	// 新建档时档位签名入档（设置区展示用）
-	let signed = BatteryHistoryRecorder.upsertingChargerProfile(
+	let signed = ChargerProfileRecorder.upsertingChargerProfile(
 		[], key: keyA, name: "", manufacturer: "", ratedWatts: 100,
-		tierSignature: BatteryHistoryRecorder.tierSignature(tiersA), now: t0
+		tierSignature: ChargerProfileRecorder.tierSignature(tiersA), now: t0
 	)
 	expect(signed.first?.tierSignature?.contains("20000V5000A") == true, "身份键：新档保存签名")
 }
@@ -3634,11 +3739,11 @@ do {
 
 do {
 	// 纯判定：首次只记基准；读不到不误报；变了才算更换
-	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: nil, current: "S1"), "电池更换：首次运行只记基准")
-	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: "S1"), "电池更换：序列号未变不报")
-	expect(BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: "S2"), "电池更换：序列号变化报更换")
-	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "", current: "S2"), "电池更换：空序列号不误报")
-	expect(!BatteryHistoryRecorder.shouldFlagBatterySwap(stored: "S1", current: nil), "电池更换：读不到当前序列号不误报")
+	expect(!HealthTrendRecorder.shouldFlagBatterySwap(stored: nil, current: "S1"), "电池更换：首次运行只记基准")
+	expect(!HealthTrendRecorder.shouldFlagBatterySwap(stored: "S1", current: "S1"), "电池更换：序列号未变不报")
+	expect(HealthTrendRecorder.shouldFlagBatterySwap(stored: "S1", current: "S2"), "电池更换：序列号变化报更换")
+	expect(!HealthTrendRecorder.shouldFlagBatterySwap(stored: "", current: "S2"), "电池更换：空序列号不误报")
+	expect(!HealthTrendRecorder.shouldFlagBatterySwap(stored: "S1", current: nil), "电池更换：读不到当前序列号不误报")
 
 	// 趋势过滤：更换边界前的样本全部丢弃
 	let calendar = Calendar(identifier: .gregorian)
@@ -3649,10 +3754,10 @@ do {
 		HealthSample(date: day1, healthPercent: 88, cycleCount: 500),
 		HealthSample(date: day200, healthPercent: 100, cycleCount: 10)
 	]
-	let filtered = BatteryHistoryRecorder.filteringHealthSamplesForTrend(samples, replacedAt: replacedAt)
+	let filtered = HealthTrendRecorder.filteringHealthSamplesForTrend(samples, replacedAt: replacedAt)
 	expectEqual(filtered.count, 1, "电池更换：趋势只看更换后")
 	expectEqual(filtered.first?.healthPercent, 100, "电池更换：基线重置为新电池")
-	expectEqual(BatteryHistoryRecorder.filteringHealthSamplesForTrend(samples, replacedAt: nil).count, 2, "电池更换：无边界保留全部")
+	expectEqual(HealthTrendRecorder.filteringHealthSamplesForTrend(samples, replacedAt: nil).count, 2, "电池更换：无边界保留全部")
 }
 
 // MARK: - 会话关联充电器
@@ -3834,7 +3939,7 @@ do {
 
 do {
 	// 小时分布随累计写入
-	let records = BatteryHistoryRecorder.appendingEnergySeconds(
+	let records = DailyUsageRecorder.appendingEnergySeconds(
 		[], ids: ["com.a"], names: ["com.a": "A"], seconds: 60,
 		hour: 15, dayKey: "2026-08-29", cutoffDayKey: "2026-08-01", now: t0, maxApps: 50
 	)
@@ -3867,28 +3972,28 @@ do {
 do {
 	// dailyHistory 插入保持升序：时区西行使"今天"的键比已存键更早
 	var history = [DailyUsage(dayKey: "2026-09-03"), DailyUsage(dayKey: "2026-09-04")]
-	history = BatteryHistoryRecorder.insertingDailyUsage(history, dayKey: "2026-09-02", maxDays: 90)
+	history = DailyUsageRecorder.insertingDailyUsage(history, dayKey: "2026-09-02", maxDays: 90)
 	expectEqual(history.map(\.dayKey), ["2026-09-02", "2026-09-03", "2026-09-04"], "时钟异常：日键插入保持升序")
 
 	// 封顶删的是最旧而非末尾（旧实现 removeFirst 前不排序会错删）
-	let trimmed = BatteryHistoryRecorder.insertingDailyUsage(history, dayKey: "2026-09-05", maxDays: 3)
+	let trimmed = DailyUsageRecorder.insertingDailyUsage(history, dayKey: "2026-09-05", maxDays: 3)
 	expectEqual(trimmed.map(\.dayKey), ["2026-09-03", "2026-09-04", "2026-09-05"], "时钟异常：封顶删最旧")
 
 	// 封顶护今 v1.18.5（状态机边界）：西行跨日界线后"今天"的日期键变小（本地
 	// 已存 09-06..09-11，跨线后今天=09-05），排序后今天成为全表最旧键，
 	// 旧实现封顶裁掉今天 → 当天帧全部静默丢弃、今日小结永久缺失
 	var westward = (6...11).map { DailyUsage(dayKey: String(format: "2026-09-%02d", $0)) } // 6 天满窗
-	westward = BatteryHistoryRecorder.insertingDailyUsage(westward, dayKey: "2026-09-05", maxDays: 6)
+	westward = DailyUsageRecorder.insertingDailyUsage(westward, dayKey: "2026-09-05", maxDays: 6)
 	expect(westward.contains { $0.dayKey == "2026-09-05" }, "封顶护今：西行后今天保住（旧实现被裁）")
 	expectEqual(westward.count, 6, "封顶护今：封顶数量正确")
 	expect(!westward.contains { $0.dayKey == "2026-09-06" }, "封顶护今：被牺牲的是最老的旧天")
 	// 普通封顶（今天在最新端）行为不变：裁最旧、保今天
-	let normal = BatteryHistoryRecorder.insertingDailyUsage(westward, dayKey: "2026-09-12", maxDays: 6)
+	let normal = DailyUsageRecorder.insertingDailyUsage(westward, dayKey: "2026-09-12", maxDays: 6)
 	expectEqual(normal.last?.dayKey, "2026-09-12", "封顶护今：普通封顶今天在末尾（回归不变式）")
 	expectEqual(normal.count, 6, "封顶护今：普通封顶数量正确")
 	expectEqual(normal.first?.dayKey, "2026-09-07", "封顶护今：普通封顶仍裁最旧")
 	// 未超限原样保序
-	let under = BatteryHistoryRecorder.insertingDailyUsage(
+	let under = DailyUsageRecorder.insertingDailyUsage(
 		[DailyUsage(dayKey: "2026-09-02"), DailyUsage(dayKey: "2026-09-03")], dayKey: "2026-09-01", maxDays: 90)
 	expectEqual(under.map(\.dayKey), ["2026-09-01", "2026-09-02", "2026-09-03"], "封顶护今：未超限只排序不裁剪")
 
@@ -4959,7 +5064,7 @@ do {
 		longHistory.append(DailyUsage(dayKey: String(format: "2026-01-%03d", i)))
 	}
 	// 今天落在索引 100（maxDays=90 → 100 >= 90 且 100 < excess=111）→ 旧 removeSubrange 越界
-	let mid = BatteryHistoryRecorder.insertingDailyUsage(longHistory, dayKey: "2026-04-11", maxDays: 90)
+	let mid = DailyUsageRecorder.insertingDailyUsage(longHistory, dayKey: "2026-04-11", maxDays: 90)
 	expect(mid.contains { $0.dayKey == "2026-04-11" }, "v2.9.1封顶：中部今天保住（旧实现 trap）")
 	expectEqual(mid.count, 90, "v2.9.1封顶：数量夹到 maxDays")
 	expect(mid.allSatisfy { day in mid.filter { $0.dayKey == day.dayKey }.count == 1 }, "v2.9.1封顶：无重复日键")
@@ -5279,6 +5384,73 @@ do {
 		   "备份目录：空字符串 = 关闭备份（与单测同一套语义）")
 }
 
+// MARK: - 历史主档目录与迁移（v2.9.17：时间序列从 UserDefaults plist 搬到一键一文件）
+do {
+	// 不设变量 = 生产默认：仍在用户 App Support 下，且是 ChargeMonitor/history 子目录。
+	// 变异：把它挪到临时目录、或挪出 ChargeMonitor 目录 → 红
+	let plain = BatteryHistoryRecorder.historyDirectoryForTooling(env: [:])
+	expect(plain?.path.hasSuffix("Library/Application Support/ChargeMonitor/history") == true,
+		   "历史目录：不设变量时在用户 App Support/ChargeMonitor/history（生产行为不许变）")
+	expect(plain?.lastPathComponent == "history", "历史目录：主档放 history 子目录，不与备份文件混住")
+
+	// 显式重定向
+	let moved = BatteryHistoryRecorder.historyDirectoryForTooling(env: ["MIAODIAN_HISTORY_DIR": "/tmp/miaodian_tool_history"])
+	expect(moved?.path == "/tmp/miaodian_tool_history", "历史目录：给 MIAODIAN_HISTORY_DIR 就改道")
+	expect(BatteryHistoryRecorder.historyDirectoryForTooling(env: ["MIAODIAN_HISTORY_DIR": ""]) == nil,
+		   "历史目录：空字符串 = 关闭持久化（走内存档）")
+
+	// **兜底**（这条是防事故的核心）：量具只设了备份目录、忘了设历史目录时，
+	// 历史必须跟着备份一起改道。v2.9.15 的同型事故就是把用户真数据写花。
+	let fallback = BatteryHistoryRecorder.historyDirectoryForTooling(env: ["MIAODIAN_BACKUP_DIR": "/tmp/miaodian_tool_backup"])
+	expect(fallback?.path == "/tmp/miaodian_tool_backup/history",
+		   "历史目录：只设备份变量时跟着改道（变异：回退成用户 App Support 即红——那会让量具写花真历史）")
+	expect(BatteryHistoryRecorder.historyDirectoryForTooling(env: ["MIAODIAN_BACKUP_DIR": ""]) == nil,
+		   "历史目录：备份关掉且没设历史变量时也不落盘")
+}
+
+// MARK: - HistoryByteStore 迁移语义（stub 1/2/3 三条各一测）
+do {
+	let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+		.appendingPathComponent("miaodian_store_test_\(UUID().uuidString)", isDirectory: true)
+	let legacy = UserDefaults(suiteName: "miaodian.history.migration.\(UUID().uuidString)")!
+	let key = "chargeSessions"
+	let oldBytes = Data("旧字节".utf8)
+
+	// ① 文件不在 → 抄旧字节过来；**旧键必须留着**（回滚到旧版本时历史回到迁移那刻，而不是清零）
+	legacy.set(oldBytes, forKey: key)
+	let store = FileHistoryByteStore(directory: tmp, migrationSource: UserDefaultsHistoryByteStore(defaults: legacy))
+	expectEqual(store.data(forKey: key), oldBytes, "历史迁移：文件不在时抄 UserDefaults 旧字节")
+	expectEqual(legacy.data(forKey: key), oldBytes, "历史迁移：抄完旧键原样保留（回滚安全，不许删）")
+
+	// ② 幂等 + 文件优先：改掉旧键后读到的仍是文件里的值，说明不再回看旧键
+	legacy.set(Data("迁移后旧键被人改过".utf8), forKey: key)
+	store.set(Data("迁移后新写的".utf8), forKey: key)
+	expectEqual(store.data(forKey: key), Data("迁移后新写的".utf8),
+				"历史迁移：文件一旦存在就是唯一真源（变异：仍读旧键即红）")
+	let fresh = FileHistoryByteStore(directory: tmp, migrationSource: UserDefaultsHistoryByteStore(defaults: legacy))
+	expectEqual(fresh.data(forKey: key), Data("迁移后新写的".utf8),
+				"历史迁移：重启后仍读文件，不把旧键的陈旧值迁回来")
+
+	// ③ 显式遗忘不许被迁移复活：删掉后（含旧键）再读必须是 nil
+	store.removeObject(forKey: key)
+	expect(store.data(forKey: key) == nil, "历史遗忘：删掉的键不会被迁移复活")
+	expect(legacy.data(forKey: key) == nil, "历史遗忘：删键时连带清 UserDefaults 旧键（否则下次启动会迁回来）")
+
+	// 未写过的键不许凭空造文件（否则 14 个空键每次启动都落一堆空 plist）
+	_ = store.data(forKey: "healthSamples")
+	let stray = (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? []
+	expect(!stray.contains("healthSamples.plist"), "历史迁移：旧档里没有的键不落空文件")
+
+	// 不落盘档：关闭持久化时读写都在内存，磁盘上必须一无所获
+	let memory = InMemoryHistoryByteStore()
+	memory.set(Data("只在内存".utf8), forKey: "k")
+	expectEqual(memory.data(forKey: "k"), Data("只在内存".utf8), "内存档：读写自洽")
+	memory.removeObject(forKey: "k")
+	expect(memory.data(forKey: "k") == nil, "内存档：删除生效")
+
+	try? FileManager.default.removeItem(at: tmp)
+}
+
 // MARK: - 滚动期装饰动效门（v2.9.15：滚动帧预算里不留墙钟动画）
 do {
 	// 墙钟动画（TimelineView）即使内容不变也要每拍求值，定相救不了它——
@@ -5462,6 +5634,233 @@ do {
 	expect(listed.filter { $0.status == .hidden }.count == 2, "三态一致：被隐藏的卡永远留在清单里（恢复通道）")
 }
 
+
+// MARK: - 存储决策（轮20：这里漏过一次，量具历史整条变空）
+//
+// 起因：init 里曾写 `store ?? InMemoryHistoryByteStore()`，于是"只关备份"顺手把历史也清空了。
+// 三个量具都走 `BatteryHistoryRecorder(monitor:defaults:backupDirectory:)`，全都变成空历史——
+// 离屏面板从 1017pt 掉到 477pt（卡片按数据资格被筛掉），真档案腿整条跳过。
+// 当时没有任何断言看着那一行，是靠和 HEAD 同条件对照量面板高度才发现的。
+MainActor.assumeIsolated {
+do {
+	let suite = UserDefaults(suiteName: "miaodian.store.resolution.\(UUID().uuidString)")!
+	let tmp = NSTemporaryDirectory() + "miaodian_store_\(UUID().uuidString)"
+
+	// ① 只关备份（backupDirectory: nil 的等价物：override 为 nil）→ 仍是文件档，**不是内存档**
+	let viaDir = BatteryHistoryRecorder.resolvedByteStore(
+		override: nil, defaults: suite, env: ["MIAODIAN_HISTORY_DIR": tmp])
+	expect(viaDir is FileHistoryByteStore,
+		   "存储决策：不传 store 时走生产路径（文件档）——变异：默认成内存档即红（量具历史会整条变空）")
+
+	// ② 显式传的 store 优先（单测要内存档时显式给，不是靠默认值）
+	let memory = InMemoryHistoryByteStore()
+	expect(BatteryHistoryRecorder.resolvedByteStore(
+		override: memory, defaults: suite, env: ["MIAODIAN_HISTORY_DIR": tmp]) is InMemoryHistoryByteStore,
+		   "存储决策：显式传的 store 优先（不落盘必须显式要求）")
+
+	// ③ 空字符串 = 真的不落盘（这条才是"关闭持久化"的唯一开关）
+	expect(BatteryHistoryRecorder.resolvedByteStore(
+		override: nil, defaults: suite, env: ["MIAODIAN_HISTORY_DIR": ""]) is InMemoryHistoryByteStore,
+		   "存储决策：MIAODIAN_HISTORY_DIR 为空串才走内存档")
+
+	// ④ 只设备份目录时，历史跟着改道（防"改了备份路径却把真历史写花"的兜底）
+	let followBackup = BatteryHistoryRecorder.resolvedByteStore(
+		override: nil, defaults: suite, env: ["MIAODIAN_BACKUP_DIR": tmp + "/backup"])
+	expect(followBackup is FileHistoryByteStore,
+		   "存储决策：只设备份目录时历史仍落盘（且目录跟到备份下，见 historyDirectoryForTooling 的断言）")
+
+	// ⑤ 端到端：同一目录写进去、换一个实例读回来（决策层对了不够，通道也得通）
+	let writeDir = NSTemporaryDirectory() + "miaodian_store_e2e_\(UUID().uuidString)"
+	let first = SocSampleRecorder(
+		persistence: HistoryPersistence(
+			byteStore: BatteryHistoryRecorder.resolvedByteStore(
+				override: nil, defaults: suite, env: ["MIAODIAN_HISTORY_DIR": writeDir]),
+			backupDirectory: nil),
+		clock: MutableHistoryClock(t0).clock
+	)
+	first.recordSOCSample(batterySnap(percent: 66))
+	let second = SocSampleRecorder(
+		persistence: HistoryPersistence(
+			byteStore: BatteryHistoryRecorder.resolvedByteStore(
+				override: nil, defaults: suite, env: ["MIAODIAN_HISTORY_DIR": writeDir]),
+			backupDirectory: nil),
+		clock: MutableHistoryClock(t0).clock
+	)
+	second.loadFromDisk()
+	expectEqual(second.socSamples.first?.percent, 66,
+				"存储决策：走 defaultByteStore 的写入能被下一个实例读回（通道端到端）")
+
+	try? FileManager.default.removeItem(atPath: tmp)
+	try? FileManager.default.removeItem(atPath: writeDir)
+}
+}
+
+// MARK: - 拆分后的域行为（轮20：这些状态原先藏在 1400 行门面里，只有静态纯函数能测）
+//
+// 拆分的主要收益就在这里：每个域能拿"内存档 + 可推进的假钟"直接驱动，
+// 不必等真实时间过去、也不必构造整个 BatteryHistoryRecorder。
+// 假钟是必需的——跨午夜结算、24 小时窗口这些状态机，靠真实时间来跑就只能靠运气。
+
+// 顶层代码是 nonisolated 上下文，而这些域是 @MainActor 的：用 assumeIsolated 同步进入
+// （命令行工具的顶层就跑在主线程上）。**不能改用 await**——一旦让出主线程，
+// BatteryMonitor 的轮询 Task 就会插进来拍快照，断言从此看运气。
+MainActor.assumeIsolated {
+	/// 域测试台：内存档（不碰磁盘）+ 不给备份目录
+	@MainActor func domainPersistence() -> HistoryPersistence {
+		HistoryPersistence(byteStore: InMemoryHistoryByteStore(), backupDirectory: nil)
+	}
+
+	/// 域测试共用一个 monitor：这些域只读它的面板开关/耗电列表，
+	/// 订阅快照的是门面，域自己不订阅，所以这里不会引入后台拍子
+	let domainMonitor = BatteryMonitor()
+
+do {
+	// —— 24 小时电量曲线：采样去重与窗口 ——
+	let box = MutableHistoryClock(t0)
+	let soc = SocSampleRecorder(persistence: domainPersistence(), clock: box.clock)
+	soc.recordSOCSample(batterySnap(percent: 80))
+	expectEqual(soc.socSamples.count, 1, "SOC 域：首次采样必记一点")
+	box.advance(60)
+	soc.recordSOCSample(batterySnap(percent: 80))
+	expectEqual(soc.socSamples.count, 1,
+				"SOC 域：间隔不足 10 分钟且电量/充电态未变 → 不刷点（每拍记点会让 24 小时曲线退化成轮询日志）")
+	box.advance(600)
+	soc.recordSOCSample(batterySnap(percent: 80))
+	expectEqual(soc.socSamples.count, 2, "SOC 域：满 10 分钟记一点")
+	box.advance(3 * 60)
+	soc.recordSOCSample(batterySnap(percent: 75))
+	expectEqual(soc.socSamples.count, 3, "SOC 域：电量变化后 3 分钟即可加密采点")
+	box.advance(25 * 3600)
+	soc.recordSOCSample(batterySnap(percent: 70))
+	expectEqual(soc.socSamples.count, 1, "SOC 域：24 小时窗口外的旧点被清掉（只剩刚记的这一点）")
+}
+
+do {
+	// —— 电源事件时间线：首帧只记基准、边沿成事件、同类连发合并 ——
+	let box = MutableHistoryClock(t0)
+	let events = PowerEventRecorder(persistence: domainPersistence(), clock: box.clock)
+	events.recordPowerEvents(batterySnap(percent: 80, onBattery: true))
+	expect(events.powerEvents.isEmpty,
+		   "事件域：启动第一帧只记基准不产事件（否则每次启动都多一条假「插电」）")
+	events.recordPowerEvents(batterySnap(percent: 80, onBattery: false))
+	expectEqual(events.powerEvents.count, 1, "事件域：供电来源翻转产生一条事件")
+	expectEqual(events.powerEvents.last?.kind, .pluggedIn, "事件域：翻转方向正确（电池→适配器 = 插电）")
+
+	// 充满事件：只在「上一帧没满、这一帧满了」的边沿记一次
+	var notFull = batterySnap(percent: 99, charging: true, onBattery: false)
+	notFull.isFull = false
+	events.recordPowerEvents(notFull)
+	var full = batterySnap(percent: 100, charging: true, onBattery: false)
+	full.isFull = true
+	events.recordPowerEvents(full)
+	let afterFull = events.powerEvents.count
+	expectEqual(events.powerEvents.last?.kind, .chargedFull, "事件域：充满记一条 chargedFull")
+
+	// 同类连发合并：60 秒内再满一次不新增（接触不良反复断连、反复重启应用都不刷屏）
+	events.recordPowerEvents(notFull)
+	box.advance(60)
+	events.recordPowerEvents(full)
+	expectEqual(events.powerEvents.count, afterFull,
+				"事件域：2 分钟内同类连发合并成一条（不刷屏）")
+}
+
+do {
+	// —— 充电会话：充电帧开会话、拔电才归档、身份键由门面传入 ——
+	let box = MutableHistoryClock(t0)
+	let sessions = ChargeSessionRecorder(persistence: domainPersistence(), clock: box.clock)
+	sessions.updateChargeSession(batterySnap(percent: 20, charging: true, onBattery: false), chargerKey: "charger-A")
+	expect(sessions.isChargingSessionAlive, "会话域：充电帧开出一个进行中的会话")
+	expect(sessions.recentSessions.isEmpty,
+		   "会话域：进行中的会话不进历史（优化充电会在 80% 反复暂停，拔电才算结束）")
+
+	box.advance(600)
+	sessions.updateChargeSession(batterySnap(percent: 60, charging: true, onBattery: false), chargerKey: "charger-A")
+	sessions.updateChargeSession(batterySnap(percent: 60, charging: false, onBattery: true), chargerKey: nil)
+	expect(!sessions.isChargingSessionAlive, "会话域：拔电后会话结束")
+	expectEqual(sessions.recentSessions.count, 1, "会话域：值得留的会话归档进历史")
+	expectEqual(sessions.recentSessions.first?.chargerKey, "charger-A",
+				"会话域：身份键经门面传入并落在会话上（拆分前是隐式共享属性）")
+	expectEqual(sessions.recentSessions.first?.startPercent, 20, "会话域：起点是开会话那一拍的电量")
+	expectEqual(sessions.recentSessions.first?.endPercent, 60, "会话域：终点是最后一拍的电量")
+}
+
+do {
+	// —— 睡眠掉电：合盖定格 → 唤醒挂起 → 下一个快照结算 ——
+	let box = MutableHistoryClock(t0)
+	let p = domainPersistence()
+	let daily = DailyUsageRecorder(persistence: p, monitor: domainMonitor, clock: box.clock)
+	let sleep = SleepDrainRecorder(persistence: p, daily: daily, clock: box.clock)
+
+	// 先建出「今天」的用电行：睡眠时长要记在它上面
+	daily.updateDailyUsage(batterySnap(percent: 90))
+	expect(daily.todayUsage != nil, "每日用电域：第一拍建出今天的用电行")
+
+	sleep.handleWillSleep(onAC: false, lastPercent: 90)
+	expect(sleep.lastSleepDrain == nil, "睡眠域：合盖当刻不结算（要等醒来后的快照）")
+	box.advance(11 * 3600)
+	sleep.handleDidWake()
+	sleep.finalizeSleepDrainIfNeeded(batterySnap(percent: 80))
+	expectEqual(sleep.lastSleepDrain?.startPercent, 90,
+				"睡眠域：整夜掉电的起点是合盖那一刻的电量")
+	expectEqual(sleep.lastSleepDrain?.endPercent, 80,
+				"睡眠域：终点是醒来后第一个快照的电量")
+	expectEqual(sleep.sleepDrainHistory.count, 1, "睡眠域：滚动史追加一条")
+	expectEqual(sleep.sleepDrainHistory.first?.sleepDate, t0, "睡眠域：滚动史的 sleepDate 是合盖时刻")
+
+	// 不足 20 分钟的小憩不记掉电记录（时长仍会记进当天用电行）
+	let box2 = MutableHistoryClock(t0)
+	let p2 = domainPersistence()
+	let daily2 = DailyUsageRecorder(persistence: p2, monitor: domainMonitor, clock: box2.clock)
+	let nap = SleepDrainRecorder(persistence: p2, daily: daily2, clock: box2.clock)
+	daily2.updateDailyUsage(batterySnap(percent: 90))
+	nap.handleWillSleep(onAC: false, lastPercent: 90)
+	box2.advance(10 * 60)
+	nap.handleDidWake()
+	nap.finalizeSleepDrainIfNeeded(batterySnap(percent: 89))
+	expect(nap.lastSleepDrain == nil, "睡眠域：不足 20 分钟算小憩，不记掉电记录")
+	expect(nap.sleepDrainHistory.isEmpty, "睡眠域：小憩不进滚动史")
+}
+
+do {
+	// —— 健康趋势：一天一样本 ——
+	let box = MutableHistoryClock(t0)
+	let health = HealthTrendRecorder(
+		persistence: domainPersistence(),
+		defaults: UserDefaults(suiteName: "miaodian.health.domain.test")!,
+		events: PowerEventRecorder(persistence: domainPersistence(), clock: box.clock),
+		monitor: domainMonitor,
+		clock: box.clock
+	)
+	var snap = batterySnap(percent: 80)
+	snap.designCapacityMAh = 5000
+	snap.maxCapacityMAh = 4500
+	snap.cycleCount = 100
+	health.recordDailyHealth(snap)
+	expectEqual(health.healthSamples.count, 1, "健康域：第一拍记一个健康样本")
+	expectEqual(health.healthSamples.first?.healthPercent, 90, "健康域：健康度 = 最大容量/设计容量")
+	box.advance(60 * 60)
+	health.recordDailyHealth(snap)
+	expectEqual(health.healthSamples.count, 1, "健康域：同一天再调不重复记（一天一样本）")
+	box.advance(24 * 3600)
+	health.recordDailyHealth(snap)
+	expectEqual(health.healthSamples.count, 2, "健康域：跨天后记第二个样本")
+}
+
+do {
+	// —— 冷启动加载：门面把 7 个域都接上了，少接一个就是「重启后历史归零」 ——
+	let box = MutableHistoryClock(t0)
+	let p = domainPersistence()
+	let soc = SocSampleRecorder(persistence: p, clock: box.clock)
+	soc.recordSOCSample(batterySnap(percent: 77))
+
+	// 同一份内存档上再建一个域实例：读到的应该是刚写进去的那一点
+	let reopened = SocSampleRecorder(persistence: p, clock: box.clock)
+	reopened.loadFromDisk()
+	expectEqual(reopened.socSamples.count, 1, "域加载：域自己认领自己的键（门面不越权拆包）")
+	expectEqual(reopened.socSamples.first?.percent, 77, "域加载：读回的是写进去的那一点")
+}
+
+}
 
 // MARK: - 汇总
 

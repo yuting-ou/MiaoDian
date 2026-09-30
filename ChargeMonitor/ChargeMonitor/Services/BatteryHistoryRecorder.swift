@@ -2,174 +2,79 @@ import AppKit
 import Combine
 import Foundation
 
-// 充电记录 + 健康度趋势的采集与持久化
-// 与配置一致，数据量小，直接存 UserDefaults
-// 所有时间相关的判定都抽成 nonisolated 纯函数（now 可注入），状态机直测真代码
+// 历史采集的门面：把 7 个按数据域拆开的 recorder 收成一个 @Published 面，供面板/设置/提醒读取。
+//
+// 为什么拆：这个类原本 1400 行、15 组互不相关的累计器挤在一起，24 处直接调 Date()，
+// 想给"睡眠掉电"写个测试得先绕过"充电器档案"。现在每个域自持状态与时钟入口，
+// 各自的纯判定就是那个域的公开 API，能单独测。
+//
+// 门面只做三件事：① 转发 @Published（视图的观察面一个成员都没变）；
+// ② 按拆分前**逐字一致**的顺序驱动各域；③ 持有持久化管道与系统通知的生命周期。
 @MainActor
 final class BatteryHistoryRecorder: ObservableObject {
-	@Published private(set) var recentSessions: [ChargeSession] = []
-	@Published private(set) var healthSamples: [HealthSample] = []
-	// 最近几天的用电累计，末尾是今天，最多保留 90 天（供七天柱图与日历热力图）
-	@Published private(set) var dailyHistory: [DailyUsage] = []
-	// 上一觉合盖的掉电记录
-	@Published private(set) var lastSleepDrain: SleepDrainRecord?
-	/// E1：近两周合盖掉电滚动列表（聚合分析用）；上限 20 条
-	@Published private(set) var sleepDrainHistory: [SleepDrainRecord] = []
-	nonisolated static let sleepDrainHistoryKey = "sleepDrainHistory"
-	nonisolated static let sleepDrainHistoryLimit = 20
-	// 见过的充电器档案
-	@Published private(set) var chargerProfiles: [ChargerProfile] = []
-	// 24 小时电量曲线采样
-	@Published private(set) var socSamples: [SOCSample] = []
-	// 电源事件时间线（插拔电/充满/睡眠唤醒），新的在末尾
-	@Published private(set) var powerEvents: [PowerEvent] = []
-	// 充电器质量诊断：按充电器累计的协商功率样本
-	@Published private(set) var chargerPowerStats: [String: ChargerPowerStats] = [:]
-	// 时段用电：按小时分桶累计的掉电（热力图数据源）
-	@Published private(set) var hourlyDrainStats = HourlyDrainStats()
-	// 时段温度画像：每小时历史最高温，与用电高峰对照出"热叠加"洞察
-	@Published private(set) var hourlyTempStats = HourlyTempStats()
-	// 应用耗电累计：按天记录各应用"高耗电"状态的秒数
-	@Published private(set) var appEnergy: [AppEnergyUsage] = []
-	// 电量跳变事件：电池模式下相邻采样电量突变（电量计失准的表现）
-	@Published private(set) var socJumpEvents: [SocJumpEvent] = []
-	
-	// 今天的用电累计；时区西行使"今天"的键可能不是数组末尾，按键查找
-	var todayUsage: DailyUsage? {
-		dailyHistory.last { $0.dayKey == Self.dayKey(Date()) }
-	}
-	
-	private var activeSession: ChargeSession?
-	// 从磁盘恢复的会话需要先检查时间断档，再决定续接还是归档
-	private var restoredSessionNeedsGapCheck = false
-	// 活动会话是否存活（供"今日充电次数"统计：已充满但未拔电也算充过）
-	var isChargingSessionAlive: Bool { activeSession != nil }
-	private var lastActiveSessionSave = Date.distantPast
-	// 今日用电累计用：上一次看到的电量与采样时刻（时长占比靠它算增量）
-	private var lastPercentForDaily: Int?
-	private var lastUsageSampleDate: Date?
-	private var lastDailyUsageSave = Date.distantPast
-	private var lastChargerStatsSave = Date.distantPast
-	// 事件边沿检测用：上一帧的电源状态
-	private var lastPowerSource: PowerSourceType?
-	private var lastIsFull = false
-	// 睡眠掉电：合盖时的时间、电量和当时的供电来源；醒来后等第一个新快照再结算
-	// onAC 必须在此刻捕获：结算发生在醒来后，那时只剩"现在的"电源状态，
-	// 拿它归因整夜会把"睡前拔着电、醒时插着电"错记成整夜插电
-	private var sleepStart: (date: Date, percent: Int, onAC: Bool)?
-	private var pendingWake: (sleepDate: Date, startPercent: Int, wakeDate: Date, onAC: Bool)?
-	// 充电器档案：本次接入已建档的身份键与接入时刻
-	private var activeChargerKey: String?
-	private var adapterConnectedAt: Date?
-	// 应用耗电累计：上一次计时的时刻（帧间隔超上限视为断档不计）
-	private var lastEnergyTick: Date?
-	private var lastAppEnergySave = Date.distantPast
-	// 跳变检测用：电池模式下上一次采样的电量与时刻（充电/插电即重置）
-	private var lastSocSample: (date: Date, percent: Int)?
-	// 最近一次检测到电池更换的时刻（序列号变化）；nil = 从未换过
-	private var batteryReplacedAt: Date?
-	// monitor 引用：应用耗电累计要读它的"面板是否打开"与当前高耗电列表
+	// 域 recorder。构造顺序有依赖：睡眠结算要把时长记进当天用电行，所以 daily 先于 sleep
+	let sessions: ChargeSessionRecorder
+	let health: HealthTrendRecorder
+	let daily: DailyUsageRecorder
+	let sleep: SleepDrainRecorder
+	let charger: ChargerProfileRecorder
+	let soc: SocSampleRecorder
+	let events: PowerEventRecorder
+
 	private let monitor: BatteryMonitor
 	private var cancellables: Set<AnyCancellable> = []
-	
-	private let defaults: UserDefaults
-	private let decoder = PropertyListDecoder()
-	private let encoder = PropertyListEncoder()
-	// 滚动备份：写入时顺手把各历史键的最新编码攒在内存，定期滚到独立文件；
-	// 主档损坏时从中抢救（详见下方“持久化”）
-	private let backupDirectory: URL?
-	private var backupRaw: [String: Data] = [:]
-	private var lastBackupSave = Date.distantPast
-	
-	nonisolated private static let sessionsKey = "chargeSessions"
-	nonisolated private static let healthKey = "healthSamples"
-	nonisolated private static let activeSessionKey = "activeChargeSession"
-	nonisolated private static let dailyUsageKey = "dailyUsage"
-	nonisolated private static let dailyHistoryKey = "dailyUsageHistory"
-	nonisolated private static let sleepDrainKey = "lastSleepDrain"
-	nonisolated private static let chargerProfilesKey = "chargerProfiles"
-	nonisolated private static let socSamplesKey = "socSamples"
-	nonisolated private static let powerEventsKey = "powerEvents"
-	nonisolated private static let chargerPowerStatsKey = "chargerPowerStats"
-	nonisolated private static let hourlyDrainKey = "hourlyDrainStats"
-	nonisolated private static let hourlyTempKey = "hourlyTempStats"
-	nonisolated private static let appEnergyKey = "appEnergy"
-	nonisolated private static let socJumpEventsKey = "socJumpEvents"
-	// 电池序列号与更换边界：序列号变了 = 现实里换过电池
-	nonisolated private static let batterySerialKey = "batterySerialLastSeen"
-	nonisolated private static let batteryReplacedAtKey = "batteryReplacedAt"
-	nonisolated private static let maxSessions = 20
-	nonisolated private static let maxHealthSamples = 400
-	// 用电历史保留 90 天：七天柱图只看末尾 7 天，日历热力图需要更长跨度
-	nonisolated private static let maxDailyHistory = 90
-	nonisolated private static let maxChargerProfiles = 20
-	nonisolated private static let maxPowerEvents = 50
-	// 同类电源事件间隔小于这个值视为连发，合并只留最新一条
-	nonisolated private static let eventMergeSeconds: TimeInterval = 2 * 60
-	// SOC 采样：窗口 24 小时；平时 10 分钟一点，电量变化/充电状态翻转时加密采点
-	nonisolated private static let socWindowSeconds: TimeInterval = 24 * 3600
-	nonisolated private static let socRegularInterval: TimeInterval = 10 * 60
-	nonisolated private static let socChangeMinInterval: TimeInterval = 3 * 60
-	// 合盖不足 20 分钟算小憩，不计入睡眠掉电记录
-	nonisolated private static let minSleepSeconds: TimeInterval = 20 * 60
-	// 半小时内重复见到同一充电器（如应用重启）不重复计次
-	nonisolated private static let chargerRecountSeconds: TimeInterval = 30 * 60
-	// 适配器名称/厂商信息可能晚几秒才到位，最多等这么久再退而求其次按额定功率建档
-	nonisolated private static let chargerIdentityWaitSeconds: TimeInterval = 10
-	// 恢复的会话离上次落盘超过这个时长，视为中间拔过电源，不再续接
-	nonisolated private static let resumeGapSeconds: TimeInterval = 30 * 60
-	// 曲线点数上限：正常充一次最多百来个点，超出说明电量在临界值反复横跳，不再记
-	nonisolated private static let maxCurvePoints = 200
-	// 滚动备份的文件名与落盘间隔；测试直接引用文件名，保持单一数据源
-	nonisolated static let backupFileName = "history-backup.plist"
-	nonisolated private static let backupIntervalSeconds: TimeInterval = 30 * 60
-	// 跳变事件保留上限（窗口统计只看 30 天，60 条足够）
-	nonisolated private static let maxSocJumpEvents = 60
-	// 相邻采样间隔超过这个值视为睡过：合盖慢放电不算跳变
-	nonisolated private static let socJumpMaxGapSeconds: TimeInterval = 3 * 60
-	
-	convenience init(monitor: BatteryMonitor, defaults: UserDefaults = .standard) {
-		self.init(monitor: monitor, defaults: defaults, backupDirectory: Self.defaultBackupDirectory())
-	}
-	
-	// backupDirectory 显式传 nil 表示关闭备份（单测用）
-	init(monitor: BatteryMonitor, defaults: UserDefaults, backupDirectory: URL?) {
-		self.defaults = defaults
-		self.backupDirectory = backupDirectory
+	// 子 recorder 的 @Published 转发到门面的 objectWillChange。
+	// 视图观察的是门面：少转发一条就是"界面不刷新"的静默 bug，所以这里用数组一次挂全
+	private var childCancellables: Set<AnyCancellable> = []
+
+	// backupDirectory 显式传 nil 表示关闭**备份**（单测/量具用）——它只管备份这一件事：
+	// 历史主档仍走 defaultByteStore（生产=文件，量具被 MIAODIAN_HISTORY_DIR 改道）。
+	// byteStore 只有显式传才换存储。
+	//
+	// 这里踩过一次：早先 byteStore 不传就默认成内存档，于是"关备份"顺手把历史也清空了——
+	// 三个量具（离屏验收 2 处、滚动成本 2 处）全中，面板掉一半高度、真档案腿整条跳过。
+	// **不要把"关备份"和"不落盘"耦合成一个默认值**；真要不落盘请显式传 InMemoryHistoryByteStore()。
+	// 内部名用 store 而不是 byteStore：参数会遮蔽同名属性，init 里少写一个 self. 就会静默变成可选参数
+	init(monitor: BatteryMonitor, defaults: UserDefaults, backupDirectory: URL?, byteStore store: HistoryByteStore? = nil) {
+		let persistence = HistoryPersistence(
+			byteStore: Self.resolvedByteStore(override: store, defaults: defaults),
+			backupDirectory: backupDirectory
+		)
 		self.monitor = monitor
-		// 备份先于主档加载：主档损坏时靠它抢救
-		backupRaw = loadBackupRaw()
-		recentSessions = load([ChargeSession].self, key: Self.sessionsKey) ?? []
-		healthSamples = load([HealthSample].self, key: Self.healthKey) ?? []
-		// 上次退出时若正在充电，把进行中的会话捡回来，中途退出不丢记录
-		activeSession = load(ChargeSession.self, key: Self.activeSessionKey)
-		restoredSessionNeedsGapCheck = activeSession != nil
-		// 用电历史也捡回来；早期版本只存单天，迁移进历史数组后删旧键
-		if let history = load([DailyUsage].self, key: Self.dailyHistoryKey) {
-			dailyHistory = history
-		} else if let old = load(DailyUsage.self, key: Self.dailyUsageKey) {
-			dailyHistory = [old]
-			save(dailyHistory, key: Self.dailyHistoryKey)
-			defaults.removeObject(forKey: Self.dailyUsageKey)
+		self.events = PowerEventRecorder(persistence: persistence)
+		self.sessions = ChargeSessionRecorder(persistence: persistence)
+		self.health = HealthTrendRecorder(persistence: persistence, defaults: defaults, events: events, monitor: monitor)
+		self.daily = DailyUsageRecorder(persistence: persistence, monitor: monitor)
+		self.sleep = SleepDrainRecorder(persistence: persistence, daily: daily)
+		self.charger = ChargerProfileRecorder(persistence: persistence)
+		self.soc = SocSampleRecorder(persistence: persistence)
+
+		// 各域自己认领自己的键；门面不越权拆包（否则拆出来的域等于没拆）
+		// events 先加载：health 的换电池检测会往事件时间线写一笔，顺序反了会丢那一条
+		events.loadFromDisk()
+		sessions.loadFromDisk()
+		health.loadFromDisk()
+		daily.loadFromDisk()
+		sleep.loadFromDisk()
+		charger.loadFromDisk()
+		soc.loadFromDisk()
+
+		// 子 recorder 的变更转发给门面：视图只订阅门面一个对象
+		for publisher in [
+			sessions.objectWillChange, health.objectWillChange, daily.objectWillChange,
+			sleep.objectWillChange, charger.objectWillChange, soc.objectWillChange,
+			events.objectWillChange,
+		] {
+			publisher
+				.sink { [weak self] _ in self?.objectWillChange.send() }
+				.store(in: &childCancellables)
 		}
-		
-		lastSleepDrain = load(SleepDrainRecord.self, key: Self.sleepDrainKey)
-		sleepDrainHistory = load([SleepDrainRecord].self, key: Self.sleepDrainHistoryKey) ?? []
-		chargerProfiles = Self.foldingOrphanProfiles(load([ChargerProfile].self, key: Self.chargerProfilesKey) ?? [])
-		socSamples = load([SOCSample].self, key: Self.socSamplesKey) ?? []
-		powerEvents = load([PowerEvent].self, key: Self.powerEventsKey) ?? []
-		chargerPowerStats = load([String: ChargerPowerStats].self, key: Self.chargerPowerStatsKey) ?? [:]
-		hourlyDrainStats = load(HourlyDrainStats.self, key: Self.hourlyDrainKey) ?? HourlyDrainStats()
-		hourlyTempStats = load(HourlyTempStats.self, key: Self.hourlyTempKey) ?? HourlyTempStats()
-		appEnergy = load([AppEnergyUsage].self, key: Self.appEnergyKey) ?? []
-		socJumpEvents = load([SocJumpEvent].self, key: Self.socJumpEventsKey) ?? []
-		batteryReplacedAt = defaults.object(forKey: Self.batteryReplacedAtKey) as? Date
-		detectBatterySwap()
+
 		// 监听系统睡眠/唤醒，统计合盖期间掉了多少电
 		let workspaceCenter = NSWorkspace.shared.notificationCenter
 		workspaceCenter.addObserver(self, selector: #selector(handleWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
 		workspaceCenter.addObserver(self, selector: #selector(handleDidWake), name: NSWorkspace.didWakeNotification, object: nil)
-		
+
 		// 订阅一建立就会立刻收到当前快照，所以必须放在各项数据加载之后
 		monitor.$snapshot
 			.sink { [weak self] snapshot in
@@ -177,1081 +82,111 @@ final class BatteryHistoryRecorder: ObservableObject {
 			}
 			.store(in: &cancellables)
 	}
-	
-	// 电池更换事件边界：换电池后旧趋势与新读数不可比，健康趋势/预测只看更换之后的样本
-	var trendHealthSamples: [HealthSample] {
-		Self.filteringHealthSamplesForTrend(healthSamples, replacedAt: batteryReplacedAt)
+
+	convenience init(monitor: BatteryMonitor, defaults: UserDefaults = .standard) {
+		self.init(
+			monitor: monitor,
+			defaults: defaults,
+			backupDirectory: Self.defaultBackupDirectory(),
+			byteStore: Self.defaultByteStore(defaults: defaults)
+		)
 	}
 
-	// 纯函数，供单测直测：更换边界前的样本全部丢弃
-	nonisolated static func filteringHealthSamplesForTrend(_ samples: [HealthSample], replacedAt: Date?) -> [HealthSample] {
-		guard let replacedAt else { return samples }
-		return samples.filter { $0.date >= replacedAt }
+	// MARK: - 对外数据面（转发，成员名与拆分前逐字一致）
+
+	var recentSessions: [ChargeSession] { sessions.recentSessions }
+	var isChargingSessionAlive: Bool { sessions.isChargingSessionAlive }
+	var healthSamples: [HealthSample] { health.healthSamples }
+	var healthTrend: (earliest: HealthSample, latest: HealthSample)? { health.healthTrend }
+	var trendHealthSamples: [HealthSample] { health.trendHealthSamples }
+	var dailyHistory: [DailyUsage] { daily.dailyHistory }
+	var todayUsage: DailyUsage? { daily.todayUsage }
+	var lastSleepDrain: SleepDrainRecord? { sleep.lastSleepDrain }
+	var sleepDrainHistory: [SleepDrainRecord] { sleep.sleepDrainHistory }
+	var chargerProfiles: [ChargerProfile] { charger.chargerProfiles }
+	var currentChargerProfile: ChargerProfile? { charger.currentChargerProfile }
+	var currentChargerPowerStats: ChargerPowerStats? { charger.currentChargerPowerStats }
+	var socSamples: [SOCSample] { soc.socSamples }
+	var socJumpEvents: [SocJumpEvent] { soc.socJumpEvents }
+	var powerEvents: [PowerEvent] { events.powerEvents }
+	var chargerPowerStats: [String: ChargerPowerStats] { charger.chargerPowerStats }
+	var hourlyDrainStats: HourlyDrainStats { daily.hourlyDrainStats }
+	var hourlyTempStats: HourlyTempStats { daily.hourlyTempStats }
+	var appEnergy: [AppEnergyUsage] { daily.appEnergy }
+
+	func setChargerCustomName(key: String, customName: String?) {
+		charger.setChargerCustomName(key: key, customName: customName)
 	}
 
-	// 健康趋势：最早一笔和最新一笔的对比（跨度至少 1 天才有意义）
-	var healthTrend: (earliest: HealthSample, latest: HealthSample)? {
-		let samples = trendHealthSamples
-		guard
-			let earliest = samples.first,
-			let latest = samples.last,
-			latest.date.timeIntervalSince(earliest.date) >= 24 * 3600
-		else { return nil }
-		return (earliest, latest)
-	}
-	
+	// MARK: - 每拍驱动
+
+	// 顺序与拆分前逐字一致，两处顺序是**有理由的**，改动前先读注释：
+	// ① 先认充电器再开会话：新会话要带上"是谁充的"身份键
+	// ② 睡眠结算要在建好当天日行之后：跨午夜那一觉醒来时"今天"的行还不存在，
+	//    先结算会被 creditingSleepTime 的"缺行跳过"整夜吞掉
 	private func process(_ snapshot: BatterySnapshot) {
-		// 先认充电器再开会话：新会话要带上"是谁充的"身份键
-		updateChargerProfile(snapshot)
-		updateChargeSession(snapshot)
-		accumulateChargerPower(snapshot)
-		recordDailyHealth(snapshot)
-		updateDailyUsage(snapshot)
-		// 睡眠结算要在建好当天日行之后：跨午夜那一觉醒来时"今天"的行还不存在，
-		// 先结算会被 creditingSleepTime 的"缺行跳过"整夜吞掉
-		finalizeSleepDrainIfNeeded(snapshot)
-		recordSOCSample(snapshot)
-		recordPowerEvents(snapshot)
-		accumulateAppEnergy()
-		trackSocJumps(snapshot)
-		accumulateHourlyTemp(snapshot)
+		charger.updateChargerProfile(snapshot)
+		sessions.updateChargeSession(snapshot, chargerKey: charger.activeChargerKey)
+		charger.accumulateChargerPower(snapshot)
+		health.recordDailyHealth(snapshot)
+		daily.updateDailyUsage(snapshot)
+		sleep.finalizeSleepDrainIfNeeded(snapshot)
+		soc.recordSOCSample(snapshot)
+		events.recordPowerEvents(snapshot)
+		daily.accumulateAppEnergy()
+		soc.trackSocJumps(snapshot)
+		daily.accumulateHourlyTemp(snapshot)
 	}
 
-	// 温度画像每帧记入当前小时的峰值；只有真刷新了峰值才落盘（每小时至多几次写）
-	private func accumulateHourlyTemp(_ snapshot: BatterySnapshot) {
-		guard let celsius = snapshot.temperatureC, celsius > 0 else { return }
-		let now = Date()
-		let before = hourlyTempStats
-		hourlyTempStats = UsagePatternAnalyzer.accumulatingHourlyTemp(
-			hourlyTempStats,
-			hour: Calendar.current.component(.hour, from: now),
-			celsius: celsius,
-			dayKey: UsagePatternAnalyzer.dayKeyString(now)
-		)
-		if hourlyTempStats != before {
-			save(hourlyTempStats, key: Self.hourlyTempKey)
-		}
-	}
+	// MARK: - 合盖/唤醒（转给睡眠与事件两个域）
 
-	// MARK: - 电量计跳变
-
-	// 电池模式下相邻采样（10 秒级）电量本不该突变 ≥2%，出现即记一笔跳变；
-	// 插电/充电即重置追踪（充电时的电量快涨是正常 CC/CV 行为）
-	private func trackSocJumps(_ snapshot: BatterySnapshot) {
-		guard snapshot.powerSource == .battery, !snapshot.isCharging,
-			let percent = snapshot.stateOfChargePercent else {
-			lastSocSample = nil
-			return
-		}
-		let now = Date()
-		defer { lastSocSample = (now, percent) }
-		guard let last = lastSocSample,
-			now.timeIntervalSince(last.date) <= Self.socJumpMaxGapSeconds,
-			UsagePatternAnalyzer.isSocJump(from: last.percent, to: percent) else { return }
-		let events = Self.appendingSocJump(
-			socJumpEvents,
-			from: last.percent,
-			to: percent,
-			at: now,
-			maxEvents: Self.maxSocJumpEvents
-		)
-		guard events != socJumpEvents else { return }
-		socJumpEvents = events
-		save(events, key: Self.socJumpEventsKey)
-	}
-
-	// 追加一条跳变事件并封顶（纯函数，单测直测）
-	nonisolated static func appendingSocJump(
-		_ events: [SocJumpEvent],
-		from: Int,
-		to: Int,
-		at date: Date,
-		maxEvents: Int
-	) -> [SocJumpEvent] {
-		var events = events
-		events.append(SocJumpEvent(date: date, fromPercent: from, toPercent: to))
-		if events.count > maxEvents {
-			events.removeFirst(events.count - maxEvents)
-		}
-		return events
-	}
-	
-	// MARK: - 纯判定（now 可注入，状态机直测）
-	
-	// 从磁盘恢复的会话只有“中间没拔过电”才配续接：
-	// 离上次落盘太久视为中间拔过电，旧会话该归档，避免两段充电被粘成一条
-	nonisolated static func shouldResumeRestoredSession(_ session: ChargeSession, now: Date) -> Bool {
-		now.timeIntervalSince(session.endDate) <= resumeGapSeconds
-	}
-	
-	// 过滤插拔瞬间的无效会话：时长不足 2 分钟且电量没涨的不值得归档
-	nonisolated static func isSessionWorthArchiving(_ session: ChargeSession) -> Bool {
-		session.durationMinutes >= 2 || session.endPercent > session.startPercent
-	}
-
-	// 会话归档判定：只在真正拔电时结束会话——优化充电的暂停（仍插着电）不算结束
-	nonisolated static func shouldArchiveActiveSession(powerSource: PowerSourceType) -> Bool {
-		powerSource != .powerAdapter
-	}
-	
-	// 追加一条电源事件：同类短时间内连发（插头接触不良反复断连、反复重启应用）
-	// 合并只留最新一条，不刷屏；总长度封顶，新的挤掉最旧的
-	nonisolated static func appendingPowerEvent(_ events: [PowerEvent], kind: PowerEventKind, now: Date) -> [PowerEvent] {
-		var events = events
-		if let last = events.last, last.kind == kind, now.timeIntervalSince(last.date) < eventMergeSeconds {
-			events[events.count - 1] = PowerEvent(date: now, kind: kind)
-		} else {
-			events.append(PowerEvent(date: now, kind: kind))
-		}
-		if events.count > maxPowerEvents {
-			events.removeFirst(events.count - maxPowerEvents)
-		}
-		return events
-	}
-	
-	// 充电器身份键：名称|厂商|额定功率[|PD档位签名][|无线]，建档与相认都靠它，各处必须同源。
-	// 档位签名让"两只都是 100W"的不同充电器分开——不同品牌/型号广播的 PDO 组合
-	// 几乎必然不同；非 PD 头没有档位表，键退回旧格式，存量档案不重置。
-	nonisolated static func chargerKey(
-		name: String,
-		manufacturer: String,
-		ratedWatts: Int,
-		tiers: [PowerTier] = [],
-		isWireless: Bool = false
-	) -> String {
-		var key = "\(name)|\(manufacturer)|\(ratedWatts)"
-		let signature = tierSignature(tiers)
-		if !signature.isEmpty { key += "|\(signature)" }
-		if isWireless { key += "|无线" }
-		return key
-	}
-
-	// 档位集合排序拼接的稳定签名（顺序无关）；读不到档位时为空
-	nonisolated static func tierSignature(_ tiers: [PowerTier]) -> String {
-		tiers.map { "\($0.maxVoltageMV)V\($0.maxCurrentMA)A" }.sorted().joined(separator: "/")
-	}
-
-	// 兜底名判定：建档时名称/厂商没广播出来，档案名落到"N瓦 充电器"模式——
-	// 这是"没认出来"的痕迹而非真名，归并判定与真名回填都以它为信号
-	nonisolated static func isFallbackChargerName(_ name: String, ratedWatts: Int?) -> Bool {
-		if name.isEmpty { return true }
-		if name.hasSuffix("W 充电器") { return true }
-		if let ratedWatts, ratedWatts > 0, name == "\(ratedWatts)W 充电器" { return true }
-		return false
-	}
-
-	// 识别 v2：降档形态判定——同一只头被分走功率时，本口广播的档位与满载母集
-	// 同数量、同电压阶梯、电流只降不增（如 20V/3.5A 是 20V/5A 的降档形态）。
-	// 刻意要求档位数量一致：不同的小头（如 65W 缺 15V 档）逐档被包含也不算同一只
-	nonisolated static func tiers(_ degraded: [PowerTier], degradationOf mother: [PowerTier]) -> Bool {
-		guard degraded.count == mother.count, !degraded.isEmpty else { return false }
-		return degraded.allSatisfy { tier in
-			mother.contains { $0.maxVoltageMV == tier.maxVoltageMV && $0.maxCurrentMA >= tier.maxCurrentMA }
-		}
-	}
-
-	// 档位签名反解析（归并判定要拿母档案的档位集合比较）
-	nonisolated static func tiers(fromSignature signature: String) -> [PowerTier] {
-		signature.split(separator: "/").compactMap { token in
-			let parts = token.split(separator: "V")
-			guard parts.count == 2, let v = Int(parts[0]), let a = Int(parts[1].dropLast()) else { return nil }
-			return PowerTier(maxVoltageMV: v, maxCurrentMA: a)
-		}
-	}
-
-	// 别名感知的档案查找：正式键或别名键都认（归并后的历史会话键是别名）
-	nonisolated static func chargerProfile(matching key: String, in profiles: [ChargerProfile]) -> ChargerProfile? {
-		profiles.first { $0.key == key || $0.aliases?.contains(key) == true }
-	}
-
-	// 识别 v2 核心：把"无名降档孤儿"归并进"有名母档案"，返回归并后档案与正式键。
-	// 孤儿 = 名称为空的档案或未建档的新键（多口分功率时名称/厂商/瓦数/档位会一起漂移）；
-	// 母档案条件 = 有名 + 孤儿档位 ⊆ 母档位 + 无线标记一致。
-	// 幂等：归并后孤儿键进 aliases，再次调用命中别名直接返回母键。
-	// 保守边界：有名的新键视为真新头不归并；无名对无名不归并（无信号）。
-	nonisolated static func foldingOrphanCharger(
-		profiles: [ChargerProfile],
-		orphanKey: String,
-		orphanName: String,
-		orphanConnectCount: Int,
-		orphanRatedWatts: Int?,
-		orphanTiers: [PowerTier],
-		isWireless: Bool
-	) -> (profiles: [ChargerProfile], canonicalKey: String) {
-		// 精确命中（正式键或别名）→ 正式键；命中的若是有名档案即完成
-		if let hit = chargerProfile(matching: orphanKey, in: profiles) {
-			// 命中的是无名/兜底名档案：尝试把它并入某个有名母档案（历史遗留孤儿的收编）
-			if !isFallbackChargerName(hit.name, ratedWatts: hit.ratedWatts) { return (profiles, hit.key) }
-			// 命中的是无名档案：尝试把它并入某个有名母档案（历史遗留孤儿的收编）；
-			// 必须带上孤儿自己的档位/次数/瓦数——它们描述的是同一只头的降档历史
-			if let resolved = foldingOrphanIntoMother(
-				profiles: profiles,
-				orphanKey: orphanKey,
-				orphanConnectCount: hit.connectCount,
-				orphanRatedWatts: hit.ratedWatts,
-				orphanTiers: tiers(fromSignature: hit.tierSignature ?? ""),
-				isWireless: hit.key.hasSuffix("|无线")
-			) {
-				return (resolved.profiles, resolved.canonicalKey)
-			}
-			return (profiles, hit.key)
-		}
-		// 未建档的新键：无名（含兜底名）才可能是有名母档案的降档形态；有名新键就是新头
-		guard isFallbackChargerName(orphanName, ratedWatts: orphanRatedWatts), !orphanTiers.isEmpty,
-			let resolved = foldingOrphanIntoMother(
-				profiles: profiles,
-				orphanKey: orphanKey,
-				orphanConnectCount: 0,
-				orphanRatedWatts: orphanRatedWatts,
-				orphanTiers: orphanTiers,
-				isWireless: isWireless
-			) else { return (profiles, orphanKey) }
-		return (resolved.profiles, resolved.canonicalKey)
-	}
-
-	// 归并执行：孤儿（已有档案或仅新键）并入母档案。次数相加、首见取早、末见取晚、
-	// 观察瓦数并集、别名收编（孤儿自己的别名一并带上，链式归并不断链）
-	nonisolated private static func foldingOrphanIntoMother(
-		profiles: [ChargerProfile],
-		orphanKey: String,
-		orphanConnectCount: Int = 0,
-		orphanRatedWatts: Int? = nil,
-		orphanTiers: [PowerTier] = [],
-		isWireless: Bool = false
-	) -> (profiles: [ChargerProfile], canonicalKey: String)? {
-		guard let motherIndex = profiles.firstIndex(where: { mother in
-			// "有名" = 有真名或用户认领名（customName 是最强身份信号）；
-			// 纯兜底名（"100W 充电器"）即使是母头本尊，也因无真名信号而保持独立
-			(!isFallbackChargerName(mother.name, ratedWatts: mother.ratedWatts)
-				|| mother.customName?.isEmpty == false)
-				&& mother.key != orphanKey
-				&& tiers(orphanTiers, degradationOf: tiers(fromSignature: mother.tierSignature ?? ""))
-				&& mother.key.hasSuffix("|无线") == isWireless
-		}) else { return nil }
-
-		var mother = profiles[motherIndex]
-		var aliases = mother.aliases ?? []
-		aliases.append(orphanKey)
-
-		var result = profiles
-		if let orphanIndex = result.firstIndex(where: { $0.key == orphanKey }) {
-			let orphan = result[orphanIndex]
-			mother.connectCount += orphan.connectCount
-			mother.firstSeen = Swift.min(mother.firstSeen, orphan.firstSeen)
-			mother.lastSeen = Swift.max(mother.lastSeen, orphan.lastSeen)
-			if mother.customName == nil { mother.customName = orphan.customName }
-			aliases.append(contentsOf: orphan.aliases ?? [])
-			result.remove(at: orphanIndex)
-		}
-		var observed = Set(mother.observedWatts ?? [])
-		if let orphanRatedWatts, orphanRatedWatts > 0 { observed.insert(orphanRatedWatts) }
-		if let motherRated = mother.ratedWatts, motherRated > 0 { observed.insert(motherRated) }
-		mother.aliases = Array(Set(aliases)).filter { $0 != mother.key }.sorted()
-		mother.observedWatts = observed.sorted()
-		result[motherIndex] = mother
-		return (result, mother.key)
-	}
-
-	// 识别 v2 迁移：把历史遗留的"无名降档孤儿档案"并回有名母档案（幂等，读档后跑一次）。
-	// 一轮归并可能露出新的可归并对（别名链），循环到不再变化
-	nonisolated static func foldingOrphanProfiles(_ profiles: [ChargerProfile]) -> [ChargerProfile] {
-		var result = profiles
-		var changed = true
-		while changed {
-			changed = false
-			for orphan in result where isFallbackChargerName(orphan.name, ratedWatts: orphan.ratedWatts) {
-				let orphanTiers = tiers(fromSignature: orphan.tierSignature ?? "")
-				guard !orphanTiers.isEmpty else { continue }
-				let folded = foldingOrphanCharger(
-					profiles: result,
-					orphanKey: orphan.key,
-					orphanName: orphan.name,
-					orphanConnectCount: orphan.connectCount,
-					orphanRatedWatts: orphan.ratedWatts,
-					orphanTiers: orphanTiers,
-					isWireless: orphan.key.hasSuffix("|无线")
-				)
-				guard folded.profiles.count < result.count else { continue }
-				result = folded.profiles
-				changed = true
-				break
-			}
-		}
-		return result
-	}
-
-	// 名称后到补全：建档时名没广播出来（10 秒兜底建档），后续采样把真名补上——
-	// 显示与归并判定都以真名为准
-	nonisolated static func backfillingChargerName(profiles: [ChargerProfile], key: String, name: String) -> [ChargerProfile] {
-		var profiles = profiles
-		guard !name.isEmpty,
-			let index = profiles.firstIndex(where: { $0.key == key || $0.aliases?.contains(key) == true }),
-			isFallbackChargerName(profiles[index].name, ratedWatts: profiles[index].ratedWatts) else { return profiles }
-		var profile = profiles[index]
-		profile.name = name
-		profiles[index] = profile
-		return profiles
-	}
-
-	// 已知身份的充电器更新或建档：
-	// 重连窗口内再见不重复计次（如应用重启），超窗算一次新连接；档案满了挤掉最久没见的
-	nonisolated static func upsertingChargerProfile(
-		_ profiles: [ChargerProfile],
-		key: String,
-		name: String,
-		manufacturer: String,
-		ratedWatts: Int,
-		tierSignature: String? = nil,
-		observedWatts: Int? = nil,
-		now: Date
-	) -> [ChargerProfile] {
-		var profiles = profiles
-		if let index = profiles.firstIndex(where: { $0.key == key }) {
-			if now.timeIntervalSince(profiles[index].lastSeen) > chargerRecountSeconds {
-				profiles[index].connectCount += 1
-			}
-			profiles[index].lastSeen = now
-			// 名称后到补全 + 观察瓦数并集（同一头随负载浮动，见多识广不是换头）
-			if profiles[index].name.isEmpty, !name.isEmpty { profiles[index].name = name }
-			if let observedWatts, observedWatts > 0 {
-				var seen = Set(profiles[index].observedWatts ?? [])
-				seen.insert(observedWatts)
-				if let rated = profiles[index].ratedWatts, rated > 0 { seen.insert(rated) }
-				profiles[index].observedWatts = Array(seen).sorted()
-			}
-		} else {
-			let fallbackName = manufacturer.isEmpty ? "\(ratedWatts)W 充电器" : manufacturer
-			profiles.append(ChargerProfile(
-				key: key,
-				name: name.isEmpty ? fallbackName : name,
-				ratedWatts: ratedWatts > 0 ? ratedWatts : nil,
-				firstSeen: now,
-				lastSeen: now,
-				connectCount: 1,
-				tierSignature: tierSignature,
-				aliases: nil,
-				observedWatts: ratedWatts > 0 ? [ratedWatts] : nil
-			))
-			if profiles.count > maxChargerProfiles {
-				profiles.sort { $0.lastSeen < $1.lastSeen }
-				profiles.removeFirst(profiles.count - maxChargerProfiles)
-			}
-		}
-		return profiles
-	}
-	
-	// 帧间隔超过归因窗口视为睡过：跨睡眠的电量差是夜里慢慢掉/慢慢充的，
-	// 全记到醒来那一帧会把整夜耗电/充电错记成瞬时变化（时段热力图也会错桶），一律不计
-	nonisolated private static let usageAttributionGapSeconds: TimeInterval = 3 * 60
-
-	// 插入新的一天并保持 dayKey 升序：时区西行/时钟回拨会让"今天"的键比已存键更早，
-	// 不排序则封顶 removeFirst 会错删较新的天，报告与柱图的窗口起点也会错乱。
-	// v1.18.5 封顶护今（状态机边界）：排序后若封顶会裁掉"今天"（西行跨日界线后今天
-	// 就是全表最旧键），改为跳过今天、从今天的后继起裁掉 excess 个最老的旧天——
-	// 今日小结不能因为时区旅行当天永久缺失（旧实现裁掉今天后 firstIndex 找不到键，
-	// 当天帧全部静默丢弃，且西行期间天天如此）。今天不在裁剪区间 → 普通封顶。
-	nonisolated static func insertingDailyUsage(_ history: [DailyUsage], dayKey: String, maxDays: Int) -> [DailyUsage] {
-		var history = history
-		// 建行之时把当时生效的归因窗口钉进这一行：口径以后还会变，跨天比值必须有同桶依据
-		history.append(DailyUsage(dayKey: dayKey, attributionGapSeconds: Self.usageAttributionGapSeconds))
-		history.sort { $0.dayKey < $1.dayKey }
-		let excess = history.count - maxDays
-		guard excess > 0 else { return history }
-		// 封顶永不失「今天」：从最旧起删掉 excess 个非今天的天。
-		// 不按下标切片——超长档 + 今天落中部时 (todayIndex+1+excess) 会越界 trap
-		// （restore 不封顶的 dailyHistory 跨时区西行即可触发）。
-		var toRemove = excess
-		var kept: [DailyUsage] = []
-		kept.reserveCapacity(maxDays)
-		for day in history {
-			if day.dayKey != dayKey, toRemove > 0 {
-				toRemove -= 1
-				continue
-			}
-			kept.append(day)
-		}
-		return kept
-	}
-
-	// 一帧快照累计进当日用电：电池模式掉的计入用电，充电时涨的计入充入；
-	// 反向变化不计（电池模式下回升多是校准波动，插电时掉电不算用户用电）；
-	// 帧间隔超上限视为睡过，那段时间不计入插电/电池时长
-	nonisolated static func accumulatingDailyUsage(
-		_ usage: DailyUsage,
-		percent: Int,
-		lastPercent: Int?,
-		powerSource: PowerSourceType,
-		isCharging: Bool,
-		secondsSinceLastSample: TimeInterval?
-	) -> DailyUsage {
-		var usage = usage
-		// 电量差只在连续采样间归因；间隔需为正且未跨睡眠
-		let isContiguous = secondsSinceLastSample.map { $0 > 0 && $0 <= usageAttributionGapSeconds } ?? false
-		if isContiguous, let last = lastPercent {
-			if percent < last, powerSource == .battery {
-				usage.drainedPercent += last - percent
-			} else if percent > last, isCharging {
-				usage.chargedPercent += percent - last
-			}
-		}
-		// 时长与掉电共用同一个归因窗口：窗口内两样都记，超窗两样都不记。
-		// 旧实现这里另设 30 秒小帽（掉电允许 180 秒），App Nap 或维护性睡眠把轮询
-		// 拖到 30~180 秒时，掉电照记、时长整段消失——本机实测某日 13.7 小时只归因
-		// 2.2 小时，醒着强度被抬到真值的数倍，动态续航的校准输入因此是假的。
-		if let delta = secondsSinceLastSample, isContiguous {
-			if powerSource == .powerAdapter {
-				usage.acSeconds += delta
-			} else {
-				usage.batterySeconds += delta
-			}
-			// 高电量驻留：电化学应力看的是"停在多高的电量"，与插不插电无关
-			if percent >= 90 {
-				usage.soc90to100Seconds += delta
-			} else if percent >= 80 {
-				usage.soc80to90Seconds += delta
-			}
-		}
-		return usage
-	}
-	
-	// 这一帧是否记入 24 小时电量曲线：平时按固定间隔记，
-	// 电量变化（距上点有最小间隔）或充电状态翻转时加密采点
-	nonisolated static func shouldRecordSOCSample(last: SOCSample?, percent: Int, isCharging: Bool, now: Date) -> Bool {
-		guard let last else { return true }
-		let elapsed = now.timeIntervalSince(last.date)
-		let chargingFlipped = last.isCharging != isCharging
-		let percentMoved = last.percent != percent && elapsed >= socChangeMinInterval
-		return chargingFlipped || percentMoved || elapsed >= socRegularInterval
-	}
-	
-	// 醒来结算睡眠掉电；不足 20 分钟的小憩不记录
-	nonisolated static func settledSleepDrain(sleepDate: Date, startPercent: Int, wakeDate: Date, endPercent: Int) -> SleepDrainRecord? {
-		guard wakeDate.timeIntervalSince(sleepDate) >= minSleepSeconds else { return nil }
-		return SleepDrainRecord(sleepDate: sleepDate, wakeDate: wakeDate, startPercent: startPercent, endPercent: endPercent)
-	}
-
-	// MARK: - 睡眠段时长归因（纯函数，供单测）
-
-	// 睡眠段拆成按自然日的片段：合盖→醒来之间没有采样帧，但插电/电池时长与高电量驻留
-	// 是真实发生的，不补记则每天记到的时长只有醒着那几小时（实测 09-22 只记到 6.1h，
-	// 而那一夜 11.9h 睡眠全丢）——续航换算、驻留洞察、插电占比全部偏低。
-	// 两端电量已知，中间按时间线性看待（慢放/慢充本就近似线性），跨午夜时两天各算各的那段；
-	// 日键走 UsageCalendarLayout.dayKey（与注入 calendar.timeZone 同源，时区漂移不错位）。
-	// 睡眠中的供电来源变化无从观测，整段按合盖那一刻的电源归因（诚实边界）。
-	nonisolated static func sleepSegmentParts(
-		sleepDate: Date,
-		startPercent: Int,
-		wakeDate: Date,
-		endPercent: Int,
-		calendar: Calendar
-	) -> [SleepSegmentPart] {
-		let total = wakeDate.timeIntervalSince(sleepDate)
-		guard total > 0 else { return [] }
-		let span = Double(endPercent - startPercent)
-		var parts: [SleepSegmentPart] = []
-		var cursor = sleepDate
-		while cursor < wakeDate {
-			guard let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: cursor)) else { break }
-			let end = min(midnight, wakeDate)
-			parts.append(SleepSegmentPart(
-				dayKey: UsageCalendarLayout.dayKey(cursor, calendar: calendar),
-				seconds: end.timeIntervalSince(cursor),
-				startPercent: Double(startPercent) + span * (cursor.timeIntervalSince(sleepDate) / total),
-				endPercent: Double(startPercent) + span * (end.timeIntervalSince(sleepDate) / total)
-			))
-			cursor = end
-		}
-		return parts
-	}
-
-	/// 段内「电量 ≥ 阈值」的时间占比。单调线性路径下，电量区间与时间区间成正比，
-	/// 闭式解为高端点到阈值的距离占总落差之比；两端同值时要么全程要么全无。
-	nonisolated static func dwellShareAbove(_ threshold: Double, from startPercent: Double, to endPercent: Double) -> Double {
-		let hi = max(startPercent, endPercent), lo = min(startPercent, endPercent)
-		if hi == lo { return hi >= threshold ? 1 : 0 }
-		return min(max((hi - threshold) / (hi - lo), 0), 1)
-	}
-
-	/// 睡眠段结算进日行。只补时长与驻留，不动 drainedPercent/chargedPercent
-	/// （电量差仍归连续采样窗，否则整夜掉电会被当成"瞬时用电"）；
-	/// 那天没有日行则跳过——凭空造一行会让"记录 N 天"与月报日均分母虚增。
-	nonisolated static func creditingSleepTime(
-		_ history: [DailyUsage],
-		parts: [SleepSegmentPart],
-		onAC: Bool
-	) -> [DailyUsage] {
-		var history = history
-		for part in parts {
-			// 短于归因窗的睡眠，跨它的那一帧已经按同一段记过时长与驻留；
-			// 两条路径以同一个窗口分界（≤窗归帧、>窗归睡眠段），重叠区间不再双计
-			guard part.seconds > usageAttributionGapSeconds else { continue }
-			guard part.seconds > 0, let index = history.firstIndex(where: { $0.dayKey == part.dayKey }) else { continue }
-			if onAC {
-				history[index].acSeconds += part.seconds
-				// 插电那半边也要留痕：没有这一笔，「醒着口径」的插电占比无从还原
-				// （旧实现只给电池那半边记了 sleepBatterySeconds）
-				history[index].sleepACSeconds = (history[index].sleepACSeconds ?? 0) + part.seconds
-			} else {
-				history[index].batterySeconds += part.seconds
-				// 单独记一份"来自睡眠的电池时长"：醒着掉电/醒着时长这类比值要拿它减回分母
-				history[index].sleepBatterySeconds = (history[index].sleepBatterySeconds ?? 0) + part.seconds
-			}
-			let above90 = dwellShareAbove(90, from: part.startPercent, to: part.endPercent)
-			let above80 = dwellShareAbove(80, from: part.startPercent, to: part.endPercent)
-			history[index].soc90to100Seconds += part.seconds * above90
-			history[index].soc80to90Seconds += part.seconds * (above80 - above90)
-		}
-		return history
-	}
-	
-	// MARK: - 电池更换检测
-
-	// 序列号变了 = 现实里换过电池：记一条电源事件作为趋势边界，
-	// 否则健康曲线会凭空"反弹"、寿命预测拿旧电池的趋势套新电池
-	private func detectBatterySwap() {
-		guard let serial = monitor.batteryIdentity?.serialNumber, !serial.isEmpty else { return }
-		let stored = defaults.string(forKey: Self.batterySerialKey)
-		defaults.set(serial, forKey: Self.batterySerialKey)
-		guard Self.shouldFlagBatterySwap(stored: stored, current: serial) else { return }
-		let now = Date()
-		batteryReplacedAt = now
-		defaults.set(now, forKey: Self.batteryReplacedAtKey)
-		powerEvents = Self.appendingPowerEvent(powerEvents, kind: .batteryReplaced, now: now)
-		save(powerEvents, key: Self.powerEventsKey)
-	}
-
-	// 纯判定（供单测）：首次运行只记基准；读不到序列号不误报；变了才算更换
-	nonisolated static func shouldFlagBatterySwap(stored: String?, current: String?) -> Bool {
-		guard let stored, !stored.isEmpty, let current, !current.isEmpty else { return false }
-		return stored != current
-	}
-
-	// MARK: - 充电记录
-	
-	private func updateChargeSession(_ snapshot: BatterySnapshot) {
-		let isChargingNow = snapshot.powerSource == .powerAdapter && snapshot.isCharging
-		
-		if isChargingNow {
-			let percent = snapshot.stateOfChargePercent ?? 0
-			let inputW = snapshot.adapterInputPowerW ?? snapshot.chargingPowerW ?? 0
-			
-			// 从磁盘恢复的会话先过断档判定，再决定续接还是归档
-			if restoredSessionNeedsGapCheck {
-				restoredSessionNeedsGapCheck = false
-				if let restored = activeSession, !Self.shouldResumeRestoredSession(restored, now: Date()) {
-					activeSession = nil
-					finalizeSession(restored)
-				}
-			}
-			
-			if var session = activeSession {
-				let percentChanged = session.endPercent != percent
-				session.endDate = Date()
-				session.endPercent = percent
-				session.peakInputW = max(session.peakInputW, inputW)
-				// 首帧可能还没认出充电器（无名头要等几秒），认出来后补记
-				if session.chargerKey == nil { session.chargerKey = activeChargerKey }
-				// 电量变化时记一个曲线点，事后能看出这次充电是先快后慢还是全程稳定
-				if percentChanged, (session.curve?.count ?? 0) < Self.maxCurvePoints {
-					var curve = session.curve ?? []
-					curve.append(ChargePoint(
-						minuteOffset: Int(session.endDate.timeIntervalSince(session.startDate) / 60),
-						percent: percent
-					))
-					session.curve = curve
-				}
-				activeSession = session
-				// 进行中的会话定期落盘，应用中途退出也不丢这段记录
-				if percentChanged || Date().timeIntervalSince(lastActiveSessionSave) >= 60 {
-					persistActiveSession(session)
-				}
-			} else {
-				let session = ChargeSession(
-					startDate: Date(),
-					endDate: Date(),
-					startPercent: percent,
-					endPercent: percent,
-					peakInputW: inputW,
-					curve: [ChargePoint(minuteOffset: 0, percent: percent)],
-					chargerKey: activeChargerKey
-				)
-				activeSession = session
-				persistActiveSession(session)
-			}
-		} else if let session = activeSession {
-			// 优化充电会在 80% 附近反复暂停——暂停但仍插着电不算"这次充电结束"，
-			// 会话保持存活（时长/曲线只在充电帧推进，不受暂停影响）；真正拔电才归档
-			guard Self.shouldArchiveActiveSession(powerSource: snapshot.powerSource) else { return }
-			activeSession = nil
-			restoredSessionNeedsGapCheck = false
-			defaults.removeObject(forKey: Self.activeSessionKey)
-			finalizeSession(session)
-		}
-	}
-	
-	private func finalizeSession(_ session: ChargeSession) {
-		guard Self.isSessionWorthArchiving(session) else { return }
-		
-		recentSessions.append(session)
-		if recentSessions.count > Self.maxSessions {
-			recentSessions.removeFirst(recentSessions.count - Self.maxSessions)
-		}
-		save(recentSessions, key: Self.sessionsKey)
-	}
-	
-	private func persistActiveSession(_ session: ChargeSession) {
-		lastActiveSessionSave = Date()
-		save(session, key: Self.activeSessionKey)
-	}
-	
-	// MARK: - 24 小时电量曲线
-	
-	private func recordSOCSample(_ snapshot: BatterySnapshot) {
-		guard let percent = snapshot.stateOfChargePercent else { return }
-		let now = Date()
-		guard Self.shouldRecordSOCSample(last: socSamples.last, percent: percent, isCharging: snapshot.isCharging, now: now) else { return }
-		
-		var samples = socSamples
-		samples.append(SOCSample(date: now, percent: percent, isCharging: snapshot.isCharging))
-		samples.removeAll { now.timeIntervalSince($0.date) > Self.socWindowSeconds }
-		socSamples = samples
-		save(samples, key: Self.socSamplesKey)
-	}
-	
-	// MARK: - 电源事件时间线
-	
-	private func recordPowerEvents(_ snapshot: BatterySnapshot) {
-		defer {
-			lastPowerSource = snapshot.powerSource
-			lastIsFull = snapshot.isFull
-		}
-		// 启动后第一帧只记基准不记事件，免得每次启动都多一条假“插电”
-		guard let previous = lastPowerSource else { return }
-		
-		if previous != snapshot.powerSource {
-			appendPowerEvent(snapshot.powerSource == .powerAdapter ? .pluggedIn : .unplugged)
-		}
-		if !lastIsFull, snapshot.isFull {
-			appendPowerEvent(.chargedFull)
-		}
-	}
-	
-	private func appendPowerEvent(_ kind: PowerEventKind) {
-		powerEvents = Self.appendingPowerEvent(powerEvents, kind: kind, now: Date())
-		save(powerEvents, key: Self.powerEventsKey)
-	}
-	
-	// MARK: - 睡眠掉电
-	
 	@objc private func handleWillSleep() {
-		appendPowerEvent(.sleep)
-		// 醒后未及结算又合盖：先用当前电量把上一觉结掉，否则整夜掉电静默丢失
-		if pendingWake != nil, let percent = lastPercentForDaily {
-			settlePendingSleepDrain(endPercent: percent)
-		}
-		guard let percent = lastPercentForDaily else { return }
-		// 供电来源要在合盖这一刻定格：结算发生在醒来后，那时只剩"现在的"状态
-		sleepStart = (Date(), percent, monitor.snapshot.powerSource == .powerAdapter)
-		pendingWake = nil
+		events.appendPowerEvent(.sleep)
+		// lastPercentForDaily 是每日用电域维护的"最后一次采样电量"，
+		// 合盖那一刻的电量由它提供；供电来源要在这里定格（见 SleepDrainRecorder.handleWillSleep）
+		sleep.handleWillSleep(
+			onAC: monitor.snapshot.powerSource == .powerAdapter,
+			lastPercent: daily.lastPercentForDaily
+		)
 	}
 
 	@objc private func handleDidWake() {
-		appendPowerEvent(.wake)
-		guard let start = sleepStart else { return }
-		sleepStart = nil
-		// 醒来瞬间的快照可能还是睡前的旧值，挂起等下一次刷新再结算
-		pendingWake = (start.date, start.percent, Date(), start.onAC)
+		events.appendPowerEvent(.wake)
+		sleep.handleDidWake()
 	}
 
-	private func finalizeSleepDrainIfNeeded(_ snapshot: BatterySnapshot) {
-		guard let percent = snapshot.stateOfChargePercent else { return }
-		settlePendingSleepDrain(endPercent: percent)
-	}
-
-	private func settlePendingSleepDrain(endPercent: Int) {
-		guard let pending = pendingWake else { return }
-		pendingWake = nil
-		// 时长与驻留归因不受 ≥20 分钟门约束：小憩 10 分钟也在耗电，也该算进当天时长，
-		// 那道门只管"睡眠掉电记录/告警"这件事
-		let parts = Self.sleepSegmentParts(
-			sleepDate: pending.sleepDate,
-			startPercent: pending.startPercent,
-			wakeDate: pending.wakeDate,
-			endPercent: endPercent,
-			calendar: Calendar.current
-		)
-		let credited = Self.creditingSleepTime(dailyHistory, parts: parts, onAC: pending.onAC)
-		if credited != dailyHistory {
-			dailyHistory = credited
-			save(credited, key: Self.dailyHistoryKey)
-		}
-		guard let record = Self.settledSleepDrain(
-			sleepDate: pending.sleepDate,
-			startPercent: pending.startPercent,
-			wakeDate: pending.wakeDate,
-			endPercent: endPercent
-		) else { return }
-		lastSleepDrain = record
-		save(record, key: Self.sleepDrainKey)
-		appendSleepHistory(record)
-		fetchSleepCulprits(for: record)
-	}
-
-	/// E1：滚动追加睡眠掉电史（同一 sleepDate 替换，避免重复结算）
-	private func appendSleepHistory(_ record: SleepDrainRecord) {
-		var list = sleepDrainHistory.filter { $0.sleepDate != record.sleepDate }
-		list.append(record)
-		list.sort { $0.sleepDate > $1.sleepDate }
-		if list.count > Self.sleepDrainHistoryLimit {
-			list = Array(list.prefix(Self.sleepDrainHistoryLimit))
-		}
-		sleepDrainHistory = list
-		save(list, key: Self.sleepDrainHistoryKey)
-	}
-
-	// 醒来结算后异步抓取"谁在持有阻止睡眠断言"，回填进记录——
-	// 通知、面板、报告都能复述元凶，而不是只在通知里闪现一次
-	private func fetchSleepCulprits(for record: SleepDrainRecord) {
-		let reader = SleepAssertionReader()
-		Task { [weak self] in
-			let owners = await Task.detached(priority: .utility) { reader.assertionOwnerNames() }.value
-			guard let self, !owners.isEmpty else { return }
-			// 期间可能又睡了一觉，只回填还是"那一觉"的记录
-			guard self.lastSleepDrain?.sleepDate == record.sleepDate else { return }
-			var updated = record
-			updated.culpritNames = owners
-			self.lastSleepDrain = updated
-			self.save(updated, key: Self.sleepDrainKey)
-			// 同步回填历史列表，聚合排行才能看到元凶
-			if let idx = self.sleepDrainHistory.firstIndex(where: { $0.sleepDate == record.sleepDate }) {
-				var list = self.sleepDrainHistory
-				list[idx].culpritNames = owners
-				self.sleepDrainHistory = list
-				self.save(list, key: Self.sleepDrainHistoryKey)
-			}
-		}
-	}
-	
-	// 功率统计只保留仍建档的充电器（纯函数，单测直测）
-	nonisolated static func pruningChargerPowerStats(
-		_ stats: [String: ChargerPowerStats],
-		keeping profiles: [ChargerProfile]
-	) -> [String: ChargerPowerStats] {
-		let keys = Set(profiles.map(\.key))
-		guard stats.count > keys.count else { return stats }
-		return stats.filter { keys.contains($0.key) }
-	}
-
-	// MARK: - 充电器档案
-	
-	// 当前接着的充电器对应的档案（拔电后为 nil）
-	var currentChargerProfile: ChargerProfile? {
-		guard let key = activeChargerKey else { return nil }
-		return Self.chargerProfile(matching: key, in: chargerProfiles)
-	}
-
-	// 用户给充电器起的名字（系统识别不了时由用户认领）；空字符串视为清除
-	func setChargerCustomName(key: String, customName: String?) {
-		guard let index = chargerProfiles.firstIndex(where: { $0.key == key }) else { return }
-		var profile = chargerProfiles[index]
-		profile.customName = (customName?.isEmpty == false) ? customName : nil
-		chargerProfiles[index] = profile
-		save(chargerProfiles, key: Self.chargerProfilesKey)
-	}
-	
-	private func updateChargerProfile(_ snapshot: BatterySnapshot) {
-		guard snapshot.powerSource == .powerAdapter else {
-			activeChargerKey = nil
-			adapterConnectedAt = nil
-			return
-		}
-		if adapterConnectedAt == nil { adapterConnectedAt = Date() }
-		guard activeChargerKey == nil else {
-			// 已建档的会话：名广播出来后回填（建档时名没到位走的是兜底建档）——
-			// 显示与归并判定都以真名为准
-			if let key = activeChargerKey {
-				let incomingName = snapshot.adapterName ?? ""
-				chargerProfiles = Self.backfillingChargerName(profiles: chargerProfiles, key: key, name: incomingName)
-			}
-			return
-		}
-		
-		let name = snapshot.adapterName ?? ""
-		let manufacturer = snapshot.adapterManufacturer ?? ""
-		let rated = snapshot.adapterRatedWatts ?? 0
-		// 名称/厂商任一到位就建档；都没有则等几秒，超时后按额定功率建档
-		if name.isEmpty, manufacturer.isEmpty {
-			guard rated > 0,
-				let connectedAt = adapterConnectedAt,
-				Date().timeIntervalSince(connectedAt) >= Self.chargerIdentityWaitSeconds
-			else { return }
-		}
-		// 档位签名进键：两只同瓦数的不同充电器分开建档；无线头带标记。
-		// 识别 v2：无名降档会话先做物理头归并解析——同一只头（多口分功率/协议降档）沿用老档案，
-		// 统计与速度对比连成一条线；正式键 = 母档案首建档键，降档键收进别名
-		let signature = Self.tierSignature(snapshot.powerTiers)
-		let wireless = snapshot.chargingProtocol == "无线充电"
-		let rawKey = Self.chargerKey(
-			name: name,
-			manufacturer: manufacturer,
-			ratedWatts: rated,
-			tiers: snapshot.powerTiers,
-			isWireless: wireless
-		)
-		let resolved = Self.foldingOrphanCharger(
-			profiles: chargerProfiles,
-			orphanKey: rawKey,
-			orphanName: name,
-			orphanConnectCount: 0,
-			orphanRatedWatts: rated > 0 ? rated : nil,
-			orphanTiers: snapshot.powerTiers,
-			isWireless: wireless
-		)
-		chargerProfiles = resolved.profiles
-		activeChargerKey = resolved.canonicalKey
-		chargerProfiles = Self.upsertingChargerProfile(
-			chargerProfiles,
-			key: resolved.canonicalKey,
-			name: name,
-			manufacturer: manufacturer,
-			ratedWatts: rated,
-			tierSignature: signature.isEmpty ? nil : signature,
-			observedWatts: rated > 0 ? rated : nil,
-			now: Date()
-		)
-		save(chargerProfiles, key: Self.chargerProfilesKey)
-		// 功率统计跟着档案走：档案挤掉最旧后，对应统计一并清理，不留孤儿数据
-		let prunedStats = Self.pruningChargerPowerStats(chargerPowerStats, keeping: chargerProfiles)
-		if prunedStats.count != chargerPowerStats.count {
-			chargerPowerStats = prunedStats
-			save(chargerPowerStats, key: Self.chargerPowerStatsKey)
-		}
-	}
-
-	// 当前充电器累计的协商功率样本（供诊断；拔电后为 nil）
-	var currentChargerPowerStats: ChargerPowerStats? {
-		guard let key = activeChargerKey else { return nil }
-		return chargerPowerStats[key]
-	}
-
-	// 充电期间累计协商功率：每帧把当前协商瓦数滚进对应充电器的统计，
-	// 事后算平均，识别"额定 65W 却一直只协商 20W"这类劣质线/口
-	// 落盘限频：纯累计变化最多一分钟存一次，避免每 2 秒写一次
-	private func accumulateChargerPower(_ snapshot: BatterySnapshot) {
-		guard let key = activeChargerKey else { return }
-		guard snapshot.powerSource == .powerAdapter, snapshot.isCharging else { return }
-		guard
-			let voltageMV = snapshot.negotiatedVoltageMV,
-			let currentMA = snapshot.negotiatedCurrentMA,
-			voltageMV > 0, currentMA > 0
-		else { return }
-		let watts = Double(voltageMV) * Double(currentMA) / 1_000_000.0
-		guard watts >= IOKitBatteryReader.minimumVisibleWatts else { return }
-
-		var stats = chargerPowerStats[key] ?? ChargerPowerStats(key: key, ratedWatts: snapshot.adapterRatedWatts)
-		stats.sampleCount += 1
-		stats.sumWatts += watts
-		stats.maxWatts = max(stats.maxWatts, watts)
-		chargerPowerStats[key] = stats
-
-		if Date().timeIntervalSince(lastChargerStatsSave) >= 60 {
-			lastChargerStatsSave = Date()
-			save(chargerPowerStats, key: Self.chargerPowerStatsKey)
-		}
-	}
-	
-	// MARK: - 应用耗电累计
-
-	// 纯函数：把一段秒数累计进在场应用的当日记录；按截止键清掉过期天、按最近活跃封顶数量
-	nonisolated static func appendingEnergySeconds(
-		_ records: [AppEnergyUsage],
-		ids: [String],
-		names: [String: String],
-		seconds: Double,
-		hour: Int,
-		dayKey: String,
-		cutoffDayKey: String,
-		now: Date,
-		maxApps: Int
-	) -> [AppEnergyUsage] {
-		guard seconds > 0 else { return records }
-		// 输入来自磁盘存档——理论上不会重键，但手改/异常数据不能把应用炸掉
-		var byID = Dictionary(records.map { ($0.bundleId, $0) }, uniquingKeysWith: { first, _ in first })
-		let bucket = min(max(hour, 0), 23)
-		for id in ids {
-			var record = byID[id] ?? AppEnergyUsage(bundleId: id, name: names[id] ?? id, secondsByDay: [:], lastSeen: now)
-			if let latestName = names[id], !latestName.isEmpty { record.name = latestName }
-			record.secondsByDay[dayKey, default: 0] += seconds
-			// 小时分布：旧档首次累计时补建 24 桶
-			var hourly = record.secondsByHour ?? Array(repeating: 0, count: 24)
-			hourly[bucket] += seconds
-			record.secondsByHour = hourly
-			record.lastSeen = now
-			byID[id] = record
-		}
-		// 过期天对所有记录全量清理（不只在场的），否则离场应用的旧数据永远占着存储
-		let cutoff = cutoffDayKey
-		return Array(byID.values
-			.map { record -> AppEnergyUsage in
-				var record = record
-				record.secondsByDay = record.secondsByDay.filter { $0.key >= cutoff }
-				return record
-			}
-			.sorted { $0.lastSeen > $1.lastSeen }
-			.prefix(maxApps))
-	}
-
-	// 每帧把"面板打开期间处于高耗电列表"的应用累计上这帧的秒数；
-	// 高耗电列表只在面板打开时才刷新，列表非空 + 帧间隔正常才计
-	private func accumulateAppEnergy() {
-		let now = Date()
-		let elapsed = lastEnergyTick.map { now.timeIntervalSince($0) } ?? 0
-		lastEnergyTick = now
-		guard elapsed > 0, elapsed <= 30 else { return }
-		guard monitor.isPopoverOpen, !monitor.significantEnergyApps.isEmpty else { return }
-
-		let dayKey = Self.dayKey(now)
-		let cutoff = Self.dayKey(now.addingTimeInterval(-30 * 86400))
-		appEnergy = Self.appendingEnergySeconds(
-			appEnergy,
-			ids: monitor.significantEnergyApps.map(\.id),
-			names: Dictionary(monitor.significantEnergyApps.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
-			seconds: elapsed,
-			hour: Calendar.current.component(.hour, from: now),
-			dayKey: dayKey,
-			cutoffDayKey: cutoff,
-			now: now,
-			maxApps: 50
-		)
-		if now.timeIntervalSince(lastAppEnergySave) >= 60 {
-			lastAppEnergySave = now
-			save(appEnergy, key: Self.appEnergyKey)
-		}
-	}
-
-	// MARK: - 今日用电小结
-	
-	// 相邻两次采样的电量差累计（纯函数 accumulatingDailyUsage），跨天追加新的一天
-	private func updateDailyUsage(_ snapshot: BatterySnapshot) {
-		guard let percent = snapshot.stateOfChargePercent else { return }
-		let now = Date()
-		defer {
-			lastPercentForDaily = percent
-			lastUsageSampleDate = now
-		}
-		
-		let key = Self.dayKey(now)
-		var history = dailyHistory
-		var structuralChange = false
-		if !history.contains(where: { $0.dayKey == key }) {
-			history = Self.insertingDailyUsage(history, dayKey: key, maxDays: Self.maxDailyHistory)
-			structuralChange = true
-		}
-		guard let dayIndex = history.firstIndex(where: { $0.dayKey == key }) else { return }
-		let before = history[dayIndex]
-		let sampleGap = lastUsageSampleDate.map { now.timeIntervalSince($0) }
-		let usage = Self.accumulatingDailyUsage(
-			before,
-			percent: percent,
-			lastPercent: lastPercentForDaily,
-			powerSource: snapshot.powerSource,
-			isCharging: snapshot.isCharging,
-			secondsSinceLastSample: sampleGap
-		)
-		// 时段用电与今日用电同源：电池模式的掉电增量同时计入对应小时桶；
-		// 与今日用电同一归因窗口，跨睡眠的掉电不错记到醒来那一个小时
-		let isContiguous = sampleGap.map { $0 > 0 && $0 <= Self.usageAttributionGapSeconds } ?? false
-		if isContiguous, snapshot.powerSource == .battery, let last = lastPercentForDaily, percent < last {
-			hourlyDrainStats = UsagePatternAnalyzer.accumulatingHourlyDrain(
-				hourlyDrainStats,
-				hour: Calendar.current.component(.hour, from: now),
-				droppedPercent: Double(last - percent),
-				dayKey: key
-			)
-		} else {
-			// 没掉电也要推进天数键（跨天 accumulatedDays +1 靠它）
-			hourlyDrainStats = UsagePatternAnalyzer.accumulatingHourlyDrain(
-				hourlyDrainStats,
-				hour: Calendar.current.component(.hour, from: now),
-				droppedPercent: 0,
-				dayKey: key
-			)
-		}
-		// 落盘限频区分电量变化与纯时长：电量变了立存，纯时长最多一分钟存一次
-		if usage.drainedPercent != before.drainedPercent || usage.chargedPercent != before.chargedPercent {
-			structuralChange = true
-		}
-		history[dayIndex] = usage
-		
-		guard history != dailyHistory else { return }
-		dailyHistory = history
-		if structuralChange || now.timeIntervalSince(lastDailyUsageSave) >= 60 {
-			lastDailyUsageSave = now
-			save(history, key: Self.dailyHistoryKey)
-			save(hourlyDrainStats, key: Self.hourlyDrainKey)
-		}
-	}
-	
-	private static func dayKey(_ date: Date) -> String {
-		dayKeyFormatter.string(from: date)
-	}
-	
-	private static let dayKeyFormatter: DateFormatter = {
-		let formatter = DateFormatter()
-		// dayKey 是落盘的机器主键，必须用固定 POSIX 公历：
-		// 否则用户把系统日历改成非公历（如佛历）时 yyyy 会输出 2570 这种年份，键会错乱
-		formatter.locale = Locale(identifier: "en_US_POSIX")
-		formatter.dateFormat = "yyyy-MM-dd"
-		return formatter
-	}()
-	
-	// MARK: - 健康度趋势
-	
-	// 把最旧一个"还有多个样本可折"的月折叠成单点（当月最后一个读数），
-	// 直到总数不超上限。最旧月已是单点时跳过它继续往后找——
-	// 否则导入的异常存档（单点月+总数超限）会让封顶永久停滞
-	nonisolated static func foldingHealthSamples(_ samples: [HealthSample], maxRawCount: Int) -> [HealthSample] {
-		guard samples.count > maxRawCount, !samples.isEmpty else { return samples }
-		var monthStart = 0
-		while monthStart < samples.count {
-			let monthKey = UsagePatternAnalyzer.monthKeyString(samples[monthStart].date)
-			var monthEnd = monthStart
-			while monthEnd < samples.count,
-				UsagePatternAnalyzer.monthKeyString(samples[monthEnd].date) == monthKey {
-				monthEnd += 1
-			}
-			if monthEnd - monthStart >= 2 {
-				return Array(samples[0..<monthStart]) + [samples[monthEnd - 1]] + samples[monthEnd...]
-			}
-			monthStart = monthEnd
-		}
-		// 全是单点：无可折，原样返回（有界，无害）
-		return samples
-	}
-
-	private func recordDailyHealth(_ snapshot: BatterySnapshot) {
-		guard let health = snapshot.healthPercent else { return }
-
-		let today = Date()
-		if let last = healthSamples.last, Calendar.current.isDate(last.date, inSameDayAs: today) {
-			return
-		}
-
-		// 原始日样本封顶后，最旧一个月折叠成单点（取当月最后读数）永久保留：
-		// 老化以年计，近期要日粒度、远期月粒度就够，趋势线不会因封顶断头
-		healthSamples = Self.foldingHealthSamples(
-			healthSamples + [HealthSample(date: today, healthPercent: health, cycleCount: snapshot.cycleCount)],
-			maxRawCount: Self.maxHealthSamples
-		)
-		save(healthSamples, key: Self.healthKey)
-	}
-	
 	// MARK: - 持久化
-	
-	// 设置与历史全在一个 UserDefaults plist 里，损坏即静默清零；
-	// 这里把历史键的最新编码滚到独立备份文件，主档损坏时回退备份，最多丢一个备份间隔
+
+	// 历史曾经和设置挤在同一个 UserDefaults plist 里（损坏即静默清零）；
+	// 现在主档是一键一文件（HistoryStore.swift），这里保留的是**第二道**保险：
+	// 把历史键的最新编码滚到独立备份文件，主档损坏时回退备份，最多丢一个备份间隔
 	private static func defaultBackupDirectory() -> URL? {
 		backupDirectoryForTooling(env: ProcessInfo.processInfo.environment)
+	}
+
+	/// 生产的历史主档：一键一文件，首次启动把 UserDefaults 里的旧字节抄过来（旧键保留）
+	nonisolated static func defaultByteStore(
+		defaults: UserDefaults,
+		env: [String: String] = ProcessInfo.processInfo.environment
+	) -> HistoryByteStore {
+		guard let directory = historyDirectoryForTooling(env: env) else {
+			return InMemoryHistoryByteStore()
+		}
+		return FileHistoryByteStore(
+			directory: directory,
+			migrationSource: UserDefaultsHistoryByteStore(defaults: defaults)
+		)
+	}
+
+	/// 存储决策：显式传了就用传的，否则走生产路径。**单独抽出来是为了能被测到**——
+	/// 这里曾经写成 `store ?? InMemoryHistoryByteStore()`，把"关备份"和"不落盘"耦合成一个默认值，
+	/// 三个量具的历史一起变空（面板掉一半高度、真档案腿整条跳过），而当时没有任何断言看着这一行。
+	nonisolated static func resolvedByteStore(
+		override store: HistoryByteStore?,
+		defaults: UserDefaults,
+		env: [String: String] = ProcessInfo.processInfo.environment
+	) -> HistoryByteStore {
+		store ?? defaultByteStore(defaults: defaults, env: env)
 	}
 
 	/// 历史备份目录。**生产不设环境变量时行为与历史完全一致**；离屏量具必须把它重定向到临时目录，
@@ -1265,52 +200,27 @@ final class BatteryHistoryRecorder: ObservableObject {
 		return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
 			.appendingPathComponent("ChargeMonitor", isDirectory: true)
 	}
-	
-	private var backupFileURL: URL? {
-		backupDirectory?.appendingPathComponent(Self.backupFileName)
-	}
-	
-	private func loadBackupRaw() -> [String: Data] {
-		guard let url = backupFileURL, let data = try? Data(contentsOf: url) else { return [:] }
-		return (try? PropertyListDecoder().decode([String: Data].self, from: data)) ?? [:]
-	}
-	
-	private func saveBackupIfDue(now: Date = Date()) {
-		guard let url = backupFileURL, now.timeIntervalSince(lastBackupSave) >= Self.backupIntervalSeconds else { return }
-		lastBackupSave = now
-		do {
-			try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-			try PropertyListEncoder().encode(backupRaw).write(to: url, options: .atomic)
-		} catch {
-			DiagnosticLog.failureOnce("backup-save-failed", category: "BatteryHistoryRecorder", "历史滚动备份写入失败：\(error.localizedDescription)")
+
+	/// 历史主档目录。生产默认 App Support/ChargeMonitor/history；量具必须重定向到临时目录。
+	///
+	/// **兜底比显式变量更重要**：量具只设了 `MIAODIAN_BACKUP_DIR` 而忘了设 HISTORY 时，
+	/// 历史目录跟着备份目录一起改道——v2.9.15 抓到过同型事故（备份路径重定向了，
+	/// 另一条硬编码路径却把用户的真数据写花），所以这里用默认值把那条路直接堵死，
+	/// 不指望每个量具作者都记得加一行 export。
+	///
+	/// 空字符串 = 关闭持久化（走内存档，跑完即忘）。与 `backupDirectoryForTooling` 同语义。
+	nonisolated static func historyDirectoryForTooling(env: [String: String]) -> URL? {
+		if let raw = env["MIAODIAN_HISTORY_DIR"] {
+			return raw.isEmpty ? nil : URL(fileURLWithPath: raw, isDirectory: true)
 		}
-	}
-	
-	private func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
-		let primary = defaults.data(forKey: key)
-		let recovered = Self.decodingWithFallback(type, primaryData: primary, backupData: backupRaw[key])
-		if let primary, (try? decoder.decode(type, from: primary)) == nil {
-			DiagnosticLog.failureOnce("history-corrupt-\(key)", category: "BatteryHistoryRecorder", "历史数据 \(key) 损坏\(recovered != nil ? "，已从滚动备份恢复" : "，且无可用的滚动备份")")
+		if let backupRaw = env["MIAODIAN_BACKUP_DIR"] {
+			guard !backupRaw.isEmpty else { return nil }
+			return URL(fileURLWithPath: backupRaw, isDirectory: true)
+				.appendingPathComponent("history", isDirectory: true)
 		}
-		return recovered
-	}
-	
-	// 纯函数：主档 + 备份的解码策略，供单测直接调
-	// 主档正常直接解码；主档有数据却解不开（损坏）回退备份；
-	// 主档无数据（首次运行/被清空）不碰备份——备份只救损坏，不做删除恢复
-	nonisolated static func decodingWithFallback<T: Decodable>(_ type: T.Type, primaryData: Data?, backupData: Data?) -> T? {
-		guard let primaryData else { return nil }
-		if let value = try? PropertyListDecoder().decode(type, from: primaryData) { return value }
-		guard let backupData else { return nil }
-		return try? PropertyListDecoder().decode(type, from: backupData)
-	}
-	
-	private func save<T: Encodable>(_ value: T, key: String) {
-		guard let data = try? encoder.encode(value) else { return }
-		defaults.set(data, forKey: key)
-		// 备份内存随写入保持最新，定期滚到磁盘
-		backupRaw[key] = data
-		saveBackupIfDue()
+		return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+			.appendingPathComponent("ChargeMonitor", isDirectory: true)
+			.appendingPathComponent("history", isDirectory: true)
 	}
 
 	// MARK: - 全量存档（换机/重装的数据逃生舱）
@@ -1318,77 +228,34 @@ final class BatteryHistoryRecorder: ObservableObject {
 	func makeArchive() -> BatteryHistoryArchive {
 		BatteryHistoryArchive(
 			exportedAt: Date(),
-			sessions: recentSessions,
-			healthSamples: healthSamples,
-			dailyHistory: dailyHistory,
-			lastSleepDrain: lastSleepDrain,
-			sleepDrainHistory: sleepDrainHistory,
-			chargerProfiles: chargerProfiles,
-			socSamples: socSamples,
-			powerEvents: powerEvents,
-			chargerPowerStats: chargerPowerStats,
-			hourlyDrainStats: hourlyDrainStats,
-			hourlyTempStats: hourlyTempStats,
-			appEnergy: appEnergy,
-			socJumpEvents: socJumpEvents,
-			batterySerialLastSeen: defaults.string(forKey: Self.batterySerialKey),
-			batteryReplacedAt: batteryReplacedAt
+			sessions: sessions.recentSessions,
+			healthSamples: health.healthSamples,
+			dailyHistory: daily.dailyHistory,
+			lastSleepDrain: sleep.lastSleepDrain,
+			sleepDrainHistory: sleep.sleepDrainHistory,
+			chargerProfiles: charger.chargerProfiles,
+			socSamples: soc.socSamples,
+			powerEvents: events.powerEvents,
+			chargerPowerStats: charger.chargerPowerStats,
+			hourlyDrainStats: daily.hourlyDrainStats,
+			hourlyTempStats: daily.hourlyTempStats,
+			appEnergy: daily.appEnergy,
+			socJumpEvents: soc.socJumpEvents,
+			batterySerialLastSeen: health.batterySerialLastSeen,
+			batteryReplacedAt: health.batteryReplacedAt
 		)
 	}
 
 	// 从存档恢复全部历史并逐键落盘（滚动备份随之刷新）；
-	// 活动充电会话是运行态，不覆盖——若恢复时正在充电，本次会话继续记账
+	// 活动充电会话是运行态，不覆盖——若恢复时正在充电，本次会话继续记账。
+	// 每个域只认领自己那一段，门面不拆包
 	func restore(from archive: BatteryHistoryArchive) {
-		recentSessions = archive.sessions
-		healthSamples = archive.healthSamples
-		dailyHistory = archive.dailyHistory
-		lastSleepDrain = archive.lastSleepDrain
-		// E1：旧档无 sleepDrainHistory 时保留当前；有则导入
-		if let hist = archive.sleepDrainHistory {
-			sleepDrainHistory = hist
-			save(hist, key: Self.sleepDrainHistoryKey)
-		}
-		chargerProfiles = archive.chargerProfiles
-		socSamples = archive.socSamples
-		powerEvents = archive.powerEvents
-		chargerPowerStats = archive.chargerPowerStats
-		hourlyDrainStats = archive.hourlyDrainStats
-		// 旧存档没有温度画像时保留当前值，不清零
-		if let tempStats = archive.hourlyTempStats {
-			hourlyTempStats = tempStats
-		}
-		appEnergy = archive.appEnergy
-		socJumpEvents = archive.socJumpEvents
-		// 跳变追踪的基线随旧数据作废，恢复后从当前读数重新积累
-		lastSocSample = nil
-		// 电池更换边界随档恢复：丢了它，换过电池的传记会把两块电池连成假曲线。
-		// 旧存档缺字段（nil）时序列号保持现状、边界按"无更换"重置以与恢复的样本一致
-		if let serial = archive.batterySerialLastSeen {
-			defaults.set(serial, forKey: Self.batterySerialKey)
-		}
-		batteryReplacedAt = archive.batteryReplacedAt
-		if let replacedAt = archive.batteryReplacedAt {
-			defaults.set(replacedAt, forKey: Self.batteryReplacedAtKey)
-		} else {
-			defaults.removeObject(forKey: Self.batteryReplacedAtKey)
-		}
-
-		save(recentSessions, key: Self.sessionsKey)
-		save(healthSamples, key: Self.healthKey)
-		save(dailyHistory, key: Self.dailyHistoryKey)
-		save(chargerProfiles, key: Self.chargerProfilesKey)
-		save(socSamples, key: Self.socSamplesKey)
-		save(powerEvents, key: Self.powerEventsKey)
-		save(chargerPowerStats, key: Self.chargerPowerStatsKey)
-		save(hourlyDrainStats, key: Self.hourlyDrainKey)
-		save(hourlyTempStats, key: Self.hourlyTempKey)
-		save(appEnergy, key: Self.appEnergyKey)
-		save(socJumpEvents, key: Self.socJumpEventsKey)
-		if let record = lastSleepDrain {
-			save(record, key: Self.sleepDrainKey)
-		} else {
-			defaults.removeObject(forKey: Self.sleepDrainKey)
-			backupRaw.removeValue(forKey: Self.sleepDrainKey)
-		}
+		sessions.restore(from: archive)
+		health.restore(from: archive)
+		daily.restore(from: archive)
+		sleep.restore(from: archive)
+		charger.restore(from: archive)
+		soc.restore(from: archive)
+		events.restore(from: archive)
 	}
 }

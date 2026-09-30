@@ -38,8 +38,8 @@ struct BatteryPopoverView: View {
 	@State private var trayExpanded = false
 	// 常态拖拽状态机：nil = 未在拖
 	@State private var dragState: CardDragState? = nil
-	// 拖动中的落点指示线（全局坐标；nil=不显示）
-	@State private var dropIndicator: (x: CGFloat, y: CGFloat, width: CGFloat)? = nil
+	// 拖动中的落点指示线（全局坐标；nil=不显示）；值类型外壳在 PanelDragMachine
+	@State private var dropIndicator: PanelDragMachine.Indicator? = nil
 	// 拖动预览中的布局（其他卡片据此实时让位）；nil = 无预览
 	@State private var previewLayout: PanelLayout? = nil
 	// 悬停中的把手（微放大反馈）
@@ -96,16 +96,23 @@ struct BatteryPopoverView: View {
 		) { $0.id.layoutID }
 		let cardIDs = displayCards.map(\.id)
 		let availableIDs = Set(cardIDs.map(\.layoutID))
-		// 预先算好分列与"控制行"的级联档位（供入场错峰动画与 onAppear 固化共用）
-		let split = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
+		// 预先算好分列与"控制行"的级联档位（供入场错峰动画与 onAppear 固化共用）。
+		// 贪心配平与"新卡只追加到较矮列"的策略在 PanelColumnPlan（纯函数、进测试面）
+		let split = PanelColumnPlan.merged(displayCards, left: assignedLeft, right: assignedRight)
 		// 华容网格 v4 双路径：自定义布局/编辑/拖拽走显式行存储（渲染即存储，预览=落盘=重开）；
 		// 纯自动模式走会话冻结的贪心双列独立堆叠（高度最优、不洗牌——高度门已证明
-		// 行式对齐密铺出厂态超屏 +12% 起，列式是物理最优）
-		let usingRows = twoColumns && (isEditingLayout || dragState != nil || configuration.panelLayout != nil)
-		let rowSource: PanelLayout = previewLayout
-			?? (isEditingLayout || dragState != nil ? layoutDraft : nil)
-			?? configuration.panelLayout
-			?? PanelLayout()
+		// 行式对齐密铺出厂态超屏 +12% 起，列式是物理最优）。
+		// 双路径判定与行表来源优先级在 PanelLayoutRouting，这里只取结果
+		let routing = PanelLayoutRouting.source(
+			twoColumns: twoColumns,
+			isEditing: isEditingLayout,
+			isDragging: dragState != nil,
+			preview: previewLayout,
+			draft: layoutDraft,
+			persisted: configuration.panelLayout
+		)
+		let usingRows = routing.usingRows
+		let rowSource = routing.layout
 		let segments: [PanelFlow.Segment] = usingRows
 			? PanelFlow.renderSegments(
 				PanelFlow.normalize(rowSource, known: Set(CardID.allCases.map(\.layoutID))).effectiveRows,
@@ -255,7 +262,7 @@ struct BatteryPopoverView: View {
 				monitor.defersUISnapshot = false
 				// 用户可能刚在系统设置里改过通知权限，每次打开面板重新查
 				alertController.refreshAuthorizationStatus()
-				let next = mergedColumns(displayCards, left: assignedLeft, right: assignedRight)
+				let next = PanelColumnPlan.merged(displayCards, left: assignedLeft, right: assignedRight)
 				assignedLeft = next.left
 				assignedRight = next.right
 				// 本会话第一次打开播错峰级联，之后 cascadeStep 全归零、整块同时落位
@@ -280,7 +287,7 @@ struct BatteryPopoverView: View {
 					cards.count >= 5 ? cards.filter { $0.id != .checkup } : cards,
 					hidden: configuration.panelLayout?.hidden ?? []
 				) { $0.id.layoutID }
-				let split = mergedColumns(display, left: assignedLeft, right: assignedRight)
+				let split = PanelColumnPlan.merged(display, left: assignedLeft, right: assignedRight)
 				assignedLeft = split.left
 				assignedRight = split.right
 			}
@@ -530,56 +537,9 @@ struct BatteryPopoverView: View {
 		configurationManager.configuration.collapsedCards.contains(option.rawValue) ? 32 : expanded
 	}
 
-	// 贪心配平：按顺序把每张卡片塞进当前较矮的那列，不管哪些卡片出现都能两列收齐
-	private func balancedSplit(_ cards: [(id: CardID, height: CGFloat)]) -> (left: [CardID], right: [CardID]) {
-		var left: [CardID] = []
-		var right: [CardID] = []
-		var leftHeight: CGFloat = 0
-		var rightHeight: CGFloat = 0
-		for card in cards {
-			if leftHeight <= rightHeight {
-				left.append(card.id)
-				leftHeight += card.height
-			} else {
-				right.append(card.id)
-				rightHeight += card.height
-			}
-		}
-		return (left, right)
-	}
-
-	// 沿用面板打开期间已有的分列：还在场的卡片保持原列原顺序，新到的追加到当前较矮列，
-	// 消失的卡片剔除；首次（无历史分配）直接走贪心配平
-	private func mergedColumns(
-		_ cards: [(id: CardID, height: CGFloat)],
-		left: [CardID],
-		right: [CardID]
-	) -> (left: [CardID], right: [CardID]) {
-		let valid = Set(cards.map(\.id))
-		let knownLeft = left.filter { valid.contains($0) }
-		let knownRight = right.filter { valid.contains($0) }
-		if knownLeft.isEmpty, knownRight.isEmpty {
-			return balancedSplit(cards)
-		}
-
-		let heightByID = Dictionary(cards.map { ($0.id, $0.height) }, uniquingKeysWith: { a, _ in a })
-		var resultLeft = knownLeft
-		var resultRight = knownRight
-		var leftHeight = knownLeft.reduce(0) { $0 + (heightByID[$1] ?? 0) }
-		var rightHeight = knownRight.reduce(0) { $0 + (heightByID[$1] ?? 0) }
-
-		let placed = Set(knownLeft + knownRight)
-		for card in cards where !placed.contains(card.id) {
-			if leftHeight <= rightHeight {
-				resultLeft.append(card.id)
-				leftHeight += card.height
-			} else {
-				resultRight.append(card.id)
-				rightHeight += card.height
-			}
-		}
-		return (resultLeft, resultRight)
-	}
+	// 自动模式分列（贪心配平 / 沿用会话分配）搬去了 PanelColumnPlan，
+	// 拖拽与编辑态判定搬去了 PanelLayoutModel 的另外三个类型——视图只留状态与调用，
+	// 判定不再在这里各写一遍（纯函数进测试面，可单独夹具验证）
 
 	/// 自动模式单列渲染（v1.13 原样）：贪心配平的独立双列堆叠
 	private func cardColumn(
@@ -750,14 +710,17 @@ struct BatteryPopoverView: View {
 	private func dragGesture(for id: CardID, minimumDistance: CGFloat) -> some Gesture {
 		DragGesture(minimumDistance: minimumDistance, coordinateSpace: .named(BoardSpace.name))
 			.onChanged { drag in
-				if dragState == nil {
+				switch PanelDragMachine.step(draggingCard: dragState?.card, newCard: id.layoutID) {
+				case .ignore:
+					// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖时，本手势不得改写它的 translation
+					return
+				case .begin:
 					// 拖动开始：播种工作副本（自定义布局或会话冻结双列）并固化起始 frame
-					let known = Set(CardID.allCases.map(\.layoutID))
-					layoutSeed = PanelFlow.normalize(
-						configurationManager.configuration.panelLayout ?? PanelLayout(
-							rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
-						),
-						known: known
+					layoutSeed = PanelLayoutEdit.seed(
+						panelLayout: configurationManager.configuration.panelLayout,
+						assignedLeft: assignedLeft.map(\.layoutID),
+						assignedRight: assignedRight.map(\.layoutID),
+						known: Set(CardID.allCases.map(\.layoutID))
 					)
 					layoutDraft = layoutSeed ?? PanelLayout()
 					// 拖拽期让 frame 表发变更：把手层才能跟上预览重排的坐标
@@ -769,9 +732,8 @@ struct BatteryPopoverView: View {
 						// 起拖点=手指真实位置：落点跟手（旧实现用卡片中心，200pt 高的卡偏 ~100pt）
 						startPoint: drag.startLocation
 					)
-				} else if dragState?.card != id.layoutID {
-					// 幽灵拖拽守卫（v1.17.1）：已有别的卡在拖时，本手势不得改写它的 translation
-					return
+				case .update:
+					break
 				}
 				dragState?.translation = drag.translation
 				updatePreview()
@@ -780,38 +742,40 @@ struct BatteryPopoverView: View {
 	}
 
 	/// 拖动中：按当前落点更新预览布局——其余卡片实时让位（行插入点预览）。
-	/// 位移始终以拖动开始瞬间的 frame 为基准（拖动开始时已固化进 originFrame），
-	/// 预览重排刷新 frame 表也不回灌落点计算——防反馈振荡
+	/// 判定（出界清空 / 合法落点 / 候选与基准相同则不写）在 PanelDragMachine.preview；
+	/// 未越过激活阈值时连 frame 表都不拷（旧实现同此：snapshotTable 只在真拖起来后才走）
 	private func updatePreview() {
 		guard let drag = dragState, drag.isDragging else { return }
-		let table = frameStore.snapshotTable()
-		guard let target = CardDropResolver.resolve(point: drag.pointer, table: table, excluding: drag.card) else {
+		let decision = PanelDragMachine.preview(
+			drag: drag,
+			base: previewLayout ?? layoutDraft,
+			table: frameStore.snapshotTable()
+		)
+		switch decision {
+		case .cleared:
 			// 出界/无锚点：清指示线与预览——松手不得提交上一合法落点（丢弃回弹语义）
 			dropIndicator = nil
 			previewLayout = nil
-			return
+		case .placed(let indicator, let layout):
+			dropIndicator = indicator
+			if let layout { previewLayout = layout }
 		}
-		dropIndicator = CardDropResolver.indicatorLine(for: target, table: table, excluding: drag.card)
-		let base = previewLayout ?? layoutDraft
-		let candidate = PanelFlow.insertLayout(base, card: drag.card, target: target)
-		if candidate != base { previewLayout = candidate }
 	}
 
 	/// 松手：提交拖拽中已经算好的预览布局。
 	/// **不再用 frame 表重解落点**——探针在布局动画中异步写表，松手时可能是预览前旧序，
 	/// 重解会落错槽或静默丢弃；previewLayout 就是最后一次合法 target 的插入结果。
 	private func finishDrag(from id: CardID? = nil) {
+		let endingCard = id?.layoutID
 		defer {
-			if id == nil || dragState?.card == id?.layoutID {
+			if PanelDragMachine.clearsOnEnd(draggingCard: dragState?.card, endingCard: endingCard) {
 				dragState = nil
 				previewLayout = nil
 				dropIndicator = nil
 				frameStore.publishesChanges = false
 			}
 		}
-		guard let drag = dragState, drag.isDragging,
-			  id.map({ drag.card == $0.layoutID }) ?? true,
-			  let preview = previewLayout else { return }
+		guard let preview = PanelDragMachine.commit(drag: dragState, preview: previewLayout, endingCard: endingCard) else { return }
 		layoutDraft = preview
 		configurationManager.snapshotLayoutForUndo()
 		configurationManager.setPanelLayout(PanelFlow.normalize(preview, known: Set(CardID.allCases.map(\.layoutID))))
@@ -839,8 +803,12 @@ struct BatteryPopoverView: View {
 			// v1.18.3：拖动中禁止沿途把手 hover 亮起（指针拖卡划过谁谁就放大 1.3，视觉噪音），
 			// 且拖动开始后不再写入新 hover 态（松手后旧卡不带着 1.3 复活）
 			.onHover { h in
-				guard dragState == nil else { return }
-				isHandleHovering = h ? id.layoutID : nil
+				// 写入判定在 PanelDragMachine.hoverUpdate：拖动中一律不写（v1.18.3）
+				if case .set(let next) = PanelDragMachine.hoverUpdate(
+					isDragging: dragState != nil, hovering: h, id: id.layoutID
+				) {
+					isHandleHovering = next
+				}
 			}
 			.scaleEffect(isHandleHovering == id.layoutID && dragState == nil ? 1.3 : 1.0)
 			.animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHandleHovering == id.layoutID && dragState == nil)
@@ -874,14 +842,14 @@ struct BatteryPopoverView: View {
 		.padding(4)
 	}
 
-	/// 进入编辑布局：以当前生效布局（自定义或会话冻结双列对齐成行）播种工作副本
+	/// 进入编辑布局：以当前生效布局（自定义或会话冻结双列对齐成行）播种工作副本。
+	/// 播种规则与起拖共用 PanelLayoutEdit.seed（同一处判定，不各写一遍）
 	private func enterLayoutEdit() {
-		let known = Set(CardID.allCases.map(\.layoutID))
-		layoutSeed = PanelFlow.normalize(
-			configurationManager.configuration.panelLayout ?? PanelLayout(
-				rows: PanelFlow.alignColumns(left: assignedLeft.map(\.layoutID), right: assignedRight.map(\.layoutID))
-			),
-			known: known
+		layoutSeed = PanelLayoutEdit.seed(
+			panelLayout: configurationManager.configuration.panelLayout,
+			assignedLeft: assignedLeft.map(\.layoutID),
+			assignedRight: assignedRight.map(\.layoutID),
+			known: Set(CardID.allCases.map(\.layoutID))
 		)
 		layoutDraft = layoutSeed ?? PanelLayout()
 		// chrome/卡片控制条随弹簧过渡（v1.18.6，取代 if 硬切）
@@ -890,20 +858,25 @@ struct BatteryPopoverView: View {
 		}
 	}
 
-	/// 退出编辑：改动过才落盘（面板关闭时 onDisappear 兜底按取消处理）
+	/// 退出编辑：改动过才落盘（面板关闭时 onDisappear 兜底按取消处理）。
+	/// 落盘判定与收尾值在 PanelLayoutEdit.exit——未改动返回 nil：防止"进编辑什么都不动、
+	/// 保存后列式对齐变行式平白长高"。写入序列与旧实现一致：先落盘、再关编辑态、
+	/// 最后收托盘与种子
 	private func exitLayoutEdit(save: Bool) {
-		if save, let seed = layoutSeed {
-			let normalized = PanelFlow.normalize(layoutDraft, known: Set(CardID.allCases.map(\.layoutID)))
-			// 未改动不落盘：防止"进编辑什么都不动，保存后列式对齐变行式平白长高"
-			if normalized != seed {
-				configurationManager.setPanelLayout(normalized)
-			}
+		let outcome = PanelLayoutEdit.exit(
+			draft: layoutDraft,
+			seed: layoutSeed,
+			save: save,
+			known: Set(CardID.allCases.map(\.layoutID))
+		)
+		if let layout = outcome.persist {
+			configurationManager.setPanelLayout(layout)
 		}
 		withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-			isEditingLayout = false
+			isEditingLayout = outcome.isEditing
 		}
-		trayExpanded = false
-		layoutSeed = nil
+		trayExpanded = outcome.trayExpanded
+		layoutSeed = outcome.seed
 	}
 
 	/// 一键重置：清掉自定义布局回自动模式。

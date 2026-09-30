@@ -169,12 +169,12 @@ struct ScrollCostProbe {
 			raw("monitor.drainEstimate", monitor.$drainEstimate.eraseToAnyPublisher()),
 			raw("monitor.bluetoothDevices", monitor.$bluetoothDevices.eraseToAnyPublisher()),
 			raw("monitor.significantEnergyApps", monitor.$significantEnergyApps.eraseToAnyPublisher()),
-			raw("recorder.hourlyTempStats", historyRecorder.$hourlyTempStats.eraseToAnyPublisher()),
-			raw("recorder.hourlyDrainStats", historyRecorder.$hourlyDrainStats.eraseToAnyPublisher()),
-			raw("recorder.socSamples", historyRecorder.$socSamples.eraseToAnyPublisher()),
-			raw("recorder.dailyHistory", historyRecorder.$dailyHistory.eraseToAnyPublisher()),
-			raw("recorder.appEnergy", historyRecorder.$appEnergy.eraseToAnyPublisher()),
-			tally("recorder.hourlyTempStats(去重)", historyRecorder.$hourlyTempStats.eraseToAnyPublisher()),
+			raw("recorder.hourlyTempStats", historyRecorder.daily.$hourlyTempStats.eraseToAnyPublisher()),
+			raw("recorder.hourlyDrainStats", historyRecorder.daily.$hourlyDrainStats.eraseToAnyPublisher()),
+			raw("recorder.socSamples", historyRecorder.soc.$socSamples.eraseToAnyPublisher()),
+			raw("recorder.dailyHistory", historyRecorder.daily.$dailyHistory.eraseToAnyPublisher()),
+			raw("recorder.appEnergy", historyRecorder.daily.$appEnergy.eraseToAnyPublisher()),
+			tally("recorder.hourlyTempStats(去重)", historyRecorder.daily.$hourlyTempStats.eraseToAnyPublisher()),
 			tally("monitor.drainEstimate(去重)", monitor.$drainEstimate.eraseToAnyPublisher()),
 		]
 		var buckets: [Int] = []
