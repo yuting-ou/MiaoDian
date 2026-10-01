@@ -5862,6 +5862,190 @@ do {
 
 }
 
+// MARK: - 门面顺序（拆完第一笔欠的账：跨域接线原先只有注释钉着）
+
+//
+// 为什么单独一组：7 个域各自自洽，错的只是**跨域的接线顺序**——
+// ① 先认充电器再开会会话，否则新会话的身份键丢；
+// ② 睡眠结算要排在建好当天日行之后，否则跨午夜那一觉被"缺行跳过"整夜吞掉。
+// 调乱这两处，其余 1400+ 项断言一项都不会红（每域的单位行为没变）。
+//
+// 两个前提先焊住（第三条摆位教训）：
+//  · facade init 会**回放当前快Snapshot**给订阅，events 域的"启动第一帧只记基准"已经被那次回放吃掉，
+//    所以本组断言不写"首帧"字样，并显式钉住 monitor 此刻是空档（percent 为 nil）——否则
+//    将来谁给 BatteryMonitor 加了预读，这组断言的前提被动过而没人知道。
+//  · 本组**全程零 await**：facade 真挂着 monitor 的 2 秒轮询订阅，一旦让出主线程，
+//    真快照就会插进来驱动 process，断言从确定性变成看运气。后人往里加 await 会静默破坏它。
+
+MainActor.assumeIsolated {
+	let suite = UserDefaults(suiteName: "miaodian.facade.order.\(UUID().uuidString)")!
+	let monitor = BatteryMonitor()
+
+	// 前提：这一轮里 monitor 吐出来的还是空档（订阅回放喂的是它，被各域的 nil 守卫挡掉）
+	expect(monitor.snapshot.stateOfChargePercent == nil,
+		   "门面顺序前提：monitor 此刻仍是空快照（不知情者若给 monitor 加预读，本组前提失效）")
+
+	// —— 断言①：身份键必须落在会话上（顺序的唯一摆位：先无名、后有名）——
+	//
+	// 摆位教训（这类断言最容易被自己糊弄过去的一种写法）：
+	// 会话域有"首帧没认出、认出后补记 backfill"的路径
+	// （`if session.chargerKey == nil { session.chargerKey = chargerKey }`）。
+	// 若帧1 就带名，则无论顺序正反，帧2 的 backfill 都会把 key 补上——**断言照绿、顺序照错**。
+	// 唯一能把"这一拍里 charger 步是否真的跑在 sessions 步之前"钉住的摆位是：
+	// 帧1 无名（两个域都空）→ 帧2 有名（这一拍才认出）→ 帧3 拔电归档。
+	//   · 顺序对：帧2 的 charger 步先建档填好 activeChargerKey，sessions 步收到它并补记；
+	//   · 顺序反：帧2 的 sessions 步拿到的是**上一拍残留的 nil**，补记不写，
+	//     而归档路径从不应用传入的 chargerKey（finalizeSession 用会话里存的那份）→ 断言红。
+	do {
+		let box = MutableHistoryClock(t0)
+		let recorder = BatteryHistoryRecorder(
+			monitor: monitor,
+			defaults: suite,
+			backupDirectory: nil,
+			byteStore: InMemoryHistoryByteStore(),
+			clock: box.clock
+		)
+
+		// 帧1：插电充电、有功率但**没名没厂**（两个域都无从建档）
+		var anonymous = BatterySnapshot()
+		anonymous.powerSource = .powerAdapter
+		anonymous.isCharging = true
+		anonymous.stateOfChargePercent = 30
+		anonymous.adapterRatedWatts = 20
+		anonymous.adapterInputPowerW = 45.0
+		recorder.process(anonymous)
+		expect(recorder.isChargingSessionAlive, "门面顺序①前提：充电帧已开出会话")
+
+		// 推满 2 分钟：isSessionWorthArchiving 要 durationMinutes >= 2（向下取整，卡边界没意义）
+		box.advance(185)
+
+		// 帧2：名/厂商这一拍才到位（识别 v2 的名厂任一到位即建档，无等待门槛）
+		var named = anonymous
+		named.adapterName = "Anker 65W"
+		named.adapterManufacturer = "Anker"
+		recorder.process(named)
+
+		// 帧3：拔电归档。归档用的是会话里存的那份 key，不是本拍传入的
+		let unplugged = batterySnap(percent: 31, charging: false, onBattery: true)
+		recorder.process(unplugged)
+
+		expectEqual(recorder.recentSessions.count, 1, "门面顺序①：拔电归档出一条会话")
+		expect(recorder.recentSessions.first?.chargerKey != nil,
+			   "门面顺序①：归档会话带上充电器身份键（先认头再开会话；反序则本拍拿到的是上一拍残留的 nil）")
+	}
+
+	// 正对照：帧1 就带名时，身份键应当**当场**落在会话上，不依赖任何补记。
+	// 这条证明上面的失败（若反序）不是"整条通道坏了"，而纯粹是拍内顺序错了。
+	// 注意它跟主断言的区别只在**第一帧有没有名**：其余帧逐字相同。
+	do {
+		let box = MutableHistoryClock(t0)
+		let recorder = BatteryHistoryRecorder(
+			monitor: monitor,
+			defaults: UserDefaults(suiteName: "miaodian.facade.pos.\(UUID().uuidString)")!,
+			backupDirectory: nil,
+			byteStore: InMemoryHistoryByteStore(),
+			clock: box.clock
+		)
+		var withName = BatterySnapshot()
+		withName.powerSource = .powerAdapter
+		withName.isCharging = true
+		withName.stateOfChargePercent = 40
+		withName.adapterName = "酷态科 100W"
+		withName.adapterManufacturer = "Cuktech"
+		withName.adapterRatedWatts = 100
+		withName.adapterInputPowerW = 60.0
+		recorder.process(withName)
+		box.advance(185)
+		// 第二帧必须也是充电帧：单帧会话的 startDate==endDate、首尾电量相等，
+		// isSessionWorthArchiving 两道门槛都不满足，归档会被静默挡掉（我第一版就栽在这）
+		var stillCharging = withName
+		stillCharging.stateOfChargePercent = 41
+		recorder.process(stillCharging)
+		recorder.process(batterySnap(percent: 42, charging: false, onBattery: true))
+		expectEqual(recorder.recentSessions.count, 1, "门面顺序①正对照：带名首帧一样能归档（时长门槛一致）")
+		expect(recorder.recentSessions.first?.chargerKey != nil,
+			   "门面顺序①正对照：身份键当场落上（不靠补记）")
+	}
+
+	// repair 反兜底：backfill 本身还得在工作——无名首帧 → 第二帧认出 → 归档仍带 key。
+	// 没人能靠"只保留顺序、删掉 backfill"让上面的断言变绿（无名头的会话会永久匿名）。
+	do {
+		let box = MutableHistoryClock(t0)
+		let recorder = BatteryHistoryRecorder(
+			monitor: monitor,
+			defaults: UserDefaults(suiteName: "miaodian.facade.backfill.\(UUID().uuidString)")!,
+			backupDirectory: nil,
+			byteStore: InMemoryHistoryByteStore(),
+			clock: box.clock
+		)
+		var noName = BatterySnapshot()
+		noName.powerSource = .powerAdapter
+		noName.isCharging = true
+		noName.stateOfChargePercent = 30
+		noName.adapterRatedWatts = 20
+		noName.adapterInputPowerW = 45.0
+		recorder.process(noName)
+		box.advance(185)
+		var lateName = noName
+		lateName.adapterName = "Anker 65W"
+		lateName.adapterManufacturer = "Anker"
+		recorder.process(lateName)
+		recorder.process(batterySnap(percent: 31, charging: false, onBattery: true))
+		expect(recorder.recentSessions.first?.chargerKey != nil,
+			   "门面顺序①反兜底：无名首帧靠 backfill 补记仍在工作（没人能删它取巧）")
+	}
+
+	// —— 断言②：睡眠秒数要落在**唤醒日**那行（跨午夜）——
+	//
+	// 摆位教训：若先喂一帧把唤醒日的行建出来，反序下 crediting 照样成功 → 假绿；
+	// 若干脆不喂帧，handleWillSleep 的 `guard let percent = lastPercentElse` 会静默返回 → 红得没意义。
+	// 忠于原始注释（跨午夜）的摆法：Day N 22:00 建行 → N 23:00 合盖 → N+1 07:00 唤醒 →
+	// 原地喂一帧结算。断言写在 **Day N+1 那一行**（应得零点后那 7 小时）。
+	// 反序时 Day N+1 的行在结算时还不存在 → 那段静默丢弃，且 pendingWake 已清，再无补救机会 → 红。
+	do {
+		let suite2 = UserDefaults(suiteName: "miaodian.facade.sleep.\(UUID().uuidString)")!
+		let box = MutableHistoryClock(t0)
+		let recorder = BatteryHistoryRecorder(
+			monitor: monitor,
+			defaults: suite2,
+			backupDirectory: nil,
+			byteStore: InMemoryHistoryByteStore(),
+			clock: box.clock
+		)
+		let dayN = DailyUsageRecorder.dayKey(t0)
+		let midnight = box.clock.calendar.startOfDay(for: t0).addingTimeInterval(24 * 3600)
+		let dayNplus1 = DailyUsageRecorder.dayKey(midnight)
+
+		// Day N 22:00：建出 Day N 的行、留下 lastPercentForDaily
+		box.set(box.clock.calendar.date(bySettingHour: 22, minute: 0, second: 0, of: t0) ?? t0)
+		let evening = batterySnap(percent: 90)
+		recorder.process(evening)
+		expect(recorder.dailyHistory.contains { $0.dayKey == dayN }, "门面顺序②前提：Day N 的行已建出来")
+
+		// N 23:00 合盖；N+1 07:00 唤醒；原地喂一帧（80%）触发结算
+		box.set(box.clock.calendar.date(bySettingHour: 23, minute: 0, second: 0, of: t0) ?? t0)
+		recorder.handleWillSleep()
+		box.set(box.clock.calendar.date(bySettingHour: 7, minute: 0, second: 0, of: midnight) ?? midnight)
+		recorder.handleDidWake()
+		recorder.process(batterySnap(percent: 80))
+
+		let credited = recorder.dailyHistory.first { $0.dayKey == dayNplus1 }
+		expect(credited != nil, "门面顺序②：唤醒日那一行被建出来了")
+		expect((credited?.batterySeconds ?? 0) >= 7 * 3600 - 1,
+			   "门面顺序②：零点后那 7 小时记进唤醒日的行（睡眠结算必须排在建行之后）")
+
+		// 反证不写死 Day N（反序下它照样 credited），只兜一句总量守恒
+		let dayNRow = recorder.dailyHistory.first { $0.dayKey == dayN }
+		expect((dayNRow?.batterySeconds ?? 0) >= 3600 - 1, "门面顺序②：合盖前那 1 小时记在 Day N")
+	}
+
+	// 前提焊住：这两个 handler 在测试里只测顺序，不测"定格供电来源"——
+	// monitor 是空默认档（powerSource 恒 .battery）且 snapshot 是 private(set)，
+	// 注不进适配器态。这条边界写进注释，免得后人误以为睡醒定格已被覆盖。
+	expect(monitor.snapshot.powerSource == .battery,
+		   "门面顺序边界：handleWillSleep 的 onAC 定格本组盖不住（monitor 快照注不进），只测顺序")
+}
+
 // MARK: - 汇总
 
 print("")

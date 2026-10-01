@@ -181,6 +181,17 @@ run_source_guards() {
 		exit 1
 	fi
 	echo "==> 存储决策守卫：历史存储只经 resolvedByteStore（关备份≠不落盘）"
+
+	# clock 接线守卫：门面必须把**同一个** clock 传给全部 7 个域。
+	# 行为断言说服不了这件事——少传一个域，那个域继续吃真实 Date()，测试却在推进假钟，
+	# 断言就按运气红绿（本项目最恨的那种）。这条只能按源码核对。
+	# 剔注释行照 v2.9.16 那条假绿教训：注释里写过模式名，不剔会自我触发。
+	CLOCK_HITS="$(grep -E 'persistence: persistence.*clock: clock' "$SRC/Services/BatteryHistoryRecorder.swift" 2>/dev/null | grep -vE '^[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+	if [ "${CLOCK_HITS:-0}" != "7" ]; then
+		echo "==> clock 接线守卫失败：门面只给 $CLOCK_HITS 个域传了 clock（期望 7）——漏传的域会吃真实时间，顺序断言看运气绿" >&2
+		exit 1
+	fi
+	echo "==> clock 接线守卫：7 个域同一个钟（漏传即吃真实时间，断言会看运气）"
 }
 
 # 真源码上跑一遍：守卫不过即构建失败（与拆分前行为一致）

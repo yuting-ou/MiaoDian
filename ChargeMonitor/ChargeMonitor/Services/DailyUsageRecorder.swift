@@ -324,7 +324,10 @@ final class DailyUsageRecorder: ObservableObject {
 		}
 	}
 
-	private static func dayKey(_ date: Date) -> String {
+	/// 日键。落盘的机器主键：固定 POSIX 公历（否则用户把系统日历改成佛历，yyyy 会输出 2570 这种年份）。
+	/// 提成 internal 是给门面顺序断言用的——那组断言要按**真实日键**摆跨午夜的位，
+	/// 测试自己抄一份 `yyyy-MM-dd` 就是第二个真源，判据会和被判处件漂移。
+	static func dayKey(_ date: Date) -> String {
 		dayKeyFormatter.string(from: date)
 	}
 

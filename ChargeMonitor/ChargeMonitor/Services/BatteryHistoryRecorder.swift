@@ -35,19 +35,27 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// 三个量具（离屏验收 2 处、滚动成本 2 处）全中，面板掉一半高度、真档案腿整条跳过。
 	// **不要把"关备份"和"不落盘"耦合成一个默认值**；真要不落盘请显式传 InMemoryHistoryByteStore()。
 	// 内部名用 store 而不是 byteStore：参数会遮蔽同名属性，init 里少写一个 self. 就会静默变成可选参数
-	init(monitor: BatteryMonitor, defaults: UserDefaults, backupDirectory: URL?, byteStore store: HistoryByteStore? = nil) {
+	// clock 生产恒为 .live；它是给测试传的——7 个域必须**同一个**钟，漏传一个就是真假混合、
+	// 断言看运气绿（这条由 run_tests.sh 的源文件级守卫按 `clock: clock` 出现次数核对）
+	init(
+		monitor: BatteryMonitor,
+		defaults: UserDefaults,
+		backupDirectory: URL?,
+		byteStore store: HistoryByteStore? = nil,
+		clock: HistoryClock = .live
+	) {
 		let persistence = HistoryPersistence(
 			byteStore: Self.resolvedByteStore(override: store, defaults: defaults),
 			backupDirectory: backupDirectory
 		)
 		self.monitor = monitor
-		self.events = PowerEventRecorder(persistence: persistence)
-		self.sessions = ChargeSessionRecorder(persistence: persistence)
-		self.health = HealthTrendRecorder(persistence: persistence, defaults: defaults, events: events, monitor: monitor)
-		self.daily = DailyUsageRecorder(persistence: persistence, monitor: monitor)
-		self.sleep = SleepDrainRecorder(persistence: persistence, daily: daily)
-		self.charger = ChargerProfileRecorder(persistence: persistence)
-		self.soc = SocSampleRecorder(persistence: persistence)
+		self.events = PowerEventRecorder(persistence: persistence, clock: clock)
+		self.sessions = ChargeSessionRecorder(persistence: persistence, clock: clock)
+		self.health = HealthTrendRecorder(persistence: persistence, defaults: defaults, events: events, monitor: monitor, clock: clock)
+		self.daily = DailyUsageRecorder(persistence: persistence, monitor: monitor, clock: clock)
+		self.sleep = SleepDrainRecorder(persistence: persistence, daily: daily, clock: clock)
+		self.charger = ChargerProfileRecorder(persistence: persistence, clock: clock)
+		self.soc = SocSampleRecorder(persistence: persistence, clock: clock)
 
 		// 各域自己认领自己的键；门面不越权拆包（否则拆出来的域等于没拆）
 		// events 先加载：health 的换电池检测会往事件时间线写一笔，顺序反了会丢那一条
@@ -124,7 +132,12 @@ final class BatteryHistoryRecorder: ObservableObject {
 	// ① 先认充电器再开会话：新会话要带上"是谁充的"身份键
 	// ② 睡眠结算要在建好当天日行之后：跨午夜那一觉醒来时"今天"的行还不存在，
 	//    先结算会被 creditingSleepTime 的"缺行跳过"整夜吞掉
-	private func process(_ snapshot: BatterySnapshot) {
+	//
+	// 这两条顺序原先只靠本注释钉着——调乱了 1473 项测试一项都不会红（每域各自自洽，
+	// 错的只是跨域的接线）。现由「门面顺序」那组断言逐条钉住，见 测试/main.swift。
+	// **internal 只为让那组断言能直接驱动**（生产入口只有上面 init 里那一处订阅），
+	// 不许长出第二条调用路径；要加入口先想清楚会不会有第二个 driver 同时喂快照。
+	func process(_ snapshot: BatterySnapshot) {
 		charger.updateChargerProfile(snapshot)
 		sessions.updateChargeSession(snapshot, chargerKey: charger.activeChargerKey)
 		charger.accumulateChargerPower(snapshot)
@@ -139,18 +152,21 @@ final class BatteryHistoryRecorder: ObservableObject {
 	}
 
 	// MARK: - 合盖/唤醒（转给睡眠与事件两个域）
-
-	@objc private func handleWillSleep() {
+	//
+	// @objc 是 NSWorkspace 通知的 selector 需要，internal 是顺序断言需要（同 process 的理由）。
+	@objc func handleWillSleep() {
 		events.appendPowerEvent(.sleep)
-		// lastPercentForDaily 是每日用电域维护的"最后一次采样电量"，
-		// 合盖那一刻的电量由它提供；供电来源要在这里定格（见 SleepDrainRecorder.handleWillSleep）
+		// lastPercentForDaily 是每日用电域维护的"最后一次采样电量"，合盖那一刻的电量由它提供；
+		// 供电来源要在这一刻定格（见 SleepDrainRecorder.handleWillSleep 的 onAC 语义）。
+		// 注意：测试里 monitor 是空默认档（powerSource 恒 .battery），这条 handler 的
+		// "定格供电来源"语义测试盖不住，只测顺序——见 测试/main.swift 该组断言的前提说明。
 		sleep.handleWillSleep(
 			onAC: monitor.snapshot.powerSource == .powerAdapter,
 			lastPercent: daily.lastPercentForDaily
 		)
 	}
 
-	@objc private func handleDidWake() {
+	@objc func handleDidWake() {
 		events.appendPowerEvent(.wake)
 		sleep.handleDidWake()
 	}

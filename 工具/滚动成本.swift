@@ -44,6 +44,10 @@ nonisolated(unsafe) var layoutPasses = 0
 nonisolated(unsafe) var originalLayoutIMP: IMP?
 nonisolated(unsafe) var hostLayoutSwizzled = false
 nonisolated(unsafe) var publishCount = 0
+// ① 失效守恒的两个计数器：子域各自 objectWillChange 合计 vs 门面转发表
+// （同一次运行内对数是恒等式，不按统计量吃"单点不写进结论"那条规矩）
+nonisolated(unsafe) var domainPublishes: Int64 = 0
+nonisolated(unsafe) var facadePublishes: Int64 = 0
 nonisolated(unsafe) var publishSubs: [AnyCancellable] = []
 
 /// 数"面板这段时间在反复重排多少轮"。PanelHostingView 是 final，不能继承加计数，
@@ -337,6 +341,27 @@ struct ScrollCostProbe {
 					 scrollable ? "yes" : "no", busy / wall * 100, Double(layoutPasses) / wall,
 					 String(publishCount)))
 		print("  分桶：" + buckets.map { String($0) }.joined(separator: " "))
+		// ① 失效守恒：门面把 7 个子域的 objectWillChange 原样转发给视图。
+		// 转发不守恒只有两副面孔：多跳合并（子域发 k 次门面只发 1 次）或反向放大。
+		// 同一次运行内两侧对数是唯一不需要"A/B 两棵树"的读法，而且是**恒等式**而非
+		// 统计量——一次就够，不吃"单点不写进结论"那条规矩。
+		let dsubs = [
+			historyRecorder.sessions.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.charger.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.daily.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.sleep.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.soc.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.events.objectWillChange.sink { _ in domainPublishes += 1 },
+			historyRecorder.health.objectWillChange.sink { _ in domainPublishes += 1 },
+		]
+		let facadeSub = historyRecorder.objectWillChange.sink { _ in facadePublishes += 1 }
+		for _ in 0..<100 {
+			drain(seconds: 0.1)
+		}
+		dsubs.forEach { $0.cancel() }
+		facadeSub.cancel()
+		print(String(format: "  ① 失效守恒：子域合计 %lld · 门面转发 %lld · 差 %lld（恒等式，须为 0）",
+					 domainPublishes, facadePublishes, facadePublishes - domainPublishes))
 		window.orderOut(nil)
 	}
 
