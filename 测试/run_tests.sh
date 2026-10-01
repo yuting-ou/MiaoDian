@@ -192,6 +192,38 @@ run_source_guards() {
 		exit 1
 	fi
 	echo "==> clock 接线守卫：7 个域同一个钟（漏传即吃真实时间，断言会看运气）"
+
+	# 保养状态回写守卫（轮21）：evaluator 给的**三个**状态必须全部回到 Controller。
+	# 起因此前真漏过一个：didObserveSystemHoldAtLine / hasSilencedCareForSystemHold 回写了，
+	# didNotifyChargeCare 漏了——拔电或 SOC 掉到重置线以下时 evaluator 把它清零，Controller
+	# 不提交，旧的 true 就一直挡在 guard 前，"提醒过一次就再也提醒不了"。
+	# 难点是"限定方法体 + 顺序"：全文件 grep 会被别处的同名赋值骗过，注释也会被算成实现。
+	# 做法：先用 awk 按花括号深度切出 evaluateChargeCare 的真实方法体（跳过注释行），
+	# 再在**这段里**比"回写行号 < guard 行号"。
+	CARE_FILE="$SRC/Services/BatteryAlertController.swift"
+	CARE_BODY="$(awk '
+		/^[[:space:]]*\/\// { next }                       # 注释行不当代码
+		/private func evaluateChargeCare\(/ { inbody=1 }   # 方法入口
+		inbody {
+			print
+			n += gsub(/\{/, "{"); n -= gsub(/\}/, "}")
+			if (n <= 0 && seen) { exit }
+			if (n > 0) { seen=1 }
+		}
+	' "$CARE_FILE" 2>/dev/null)"
+	WRITE_LINE="$(printf '%s\n' "$CARE_BODY" | grep -nE 'didNotifyChargeCare = result\.state\.didNotifyChargeCare' | head -1 | cut -d: -f1)"
+	GUARD_LINE="$(printf '%s\n' "$CARE_BODY" | grep -nE 'guard result\.shouldSend' | head -1 | cut -d: -f1)"
+	if [ -z "$WRITE_LINE" ] || [ -z "$GUARD_LINE" ]; then
+		echo "==> 保养状态回写守卫失败：evaluateChargeCare 方法体里找不到状态回写或 shouldSend 守卫（切片失败？）" >&2
+		printf '    切到的方法体前 6 行：\n%s\n' "$(printf '%s\n' "$CARE_BODY" | head -6)"
+		exit 1
+	fi
+	if [ "$WRITE_LINE" -ge "$GUARD_LINE" ]; then
+		echo "==> 保养状态回写守卫失败：didNotifyChargeCare 的回写（方法体内第 $WRITE_LINE 行）不在 guard result.shouldSend（第 $GUARD_LINE 行）之前" >&2
+		echo "    evaluator 的清零会被提前 return 吞掉 ⇒ 提醒过一次就再也提醒不了" >&2
+		exit 1
+	fi
+	echo "==> 保养状态回写守卫：三个状态全回写、回写早于 shouldSend 分支（漏一个即静默失效）"
 }
 
 # 真源码上跑一遍：守卫不过即构建失败（与拆分前行为一致）
@@ -232,6 +264,38 @@ fi
 rm -rf "$GUARD_PROBE"
 trap - EXIT
 echo "==> 元守卫：注入变异后守卫确实会红（守卫在工作，不是假绿）"
+
+# 保养回写守卫的专属变异（轮21）：上面的变异只锻炼淡变守卫，证明不了这条新守卫会红。
+# 这里在**源码副本**里删掉 evaluateChargeCare 的状态回写行（正是"漏接线"这个 bug 的原始形态），
+# 守卫必须红、且错误信息必须是保养回写守卫自己的——红不了或红错了都说明守卫没在工作。
+CARE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$CARE_PROBE"' EXIT
+cp -R "$SRC" "$CARE_PROBE/src"
+python3 - "$CARE_PROBE/src/Services/BatteryAlertController.swift" <<'MUTATE_CARE'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+# 只删真调用：整行剥空白后必须逐字等于回写语句；注释行（// 开头）天然不匹配
+hits = [i for i, l in enumerate(lines) if l.strip() == "didNotifyChargeCare = result.state.didNotifyChargeCare"]
+if len(hits) != 1:
+    sys.exit("变异没打上：期望恰好 1 处状态回写行，实际 %d 处" % len(hits))
+del lines[hits[0]]
+p.write_text("".join(lines), encoding="utf-8")
+MUTATE_CARE
+CARE_GOT_RED=0
+CARE_OUT="$( SRC="$CARE_PROBE/src"; run_source_guards 2>&1 >/dev/null )" || CARE_GOT_RED=1
+if [ "$CARE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：删掉保养状态回写后守卫仍然全过——保养回写守卫没在工作，本次「全绿」不作数" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$CARE_OUT" | grep -q "保养状态回写守卫失败"; then
+	echo "==> 元守卫失败：删掉回写后守卫红了，但红的不是保养回写守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$CARE_OUT" >&2
+	exit 1
+fi
+rm -rf "$CARE_PROBE"
+trap - EXIT
+echo "==> 元守卫：删除保养状态回写 → 保养回写守卫以预期信息变红（漏接线必红）"
 
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，

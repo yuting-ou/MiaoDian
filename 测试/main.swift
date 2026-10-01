@@ -3833,6 +3833,99 @@ do {
 	expectEqual(t.accumulatedDays, 2, "温度画像：跨天推进有效天数")
 }
 
+// MARK: - 保养拔电提醒的状态判定（ChargeCareAlertEvaluator，直接驱动真状态机）
+
+// 这一组测的是从 BatteryAlertController.evaluateChargeCare 抽出来的判定层。
+// 它与拆分的利害：Controller init 会碰 UNUserNotificationCenter，在裸二进制 harness 里
+// 一构造就把全部测试带走，所以判定必须脱离外壳才能被测。下面全部经 ChargeCareAlertEvaluator
+// 的 Input/State/Result 驱动，不构造 Controller。
+do {
+	let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+	let threshold = 80
+	func state(observed: Bool = false, silenced: Bool = false, notified: Bool = false) -> ChargeCareAlertEvaluator.State {
+		ChargeCareAlertEvaluator.State(
+			didObserveSystemHoldAtLine: observed,
+			hasSilencedCareForSystemHold: silenced,
+			didNotifyChargeCare: notified
+		)
+	}
+	func input(
+		_ snapshot: BatterySnapshot,
+		enabled: Bool = true,
+		_ st: ChargeCareAlertEvaluator.State = state(),
+		snoozeUntil: Date? = nil
+	) -> ChargeCareAlertEvaluator.Input {
+		ChargeCareAlertEvaluator.Input(
+			snapshot: snapshot, isReminderEnabled: enabled, thresholdPercent: threshold,
+			state: st, snoozeUntil: snoozeUntil, now: now
+		)
+	}
+
+	// —— ① 关着保养提醒拔电，仍要清掉系统标记（拆分里最易被静默弄丢的那条）——
+	// 「关提醒拔电 → 再插电 → 再开提醒」若顶着上一会话的 true，本该发的提醒会被静默吞掉
+	var unplugged = batterySnap(percent: 80)
+	unplugged.isCharging = false
+	let r1 = ChargeCareAlertEvaluator.evaluate(input(unplugged, enabled: false, state(observed: true, silenced: true)))
+	expect(!r1.state.didObserveSystemHoldAtLine,
+		"chargeCarePolicy_unplugResetsHoldWhileDisabled：关着提醒拔电也要清零系统按住标记")
+	// 连带：开关关着时一律不发（清零是状态副作用，不是发送）
+	expect(!r1.shouldSend, "chargeCarePolicy_unplugResetsHoldWhileDisabled：开关关闭时不发送")
+	// 反向对照：同一条快照、开关打开，同样清零（证明清零与开关无关）
+	let r1b = ChargeCareAlertEvaluator.evaluate(input(unplugged, enabled: true, state(observed: true)))
+	expect(!r1b.state.didObserveSystemHoldAtLine, "共存标记：开着提醒拔电同样清零（两条路径一致）")
+
+	// —— ② 系统暂停充电但仍插着电：不清"已提醒"边沿 ——
+	// 系统优化充电会在保养线附近反复暂停/恢复；若暂停就重置，插一晚会被反复提醒
+	var held = batterySnap(percent: 80, charging: false, onBattery: false)
+	held.notChargingReason = BatterySnapshot.optimizedChargingHoldBit  // 系统暂缓位（Apple 未文档化，按本机实测）
+	let r2 = ChargeCareAlertEvaluator.evaluate(input(held, state(observed: true, notified: true)))
+	expect(r2.state.didNotifyChargeCare, "保养线暂停不清已提醒：插着电、系统贴线按住时保留边沿")
+	expect(!r2.shouldSend, "保养线暂停不清已提醒：保留边沿 ⇒ 不再发")
+	// 且抑制用户提醒：系统在做同一件事（暂缓电平贴线 ±3%）
+	expect(r2.state.didObserveSystemHoldAtLine, "系统暂缓贴线：抑制我方提醒")
+
+	// —— ③ 延后期间不发；到期后恢复 ——
+	var charging = batterySnap(percent: 82, charging: true, onBattery: false)
+	let snoozed = ChargeCareAlertEvaluator.evaluate(input(charging, state(), snoozeUntil: now.addingTimeInterval(600)))
+	expect(!snoozed.shouldSend, "延后窗口内不发送")
+	expect(!snoozed.state.didNotifyChargeCare, "延后窗口内不把状态写成已提醒")
+	let expired = ChargeCareAlertEvaluator.evaluate(input(charging, state(), snoozeUntil: now.addingTimeInterval(-600)))
+	expect(expired.shouldSend, "延后到期后恢复发送")
+
+	// —— ④ 系统暂缓覆盖 / 不覆盖保养线两侧 ——
+	var heldAtLine = batterySnap(percent: 80, charging: false, onBattery: false)
+	heldAtLine.notChargingReason = BatterySnapshot.optimizedChargingHoldBit
+	let covering = ChargeCareAlertEvaluator.evaluate(input(heldAtLine, state()))
+	expect(!covering.shouldSend && covering.state.didObserveSystemHoldAtLine,
+		"暂缓贴线=覆盖：抑制提醒并锁存标记")
+	var heldAbove = batterySnap(percent: 86, charging: false, onBattery: false)
+	heldAbove.notChargingReason = BatterySnapshot.optimizedChargingHoldBit
+	let above = ChargeCareAlertEvaluator.evaluate(input(heldAbove, state()))
+	expect(!above.state.didObserveSystemHoldAtLine, "暂缓电平高于线：不算覆盖（系统会充过线）")
+
+	// —— 发送条件本身：充电中、未充满、过线 ——
+	let sendCase = ChargeCareAlertEvaluator.evaluate(input(charging, state()))
+	expect(sendCase.shouldSend, "过线充电中且未提醒过 ⇒ 该发")
+	let alreadyNotified = ChargeCareAlertEvaluator.evaluate(input(charging, state(notified: true)))
+	expect(!alreadyNotified.shouldSend, "本段已提醒过 ⇒ 不再发")
+	var notYet = batterySnap(percent: 79, charging: true, onBattery: false)
+	expect(!ChargeCareAlertEvaluator.evaluate(input(notYet, state())).shouldSend, "未到保养线 ⇒ 不发")
+
+	// —— 重置条件：**拔电**或**电量低于线−5**才清，"在不在充电"不管 ——
+	// 系统优化充电会在保养线附近反复暂停/恢复；若暂停就重置，插一晚会被反复提醒。
+	// 因此"插着电、贴着线暂停"必须保留边沿（电量 70 已低于线−5，本该清）
+	var pausedAtLine = batterySnap(percent: 78, charging: false, onBattery: false)
+	let keepEdge = ChargeCareAlertEvaluator.evaluate(input(pausedAtLine, state(notified: true)))
+	expect(keepEdge.state.didNotifyChargeCare, "插电、贴线暂停：不清已提醒边沿（防一晚上反复提醒）")
+	// 仍插电但电量已掉到线−5 以下 → 清（与"拔电"并列的另一半重置条件）
+	let belowLine = ChargeCareAlertEvaluator.evaluate(input(batterySnap(percent: 74, charging: false, onBattery: false), state(notified: true)))
+	expect(!belowLine.state.didNotifyChargeCare, "插电但电量低于线−5：清已提醒边沿（重置的另一半条件）")
+	// 拔电则清
+	let onBatteryLow = batterySnap(percent: 70, charging: false)
+	expect(!ChargeCareAlertEvaluator.evaluate(input(onBatteryLow, state(notified: true))).state.didNotifyChargeCare,
+		"拔电源：清已提醒边沿")
+}
+
 // MARK: - 保养提醒 vs 系统优化充电打架检测
 
 do {

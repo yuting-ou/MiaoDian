@@ -1,3 +1,15 @@
+## v2.9.19（保养提醒拆分 1b 第一刀：状态判定抽进纯 evaluator；补拆分引入的状态回写遗漏；漏接线必红守卫）
+- **架构｜`BatteryAlertController` 拆分 1b 第一刀：`evaluateChargeCare` 的状态判定抽进 `ChargeCareAlertEvaluator`**（`Services/ChargeCareAlertEvaluator.swift`，纯逻辑、不碰 UN/send）。背景：`BatteryAlertController` 约 926 行且**本体在本 harness 结构上不可测**——裸二进制里 `UNUserNotificationCenter.current()` 直接抛 NSException（`init` 第一件事就是接管 delegate），所以"先补 characterization 再拆"跑不通，顺序只能是 1a 依赖缝纫 → 1b 抽不碰 UN 的判定 → 1c 才谈得上测判定。本轮即 1b 首刀，只动保养提醒这一条。
+  - `Input`（snapshot/开关/阈值/State/snoozeUntil/now）**全必填无默认值**；`State` 三个边沿标志（`didObserveSystemHoldAtLine`／`hasSilencedCareForSystemHold`／`didNotifyChargeCare`）进出都是值；`Output` = 新 State + `shouldSend`。Controller 只剩外壳三件事：把持久化与时钟读成值、驱动判定、`if send(...)` 成功才提交状态。
+  - 五个纯函数（isCarePauseEdge／isHoldCoveringCareLine／systemHoldCoveringCareLine／isChargeCareSnoozed／systemHoldCareTolerance）改为**转发到 evaluator**：既有约 20 条直接调 static 的断言继续绿，同时消除"同一判断抄第二遍"（v2.9.16 教训）。转发语义逐字未变，"拔电重置不许被开关挡住"这条不变量钉在 evaluator 注释里。
+  - 拆分保住的四条语义逐条有断言：① 拔电重置先于开关 guard；② 插电贴线暂停不清已提醒边沿、系统暂缓贴线才抑制；③ snooze 未到期不发、到期恢复；④ 系统暂缓"高于线不算覆盖"。相邻两条不变量（健康里程碑关开关仍抬基准、周月报空内容仍记账）冻结未动。
+- **修复｜拆分引入的状态回写遗漏：`didNotifyChargeCare` 没写回 Controller——"提醒过一次就再也提醒不了"**。抽判定时只回写了三项状态里的两项；evaluator 在拔电或 SOC 掉到重置线以下时会把 `didNotifyChargeCare` 清零，Controller 不提交，旧的 `true` 就一直挡在 `guard !didNotifyChargeCare` 前。**这是拆分引入的真缺陷，不是原代码就有的**（原代码那支直接改属性）。修法一行：回写放 `guard result.shouldSend` **之前**——放之后清零同样被提前 return 吞掉；"只有 send 成功才置 true"的路径原样保留，全部行为断言绿即 disabled／缺 SOC／延后／系统暂缓四种早退行为未变的证据。
+- **守卫｜漏接线必红 + 元守卫补专属变异**。`run_source_guards()` 新增"保养状态回写守卫"：awk 按花括号深度切出 `evaluateChargeCare` 的**真实方法体**（跳过注释行），在这段里比"回写行号 < guard 行号"——不用全文件 grep（会被别处同名赋值骗过），注释也不算实现。元守卫补上**针对这条守卫**的专属变异：在源码副本里删掉回写行，守卫必须红、且错误信息必须是"保养状态回写守卫失败"自己的——红不了或红错了都算构建失败。三态实测：副本原样绿 / 删回写红（exit=1，错误信息逐字符合预期）/ 恢复后 cmp 一致复绿。
+- **测试｜+17 条直接驱动 evaluator 的断言**（本机 1485 → **1502**；`TZ=UTC` **1503**）。整组**全程零 await**：门面真挂着 2 秒轮询订阅，一旦让出主线程，真快照会插进来把确定性变成看运气。一条自己写错又改的：最初把"插电暂停且电量低于线−5"断言成"不清边沿"，与现行语义相反，真红了一条——现行规则是**拔电或低于线−5 都清**，"在不在充电"不管。教训：抽状态机先读原代码的完整条件，别按注释脑补。
+- 门禁：`bash 打包.sh`（内含 build.sh 测试门）exit 0；本机 **1502** / `TZ=UTC` **1503** 全绿；`git diff --check` 干净。
+- 已知边界：① `BatteryAlertController` 本体仍不可测（UN 外壳），其余 11 条 `evaluate*` 可照本轮形状逐条搬，属后续轮次；② "send 成功才置位"在 harness 里拿不到真实投递结果（`send` 内部是 `UNUserNotificationCenter.add`，返回恒 true），无测试覆盖；③ Controller 上五个 static 纯函数是**过渡形状**——既有断言改调 evaluator 后应删掉转发层。
+- 附注：**v2.9.18 从未发过 GitHub Release**（历轮任务书均禁止发布，Latest 曾停在 v2.9.17）——本 v2.9.19 的 DMG 同时携带 v2.9.18 架构轮全部改动（历史采集门面 + 7 域 recorder、时间序列一键一文件、PanelLayoutModel、守卫元守卫、CI 量具编译审计）。
+
 ## v2.9.18（架构轮：历史采集按数据域拆分、时间序列搬出 UserDefaults、面板布局判定抽出、守卫补元守卫）
 - **架构｜`BatteryHistoryRecorder` 拆成门面 + 7 个域 recorder**（1320 → **261 行**）。触发来自一次架构复审：这个类 1400 行里挤着 15 组互不相关的累计器，24 处直接 `Date()`，"想给睡眠掉电写个测试得先绕过充电器档案"。现在各域自持状态与入口：`ChargeSession`／`ChargerProfile`／`DailyUsage`／`SleepDrain`／`SocSample`／`PowerEvent`／`HealthTrend`（均在 `Services/`）。
   - **对外 23 个成员名逐字未变**，8 个调用方只有 3 处需要改（提醒控制器的 `$` 投影改挂具体域、报告生成器与曲线详情窗的两个静态查询改挂 `ChargerProfileRecorder`）。域间只走显式注入：会话域的身份键由门面每拍传入；睡眠域持有每日用电域（睡眠时长要记进当天用电行）；健康域持有事件域与 monitor（换电池要往时间线记一笔）。
