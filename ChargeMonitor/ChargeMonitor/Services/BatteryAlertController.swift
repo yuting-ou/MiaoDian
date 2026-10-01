@@ -27,6 +27,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private weak var historyRecorder: BatteryHistoryRecorder?
 	private var lastSnapshot = BatterySnapshot()
 	private let defaults = UserDefaults.standard
+	// 里程碑 seen 的写回走 init 传入的同一个 ConfigurationManager（配设置页同源）；
+	// 原先这里裸写 .shared，且该成员压根不存在——依赖靠的是全局偶合
+	private let configurationManager: ConfigurationManager
 	
 	private var didNotifyFull = false
 	private var didNotifyLowBattery = false
@@ -83,9 +86,11 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	nonisolated static let slowChargeCategoryID = "slow-charge"
 
 	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil) {
-		super.init()
+		// NSObject 的 two-phase init：存储属性须在 super.init() 前就位（configurationManager 是 let 非可选）
 		self.monitor = monitor
 		self.historyRecorder = historyRecorder
+		self.configurationManager = configurationManager
+		super.init()
 		// 注册可交互通知类别并接管通知中心回调（面板打开时前台横幅也靠它）
 		Self.registerNotificationCategories()
 		UNUserNotificationCenter.current().delegate = self
@@ -566,9 +571,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	}
 
 	private func applyCycleMilestoneSeen(_ seen: Int) {
-		// AlertController 持有 configurationManager 时可 update；否则仅 defaults 记忆
-		// 这里用 ConfigurationManager.shared 保持与设置页同源
-		ConfigurationManager.shared.setHealthCycleMilestoneSeen(seen)
+		// 走 init 注入的同一实例写回：设置窗口改的就是它，同源不靠裸取全局。
+		// （早先这里写 .shared 且类里没这个成员，依赖靠的是全局偶合。）
+		configurationManager.setHealthCycleMilestoneSeen(seen)
 	}
 	
 	private func evaluateSlowCharge(_ snapshot: BatterySnapshot) {
