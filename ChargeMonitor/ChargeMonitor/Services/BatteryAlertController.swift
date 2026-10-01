@@ -26,7 +26,10 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 周报数据从用电历史/充电记录里汇总
 	private weak var historyRecorder: BatteryHistoryRecorder?
 	private var lastSnapshot = BatterySnapshot()
-	private let defaults = UserDefaults.standard
+	// 标记键、延后窗口、去重日、冷却、周月报记账全走 defaults。
+	// 可注入 = 单测 / 量具能落临时域；否则一轮跑过 lastWeeklyDigestDate
+	// 落进**开发机**，第二轮真假红看执行顺序（与 ConfigurationManager 同源的注入同理）
+	private let defaults: UserDefaults
 	// 里程碑 seen 的写回走 init 传入的同一个 ConfigurationManager（配设置页同源）；
 	// 原先这里裸写 .shared，且该成员压根不存在——依赖靠的是全局偶合
 	private let configurationManager: ConfigurationManager
@@ -85,11 +88,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	nonisolated static let chargeCareCategoryID = "charge-care"
 	nonisolated static let slowChargeCategoryID = "slow-charge"
 
-	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil) {
+	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil, defaults: UserDefaults = .standard) {
 		// NSObject 的 two-phase init：存储属性须在 super.init() 前就位（configurationManager 是 let 非可选）
 		self.monitor = monitor
 		self.historyRecorder = historyRecorder
 		self.configurationManager = configurationManager
+		self.defaults = defaults
 		super.init()
 		// 注册可交互通知类别并接管通知中心回调（面板打开时前台横幅也靠它）
 		Self.registerNotificationCategories()
