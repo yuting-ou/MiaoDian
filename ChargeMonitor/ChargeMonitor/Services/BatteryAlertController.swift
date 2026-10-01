@@ -33,6 +33,10 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 里程碑 seen 的写回走 init 传入的同一个 ConfigurationManager（配设置页同源）；
 	// 原先这里裸写 .shared，且该成员压根不存在——依赖靠的是全局偶合
 	private let configurationManager: ConfigurationManager
+	// 时间来源全走注入的时钟：免打扰小时、骤升窗口、周月报名册、延后窗口
+	// 原先这些位置直接读系统时钟，单测钉不住"凌晨误报/周月报每秒重发"。
+	// 注入后测试可推进假钟把这三条钉死；生产恒 .live，行为逐字不变
+	private let clock: HistoryClock
 	
 	private var didNotifyFull = false
 	private var didNotifyLowBattery = false
@@ -88,12 +92,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	nonisolated static let chargeCareCategoryID = "charge-care"
 	nonisolated static let slowChargeCategoryID = "slow-charge"
 
-	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil, defaults: UserDefaults = .standard) {
-		// NSObject 的 two-phase init：存储属性须在 super.init() 前就位（configurationManager 是 let 非可选）
+	init(monitor: BatteryMonitor, configurationManager: ConfigurationManager, historyRecorder: BatteryHistoryRecorder? = nil, defaults: UserDefaults = .standard, clock: HistoryClock = .live) {
+		// NSObject 的 two-phase init：存储属性须在 super.init() 前就位（configurationManager/clock 是 let 非可选）
 		self.monitor = monitor
 		self.historyRecorder = historyRecorder
 		self.configurationManager = configurationManager
 		self.defaults = defaults
+		self.clock = clock
 		super.init()
 		// 注册可交互通知类别并接管通知中心回调（面板打开时前台横幅也靠它）
 		Self.registerNotificationCategories()
@@ -283,7 +288,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			// 用户点过"延后"：到点前闭嘴，到点后重新提醒（didNotify 已在延后时重置）
 			guard !Self.isChargeCareSnoozed(
 				snoozeUntil: defaults.object(forKey: Self.chargeCareSnoozeKey) as? Date,
-				now: Date()
+				now: clock.now()
 			) else { return }
 			if send(
 				id: "charge-care",
@@ -343,10 +348,10 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private func trackOptimizedChargingPause(_ snapshot: BatterySnapshot) {
 		let threshold = configuration.chargeCareThresholdPercent
 		if Self.isCarePauseEdge(previousCharging: wasChargingNearCareLine, snapshot: snapshot, threshold: threshold) {
-			carePauseEdges.append(Date())
+			carePauseEdges.append(clock.now())
 		}
 		wasChargingNearCareLine = snapshot.isCharging
-		let cutoff = Date().addingTimeInterval(-6 * 3600)
+		let cutoff = clock.now().addingTimeInterval(-6 * 3600)
 		carePauseEdges.removeAll { $0 < cutoff }
 		let holding = carePauseEdges.count >= 3
 		if holding != isOptimizedChargingHolding {
@@ -465,7 +470,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 温度骤升：不等到高温线，短时间内快速升温就先提个醒
 	private func evaluateTempSurge(_ snapshot: BatterySnapshot) {
 		guard let celsius = snapshot.temperatureC else { return }
-		let now = Date()
+		let now = clock.now()
 		
 		// 采样断档（睡过）则清空重来，跨睡眠的温差没意义
 		if let last = recentTemps.last, now.timeIntervalSince(last.date) > 120 {
@@ -548,9 +553,9 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			samples: historyRecorder?.trendHealthSamples ?? [],
 			thresholdPoints: config.healthDeclineThresholdPoints,
 			windowDays: HealthAnomalyDetector.defaultDeclineWindowDays,
-			now: Date()
+			now: clock.now()
 		) {
-			let dayKey = Self.healthDeclineDayKey(date: Date())
+			let dayKey = Self.healthDeclineDayKey(date: clock.now())
 			if defaults.string(forKey: Self.healthDeclineDedupKey) != dayKey {
 				if send(id: finding.notificationID, title: finding.title, body: finding.body) {
 					defaults.set(dayKey, forKey: Self.healthDeclineDedupKey)
@@ -612,7 +617,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private func evaluateSleepDrain(_ record: SleepDrainRecord) {
 		guard isEnabled, configuration.enabledOptions.contains(.sleepDrainReport) else { return }
 		let lastAlerted = defaults.object(forKey: Self.sleepDrainAlertedKey) as? Date
-		guard Self.shouldAlertSleepDrain(record: record, now: Date(), lastAlertedWakeDate: lastAlerted) else { return }
+		guard Self.shouldAlertSleepDrain(record: record, now: clock.now(), lastAlertedWakeDate: lastAlerted) else { return }
 
 		// 元凶名单由历史记录器在醒来时抓取并留档，这里直接复述
 		var body = String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
@@ -642,7 +647,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 条件可能长期成立（老化的电量计跳变是常态），用时间冷却而不是边沿重置防轰炸
 	private func evaluateGaugeCalibration(_ events: [SocJumpEvent]) {
 		guard isEnabled, alertEnabled(.alertGaugeCalibration) else { return }
-		let now = Date()
+		let now = clock.now()
 		let count = UsagePatternAnalyzer.socJumpCount(events, withinDays: 30, now: now)
 		guard UsagePatternAnalyzer.gaugeNeedsCalibration(jumpCount: count) else { return }
 		// 先记账再发：投递失败也不靠重复轰炸补偿
@@ -680,13 +685,13 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 每周电池周报：周日 20 点后第一次有机会时发；错过就顺延到下次启动
 	private func checkWeeklyDigest() {
 		guard isEnabled, configuration.enabledOptions.contains(.weeklyDigest) else { return }
-		guard let due = Self.mostRecentDigestDue(before: Date()) else { return }
+		guard let due = Self.mostRecentDigestDue(before: clock.now()) else { return }
 		// 首次运行只记个时间标记不发：刚装上就报”本周”没意义
 		guard let lastSent = defaults.object(forKey: Self.weeklyDigestDateKey) as? Date else {
-			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.weeklyDigestDateKey)
 			return
 		}
-		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
+		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: clock.now()), let recorder = historyRecorder else { return }
 
 		let weekStart = due.addingTimeInterval(-7 * 86400)
 		let sessionCount = recorder.recentSessions.filter { $0.startDate >= weekStart }.count
@@ -702,12 +707,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		)
 		// 无内容也记账：本期确实没什么可说，别让 digestSendAllowed 每轮空转
 		guard !body.isEmpty else {
-			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.weeklyDigestDateKey)
 			return
 		}
 		// 投递成功才记账——免打扰吞掉时保留 lastSent，下一轮仍可补发本期
 		if send(id: "weekly-digest", title: "本周电池小结", body: body) {
-			defaults.set(Date(), forKey: Self.weeklyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.weeklyDigestDateKey)
 		}
 	}
 	
@@ -760,12 +765,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	// 与周报共用 weeklyDigest 开关（同为"定期小结"）
 	private func checkMonthlyDigest() {
 		guard isEnabled, configuration.enabledOptions.contains(.weeklyDigest) else { return }
-		guard let due = Self.mostRecentMonthlyDigestDue(before: Date()) else { return }
+		guard let due = Self.mostRecentMonthlyDigestDue(before: clock.now()) else { return }
 		guard let lastSent = defaults.object(forKey: Self.monthlyDigestDateKey) as? Date else {
-			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.monthlyDigestDateKey)
 			return
 		}
-		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: Date()), let recorder = historyRecorder else { return }
+		guard Self.digestSendAllowed(lastSent: lastSent, due: due, now: clock.now()), let recorder = historyRecorder else { return }
 
 		let body = Self.monthlyDigestBody(
 			history: recorder.dailyHistory,
@@ -774,12 +779,12 @@ final class BatteryAlertController: NSObject, ObservableObject {
 			due: due
 		)
 		guard !body.isEmpty else {
-			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.monthlyDigestDateKey)
 			return
 		}
 		// 投递成功才记账——免打扰吞掉时下一轮仍可补发本期
 		if send(id: "monthly-digest", title: "上月电池小结", body: body) {
-			defaults.set(Date(), forKey: Self.monthlyDigestDateKey)
+			defaults.set(clock.now(), forKey: Self.monthlyDigestDateKey)
 		}
 	}
 
@@ -829,7 +834,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 
 	private var isInQuietHours: Bool {
 		guard configuration.enabledOptions.contains(.quietHours) else { return false }
-		let hour = Calendar.current.component(.hour, from: Date())
+		let hour = clock.calendar.component(.hour, from: clock.now())
 		return Self.isQuietHour(hour, start: configuration.quietHoursStartHour, end: configuration.quietHoursEndHour)
 	}
 
@@ -876,7 +881,7 @@ final class BatteryAlertController: NSObject, ObservableObject {
 
 	// 用户点了"延后 30 分钟"：静音窗口 + 重新武装提醒（到点后若仍在线上会再喊一次）
 	private func snoozeChargeCare(minutes: Int) {
-		defaults.set(Date().addingTimeInterval(TimeInterval(minutes) * 60), forKey: Self.chargeCareSnoozeKey)
+		defaults.set(clock.now().addingTimeInterval(TimeInterval(minutes) * 60), forKey: Self.chargeCareSnoozeKey)
 		didNotifyChargeCare = false
 	}
 
