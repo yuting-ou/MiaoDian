@@ -3663,9 +3663,9 @@ do {
 do {
 	// 保养提醒延后:到点前静音,过了立即解除
 	let now = Date()
-	expect(!BatteryAlertController.isChargeCareSnoozed(snoozeUntil: nil, now: now), "通知交互:无延后标记不静音")
-	expect(BatteryAlertController.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(60), now: now), "通知交互:延后窗口内静音")
-	expect(!BatteryAlertController.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(-60), now: now), "通知交互:延后过期解除")
+	expect(!ChargeCareAlertEvaluator.isChargeCareSnoozed(snoozeUntil: nil, now: now), "通知交互:无延后标记不静音")
+	expect(ChargeCareAlertEvaluator.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(60), now: now), "通知交互:延后窗口内静音")
+	expect(!ChargeCareAlertEvaluator.isChargeCareSnoozed(snoozeUntil: now.addingTimeInterval(-60), now: now), "通知交互:延后过期解除")
 
 	// 会话归档:优化充电的暂停(仍插着电)不算结束,拔电才算
 	expect(!ChargeSessionRecorder.shouldArchiveActiveSession(powerSource: .powerAdapter), "会话归档:暂停充电不归档")
@@ -3885,7 +3885,7 @@ do {
 	expect(r2.state.didObserveSystemHoldAtLine, "系统暂缓贴线：抑制我方提醒")
 
 	// —— ③ 延后期间不发；到期后恢复 ——
-	var charging = batterySnap(percent: 82, charging: true, onBattery: false)
+	let charging = batterySnap(percent: 82, charging: true, onBattery: false)
 	let snoozed = ChargeCareAlertEvaluator.evaluate(input(charging, state(), snoozeUntil: now.addingTimeInterval(600)))
 	expect(!snoozed.shouldSend, "延后窗口内不发送")
 	expect(!snoozed.state.didNotifyChargeCare, "延后窗口内不把状态写成已提醒")
@@ -3908,13 +3908,13 @@ do {
 	expect(sendCase.shouldSend, "过线充电中且未提醒过 ⇒ 该发")
 	let alreadyNotified = ChargeCareAlertEvaluator.evaluate(input(charging, state(notified: true)))
 	expect(!alreadyNotified.shouldSend, "本段已提醒过 ⇒ 不再发")
-	var notYet = batterySnap(percent: 79, charging: true, onBattery: false)
+	let notYet = batterySnap(percent: 79, charging: true, onBattery: false)
 	expect(!ChargeCareAlertEvaluator.evaluate(input(notYet, state())).shouldSend, "未到保养线 ⇒ 不发")
 
 	// —— 重置条件：**拔电**或**电量低于线−5**才清，"在不在充电"不管 ——
 	// 系统优化充电会在保养线附近反复暂停/恢复；若暂停就重置，插一晚会被反复提醒。
 	// 因此"插着电、贴着线暂停"必须保留边沿（电量 70 已低于线−5，本该清）
-	var pausedAtLine = batterySnap(percent: 78, charging: false, onBattery: false)
+	let pausedAtLine = batterySnap(percent: 78, charging: false, onBattery: false)
 	let keepEdge = ChargeCareAlertEvaluator.evaluate(input(pausedAtLine, state(notified: true)))
 	expect(keepEdge.state.didNotifyChargeCare, "插电、贴线暂停：不清已提醒边沿（防一晚上反复提醒）")
 	// 仍插电但电量已掉到线−5 以下 → 清（与"拔电"并列的另一半重置条件）
@@ -3926,29 +3926,108 @@ do {
 		"拔电源：清已提醒边沿")
 }
 
+// MARK: - 三条边沿提醒的状态判定（ThresholdAlertEvaluators，拆分 1b 第二刀）
+
+// 充满/低电量/高温的边沿语义原先长在 Controller 壳里（构造不出 ⇒ 此前零断言）。
+// 直接驱动真判定层。三条共同的隐藏语义是"**重置不受提醒开关挡**"——与保养不变量①
+// 同族、抽的时候最像"可以顺手简化"的代码，每台机器各有一条断言钉死（变异 M1/M4 抽验）。
+do {
+	// —— 充满：插电且已满提醒一次；拔电或未满即重置（无滞回）——
+	var fullOnAdapter = batterySnap(percent: 100, onBattery: false)
+	fullOnAdapter.isFull = true
+	let fullSend = FullChargeAlertEvaluator.evaluate(.init(snapshot: fullOnAdapter, isReminderEnabled: true, didNotify: false))
+	expect(fullSend.shouldSend, "充满:插电已满且未提醒 ⇒ 该发")
+	let fullHeld = FullChargeAlertEvaluator.evaluate(.init(snapshot: fullOnAdapter, isReminderEnabled: true, didNotify: true))
+	expect(!fullHeld.shouldSend && fullHeld.didNotify, "充满:已提醒过 ⇒ 不再发且边沿保持")
+	let fullUnplugged = batterySnap(percent: 99)
+	expect(!FullChargeAlertEvaluator.evaluate(.init(snapshot: fullUnplugged, isReminderEnabled: true, didNotify: true)).didNotify,
+		"充满:拔电重置边沿（再插满会再提醒）")
+	expect(!FullChargeAlertEvaluator.evaluate(.init(snapshot: fullUnplugged, isReminderEnabled: false, didNotify: true)).didNotify,
+		"充满:开关关着拔电同样重置（重置不受开关挡）")
+	let notFullYet = batterySnap(percent: 95, charging: true, onBattery: false)
+	expect(!FullChargeAlertEvaluator.evaluate(.init(snapshot: notFullYet, isReminderEnabled: true, didNotify: true)).didNotify,
+		"充满:未充满也重置（插电途中不算满）")
+	let fullDisabled = FullChargeAlertEvaluator.evaluate(.init(snapshot: fullOnAdapter, isReminderEnabled: false, didNotify: false))
+	expect(!fullDisabled.shouldSend && !fullDisabled.didNotify, "充满:开关关着不发送、边沿不动")
+	// guard-fail 分支的透传：开关关着但已置位且状态持续 ⇒ 边沿必须**保持**（不是清零）。
+	// 缺这条时"开关关着且持续满电 → 清边沿"的变异 21 条全绿——再开开关会多喊一条
+	let fullDisabledHeld = FullChargeAlertEvaluator.evaluate(.init(snapshot: fullOnAdapter, isReminderEnabled: false, didNotify: true))
+	expect(fullDisabledHeld.didNotify && !fullDisabledHeld.shouldSend, "充满:开关关着且仍在满 ⇒ 已置位边沿保持")
+
+	// —— 低电量：电池供电过线提醒；接电或升出滞回带（线+5）才重置 ——
+	let lowOnBattery = batterySnap(percent: 19)
+	let lowSend = LowBatteryAlertEvaluator.evaluate(.init(snapshot: lowOnBattery, thresholdPercent: 20, isReminderEnabled: true, didNotify: false))
+	expect(lowSend.shouldSend, "低电:电池供电过线 ⇒ 该发")
+	// 滞回带：线与线+5 之间既不发也不重置，防止临界电量"提醒→回升1%→重置→又提醒"横跳
+	let lowBand = LowBatteryAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: 23), thresholdPercent: 20, isReminderEnabled: true, didNotify: true))
+	expect(lowBand.didNotify && !lowBand.shouldSend, "低电:滞回带内（线+3）不重置不发（防临界横跳）")
+	let lowOut = LowBatteryAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: 25), thresholdPercent: 20, isReminderEnabled: true, didNotify: true))
+	expect(!lowOut.didNotify, "低电:升出滞回带（线+5）重置")
+	let lowOnAdapter = LowBatteryAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: 15, onBattery: false), thresholdPercent: 20, isReminderEnabled: true, didNotify: true))
+	expect(!lowOnAdapter.didNotify, "低电:接电即重置（哪怕读数仍低）")
+	let lowNil = LowBatteryAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: nil), thresholdPercent: 20, isReminderEnabled: true, didNotify: true))
+	expect(lowNil.didNotify && !lowNil.shouldSend, "低电:缺读数不动边沿（不判不重置）")
+	let lowDisabledReset = LowBatteryAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: 25), thresholdPercent: 20, isReminderEnabled: false, didNotify: true))
+	expect(!lowDisabledReset.didNotify, "低电:开关关着升出带同样重置（重置不受开关挡）")
+	let lowDisabledLow = LowBatteryAlertEvaluator.evaluate(.init(snapshot: lowOnBattery, thresholdPercent: 20, isReminderEnabled: false, didNotify: false))
+	expect(!lowDisabledLow.shouldSend && !lowDisabledLow.didNotify, "低电:开关关着不发送、边沿不动")
+	// guard-fail 分支的透传（同充满那条的理由）
+	let lowDisabledHeld = LowBatteryAlertEvaluator.evaluate(.init(snapshot: lowOnBattery, thresholdPercent: 20, isReminderEnabled: false, didNotify: true))
+	expect(lowDisabledHeld.didNotify && !lowDisabledHeld.shouldSend, "低电:开关关着且仍在低 ⇒ 已置位边沿保持")
+	let lowAlready = LowBatteryAlertEvaluator.evaluate(.init(snapshot: lowOnBattery, thresholdPercent: 20, isReminderEnabled: true, didNotify: true))
+	expect(!lowAlready.shouldSend && lowAlready.didNotify, "低电:已提醒过 ⇒ 不再发且边沿保持")
+
+	// —— 高温：过线提醒；降回线 −2°C 以下才重置 ——
+	var hot = batterySnap(percent: 50)
+	hot.temperatureC = 46.0
+	let hotSend = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: hot, thresholdCelsius: 45, isReminderEnabled: true, didNotify: false))
+	expect(hotSend.shouldSend, "高温:过线 ⇒ 该发")
+	var warmBand = batterySnap(percent: 50)
+	warmBand.temperatureC = 44.0  // 线 −1：滞回带内
+	let hotBand = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: warmBand, thresholdCelsius: 45, isReminderEnabled: true, didNotify: true))
+	expect(hotBand.didNotify && !hotBand.shouldSend, "高温:滞回带内（线−1）不重置不发")
+	var atEdge = batterySnap(percent: 50)
+	atEdge.temperatureC = 43.0    // 恰好线 −2 整点
+	let hotEdge = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: atEdge, thresholdCelsius: 45, isReminderEnabled: true, didNotify: true))
+	expect(hotEdge.didNotify, "高温:恰好线−2 整点不重置（严格小于，与搬运前逐字一致）")
+	var belowBand = batterySnap(percent: 50)
+	belowBand.temperatureC = 42.0 // 线 −3：降出来了
+	let hotReset = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: belowBand, thresholdCelsius: 45, isReminderEnabled: true, didNotify: true))
+	expect(!hotReset.didNotify, "高温:降回线−2 以下重置")
+	let hotNil = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: batterySnap(percent: 50), thresholdCelsius: 45, isReminderEnabled: true, didNotify: true))
+	expect(hotNil.didNotify && !hotNil.shouldSend, "高温:缺读数不动边沿")
+	let hotDisabledReset = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: belowBand, thresholdCelsius: 45, isReminderEnabled: false, didNotify: true))
+	expect(!hotDisabledReset.didNotify, "高温:开关关着降温出带同样重置（重置不受开关挡）")
+	let hotDisabledHot = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: hot, thresholdCelsius: 45, isReminderEnabled: false, didNotify: false))
+	expect(!hotDisabledHot.shouldSend && !hotDisabledHot.didNotify, "高温:开关关着不发送、边沿不动")
+	// guard-fail 分支的透传（同充满那条的理由）
+	let hotDisabledHeld = HighTemperatureAlertEvaluator.evaluate(.init(snapshot: hot, thresholdCelsius: 45, isReminderEnabled: false, didNotify: true))
+	expect(hotDisabledHeld.didNotify && !hotDisabledHeld.shouldSend, "高温:开关关着且仍在高温 ⇒ 已置位边沿保持")
+}
+
 // MARK: - 保养提醒 vs 系统优化充电打架检测
 
 do {
 	// 暂停边沿指纹：上一帧在充、这帧停了、仍插电未充满、贴着保养线 ±3%
 	var paused = batterySnap(percent: 80, onBattery: false)
 	paused.isCharging = false
-	expect(BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: paused, threshold: 80), "打架检测：贴线暂停算边沿")
+	expect(ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: true, snapshot: paused, threshold: 80), "打架检测：贴线暂停算边沿")
 
 	let stillCharging = batterySnap(percent: 80, charging: true, onBattery: false)
-	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: stillCharging, threshold: 80), "打架检测：仍在充电不算")
+	expect(!ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: true, snapshot: stillCharging, threshold: 80), "打架检测：仍在充电不算")
 
 	let farFromLine = batterySnap(percent: 65, onBattery: false)
-	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: farFromLine, threshold: 80), "打架检测：远离保养线不算")
+	expect(!ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: true, snapshot: farFromLine, threshold: 80), "打架检测：远离保养线不算")
 
 	let onBattery = batterySnap(percent: 80)
-	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: onBattery, threshold: 80), "打架检测：电池供电不算")
+	expect(!ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: true, snapshot: onBattery, threshold: 80), "打架检测：电池供电不算")
 
 	var full = batterySnap(percent: 100, onBattery: false)
 	full.isFull = true
-	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: true, snapshot: full, threshold: 80), "打架检测：已充满不算")
+	expect(!ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: true, snapshot: full, threshold: 80), "打架检测：已充满不算")
 
 	let resumed = batterySnap(percent: 80, charging: true, onBattery: false)
-	expect(!BatteryAlertController.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
+	expect(!ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: false, snapshot: resumed, threshold: 80), "打架检测：恢复充电不算（只记暂停）")
 }
 
 // MARK: - C2 系统充电暂缓（M1：确定性只读判定，v2.1.0）
@@ -3980,11 +4059,11 @@ do {
 
 do {
 	// 保养提醒共存：暂缓电平贴线 ±3 才算"系统在做同一件事"，静默我方提醒
-	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 80, threshold: 80), "暂缓覆盖线：正贴线=覆盖")
-	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 83, threshold: 80), "暂缓覆盖线：+3 边缘=覆盖")
-	expect(BatteryAlertController.isHoldCoveringCareLine(heldSoc: 77, threshold: 80), "暂缓覆盖线：-3 边缘=覆盖")
-	expect(!BatteryAlertController.isHoldCoveringCareLine(heldSoc: 84, threshold: 80), "暂缓覆盖线：高于线 4 不覆盖（系统会充过线，提醒必须保留）")
-	expect(!BatteryAlertController.isHoldCoveringCareLine(heldSoc: nil, threshold: 80), "暂缓覆盖线：电平缺失不覆盖（保守）")
+	expect(ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: 80, threshold: 80), "暂缓覆盖线：正贴线=覆盖")
+	expect(ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: 83, threshold: 80), "暂缓覆盖线：+3 边缘=覆盖")
+	expect(ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: 77, threshold: 80), "暂缓覆盖线：-3 边缘=覆盖")
+	expect(!ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: 84, threshold: 80), "暂缓覆盖线：高于线 4 不覆盖（系统会充过线，提醒必须保留）")
+	expect(!ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: nil, threshold: 80), "暂缓覆盖线：电平缺失不覆盖（保守）")
 }
 
 do {
@@ -3992,18 +4071,18 @@ do {
 	// 于是「关着提醒拔电→再插电→再开提醒」会顶着上一会话的置位吞掉本该发的提醒）
 	var heldAtLine = batterySnap(percent: 80, onBattery: false)
 	heldAtLine.notChargingReason = 16_777_216
-	expect(BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldAtLine, threshold: 80),
+	expect(ChargeCareAlertEvaluator.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldAtLine, threshold: 80),
 		"共存标记：插电+贴线按住→置位")
 	var unplugged = batterySnap(percent: 80, onBattery: true)
 	unplugged.notChargingReason = 16_777_216
-	expect(!BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: unplugged, threshold: 80),
+	expect(!ChargeCareAlertEvaluator.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: unplugged, threshold: 80),
 		"共存标记：拔电一律清零（回归锁：重置不许被提醒开关的 guard 挡住）")
 	let resumedCharging = batterySnap(percent: 85, charging: true, onBattery: false)
-	expect(BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: resumedCharging, threshold: 80),
+	expect(ChargeCareAlertEvaluator.systemHoldCoveringCareLine(previouslyObserved: true, snapshot: resumedCharging, threshold: 80),
 		"共存标记：恢复充电仍保持本会话置位（不再重复喊；变异检验：逐帧现算的写法必红）")
 	var heldFarBelowLine = batterySnap(percent: 60, onBattery: false)
 	heldFarBelowLine.notChargingReason = 16_777_216
-	expect(!BatteryAlertController.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldFarBelowLine, threshold: 80),
+	expect(!ChargeCareAlertEvaluator.systemHoldCoveringCareLine(previouslyObserved: false, snapshot: heldFarBelowLine, threshold: 80),
 		"共存标记：按住电平离保养线远（60 vs 80）不置位（系统做的事与用户要求不同）")
 }
 

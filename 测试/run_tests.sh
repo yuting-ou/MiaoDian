@@ -224,6 +224,24 @@ run_source_guards() {
 		exit 1
 	fi
 	echo "==> 保养状态回写守卫：三个状态全回写、回写早于 shouldSend 分支（漏一个即静默失效）"
+
+	# 边沿判定出口守卫（轮22）：充满/低电量/高温三条边沿提醒的判定已抽进
+	# ThresholdAlertEvaluators（纯逻辑、可测）。若有人把判定条件抄回外壳方法体
+	# （绕开 evaluator），判定层断言照绿、生产却走了没被测的那份——v2.9.16 同族病。
+	# 钉法：外壳必须各调一次自己的 evaluator。
+	# ① 剔掉以 // 开头的行再数：整行注释掉真调用（v2.9.16 原始假绿形态）时计数必须掉到 0；
+	# ② grep -o|wc -l：无匹配时 grep -c 的"打 0 又退出 1"会造出双 0 让守卫假绿（第一轮就踩过）；
+	# ③ 已知边界：守卫只承诺"调用形状恰好一次"——若有人保留真调用又另抄一份判定走抄的那份，
+	#    形状守卫看不见，那是行为断言与读码的地界（探针与注释都在此声明，不冒充全知）。
+	EDGE_FILE="$SRC/Services/BatteryAlertController.swift"
+	for E in FullChargeAlertEvaluator LowBatteryAlertEvaluator HighTemperatureAlertEvaluator; do
+		N="$(grep -v '^[[:space:]]*//' "$EDGE_FILE" | grep -oF "${E}.evaluate(" | wc -l | tr -d ' ')"
+		if [ "$N" -ne 1 ]; then
+			echo "==> 边沿判定出口守卫失败：$E 的外壳调用 $N 处（期望 1）——判定被抄回壳里、注释掉或调用丢失" >&2
+			exit 1
+		fi
+	done
+	echo "==> 边沿判定出口守卫：三条边沿提醒外壳各调一次自己的 evaluator（判定不抄第二遍）"
 }
 
 # 真源码上跑一遍：守卫不过即构建失败（与拆分前行为一致）
@@ -297,6 +315,40 @@ rm -rf "$CARE_PROBE"
 trap - EXIT
 echo "==> 元守卫：删除保养状态回写 → 保养回写守卫以预期信息变红（漏接线必红）"
 
+# 边沿判定出口守卫的专属变异（轮22，审查抓的缺口）：上面的两个探针都不触碰
+# X.evaluate( 调用，证明不了新守卫会红。变异用 v2.9.16 的原始假绿形态——
+# 把真调用整行注释掉、留一行内容相同的注释；守卫剔注释后计数必须掉到 0，
+# 红、且红的信息必须是边沿出口守卫自己的。
+EDGE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$EDGE_PROBE"' EXIT
+cp -R "$SRC" "$EDGE_PROBE/src"
+python3 - "$EDGE_PROBE/src/Services/BatteryAlertController.swift" <<'MUTATE_EDGE'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+mutated, n = re.subn(
+    r"^(\t*)let result = FullChargeAlertEvaluator\.evaluate\(\.init\($",
+    r"\1// let result = FullChargeAlertEvaluator.evaluate(.init(",
+    s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("变异没打上：找不到充满外壳的 evaluate 调用")
+p.write_text(mutated, encoding="utf-8")
+MUTATE_EDGE
+EDGE_GOT_RED=0
+EDGE_OUT="$( SRC="$EDGE_PROBE/src"; run_source_guards 2>&1 >/dev/null )" || EDGE_GOT_RED=1
+if [ "$EDGE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：注释掉充满外壳的 evaluate 调用后守卫仍然全过——边沿出口守卫没在工作" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$EDGE_OUT" | grep -q "边沿判定出口守卫失败"; then
+	echo "==> 元守卫失败：注释掉调用后守卫红了，但红的不是边沿出口守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$EDGE_OUT" >&2
+	exit 1
+fi
+rm -rf "$EDGE_PROBE"
+trap - EXIT
+echo "==> 元守卫：注释顶替真调用 → 边沿出口守卫以预期信息变红（判定不抄第二遍是实门）"
+
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
@@ -304,13 +356,35 @@ echo "==> 元守卫：删除保养状态回写 → 保养回写守卫以预期�
 TEST_SDK_PATH="$(xcrun --show-sdk-path --sdk macosx 2>/dev/null || true)"
 TEST_SDK_VERSION="$(plutil -extract Version raw "$TEST_SDK_PATH/SDKSettings.plist" 2>/dev/null || echo '?')"
 echo "==> 编译测试（源文件 ${#SOURCES[@]} 个 + 测试用例；SDK：默认 macOS $TEST_SDK_VERSION）..."
+# 先清旧二进制再编：swiftc -o 只在成功时覆盖，编译失败时上次的好二进制还留在原地，
+# 不清就会拿旧代码跑出"全绿"（编译失败被静默放过——假绿比红更糟）。
+# 退出码同样要查：此前 swiftc 失败后脚本照旧往下走，二进制缺失时 exec 的 127
+# 会被"沙盒降级"分支接住，以 exit 0 收场——CI 也会绿（2026-10-03 轮22 修）。
+# 注意只修了"编译失败"这条腿；"编译成功但沙盒禁 exec→断言未跑"那条腿的 126
+# 分支仍在（那是禁 exec 环境的诚实降级口径，build.sh 以它为门，不能改 exit 1）。
+rm -f "$OUT/tests"
+COMPILE_LOG="$OUT/compile.log"
+COMPILE_RC=0
 swiftc \
 	-swift-version 5 \
 	-default-isolation MainActor \
 	-target "arm64-apple-macosx$DEPLOYMENT_TARGET" \
 	"${SOURCES[@]}" \
 	"$ROOT/测试/main.swift" \
-	-o "$OUT/tests"
+	-o "$OUT/tests" \
+	2> "$COMPILE_LOG" || COMPILE_RC=$?
+if [ -s "$COMPILE_LOG" ]; then cat "$COMPILE_LOG" >&2; fi
+if [ "$COMPILE_RC" -ne 0 ]; then
+	echo "==> 编译失败（rc=$COMPILE_RC）：测试面没跑，不许拿旧二进制或「降级」字样顶替" >&2
+	exit 1
+fi
+# 警告门：账本 2026-09-05 就记了"门检 grep 必须含 warning: 且计数 0"，但这条规则
+# 从未落进任何脚本——轮20 起测试面带着 3 条 var 警告被历轮记成"零警告"。
+# 从这里起编译零警告是硬门，不再靠眼睛。
+if grep -q "warning:" "$COMPILE_LOG"; then
+	echo "==> 编译警告门失败：测试面编译输出含 warning（全绿零警告是门禁，不是口号）" >&2
+	exit 1
+fi
 
 echo "==> 运行测试..."
 # 桌面沙盒(MiMo Desktop)seatbelt 禁 exec 用户目录自编译产物(Operation not permitted),

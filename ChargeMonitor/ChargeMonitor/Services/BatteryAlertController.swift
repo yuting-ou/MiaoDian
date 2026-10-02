@@ -208,58 +208,60 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		checkMonthlyDigest()
 	}
 	
+	// 边沿判定在 `ThresholdAlertEvaluators`（纯逻辑，可测）；这里只做外壳三件事：
+	// 读配置成值、驱动判定、**发送成功才**提交置位（回写先于 shouldSend 分支，与保养那台同形）
 	private func evaluateFull(_ snapshot: BatterySnapshot) {
-		let isFullOnAdapter = snapshot.powerSource == .powerAdapter && snapshot.isFull
-		if isFullOnAdapter {
-			guard !didNotifyFull, alertEnabled(.alertFull) else { return }
-			if send(
-				id: "battery-full",
-				title: "电池已充满",
-				body: "电量 100%，可以拔掉电源了"
-			) {
-				didNotifyFull = true
-			}
-		} else {
-			didNotifyFull = false
+		let result = FullChargeAlertEvaluator.evaluate(.init(
+			snapshot: snapshot,
+			isReminderEnabled: alertEnabled(.alertFull),
+			didNotify: didNotifyFull
+		))
+		didNotifyFull = result.didNotify
+		guard result.shouldSend else { return }
+		if send(
+			id: "battery-full",
+			title: "电池已充满",
+			body: "电量 100%，可以拔掉电源了"
+		) {
+			didNotifyFull = true
 		}
 	}
-	
+
 	private func evaluateLowBattery(_ snapshot: BatterySnapshot) {
-		guard let soc = snapshot.stateOfChargePercent else { return }
-		let threshold = configuration.lowBatteryThresholdPercent
-		let isLowOnBattery = snapshot.powerSource == .battery && soc <= threshold
-		
-		if isLowOnBattery {
-			guard !didNotifyLowBattery, alertEnabled(.alertLowBattery) else { return }
-			// urgent 走免打扰旁路必投递；统一走 if send 形态防未来语义变化引入静默吞（v1.19.1）
-			if send(
-				id: "battery-low",
-				title: "电量不足",
-				body: "当前电量 \(soc)%，请及时连接电源",
-				urgent: true
-			) {
-				didNotifyLowBattery = true
-			}
-		} else if snapshot.powerSource == .powerAdapter || soc >= threshold + 5 {
-			didNotifyLowBattery = false
+		let result = LowBatteryAlertEvaluator.evaluate(.init(
+			snapshot: snapshot,
+			thresholdPercent: configuration.lowBatteryThresholdPercent,
+			isReminderEnabled: alertEnabled(.alertLowBattery),
+			didNotify: didNotifyLowBattery
+		))
+		didNotifyLowBattery = result.didNotify
+		guard result.shouldSend else { return }
+		// urgent 走免打扰旁路必投递；统一走 if send 形态防未来语义变化引入静默吞（v1.19.1）
+		if send(
+			id: "battery-low",
+			title: "电量不足",
+			body: "当前电量 \(snapshot.stateOfChargePercent ?? 0)%，请及时连接电源",
+			urgent: true
+		) {
+			didNotifyLowBattery = true
 		}
 	}
-	
+
 	private func evaluateHighTemperature(_ snapshot: BatterySnapshot) {
-		guard let temperature = snapshot.temperatureC else { return }
-		let threshold = Double(configuration.highTemperatureThresholdC)
-		
-		if temperature >= threshold {
-			guard !didNotifyHighTemperature, alertEnabled(.alertHighTemperature) else { return }
-			if send(
-				id: "battery-hot",
-				title: "电池温度偏高",
-				body: String(format: "当前 %.1f°C，建议移到通风处，避免边充电边高负荷使用", temperature)
-			) {
-				didNotifyHighTemperature = true
-			}
-		} else if temperature < threshold - 2 {
-			didNotifyHighTemperature = false
+		let result = HighTemperatureAlertEvaluator.evaluate(.init(
+			snapshot: snapshot,
+			thresholdCelsius: configuration.highTemperatureThresholdC,
+			isReminderEnabled: alertEnabled(.alertHighTemperature),
+			didNotify: didNotifyHighTemperature
+		))
+		didNotifyHighTemperature = result.didNotify
+		guard result.shouldSend else { return }
+		if send(
+			id: "battery-hot",
+			title: "电池温度偏高",
+			body: String(format: "当前 %.1f°C，建议移到通风处，避免边充电边高负荷使用", snapshot.temperatureC ?? 0)
+		) {
+			didNotifyHighTemperature = true
 		}
 	}
 	
@@ -301,35 +303,11 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		}
 	}
 	
-	// 以下四个纯函数已搬到 `ChargeCareAlertEvaluator`（唯一实现）。这里只做转发——
-	// 保留 Controller 上的调用面，是为了既有那批直接调 static 的断言继续绿，
-	// 且不再有"同一判断抄第二遍"（v2.9.16 的教训）。
-	// ⚠️ 转发的语义逐字未变：拆分类时最易弄丢的"拔电重置不许被开关挡住"就在
-	// `systemHoldCoveringCareLine` 里，改动它前先看 `ChargeCareAlertEvaluator` 的注释。
-	nonisolated static var systemHoldCareTolerance: Int { ChargeCareAlertEvaluator.systemHoldCareTolerance }
-	nonisolated static func isCarePauseEdge(previousCharging: Bool, snapshot: BatterySnapshot, threshold: Int) -> Bool {
-		ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: previousCharging, snapshot: snapshot, threshold: threshold)
-	}
-
-	nonisolated static func isHoldCoveringCareLine(heldSoc: Int?, threshold: Int) -> Bool {
-		ChargeCareAlertEvaluator.isHoldCoveringCareLine(heldSoc: heldSoc, threshold: threshold)
-	}
-
-	nonisolated static func systemHoldCoveringCareLine(
-		previouslyObserved: Bool,
-		snapshot: BatterySnapshot,
-		threshold: Int
-	) -> Bool {
-		ChargeCareAlertEvaluator.systemHoldCoveringCareLine(
-			previouslyObserved: previouslyObserved, snapshot: snapshot, threshold: threshold
-		)
-	}
-
 	// 检测"系统优化充电在保养线附近反复暂停"：6 小时内 ≥3 次边沿即认定系统在替你
 	// 保养电池——此时用户的保养提醒和系统是同一件事的两种表达，提示二选一
 	private func trackOptimizedChargingPause(_ snapshot: BatterySnapshot) {
 		let threshold = configuration.chargeCareThresholdPercent
-		if Self.isCarePauseEdge(previousCharging: wasChargingNearCareLine, snapshot: snapshot, threshold: threshold) {
+		if ChargeCareAlertEvaluator.isCarePauseEdge(previousCharging: wasChargingNearCareLine, snapshot: snapshot, threshold: threshold) {
 			carePauseEdges.append(clock.now())
 		}
 		wasChargingNearCareLine = snapshot.isCharging
@@ -853,11 +831,6 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		let chargeCare = UNNotificationCategory(identifier: chargeCareCategoryID, actions: [snooze], intentIdentifiers: [])
 		let slowCharge = UNNotificationCategory(identifier: slowChargeCategoryID, actions: [copyDiagnostics], intentIdentifiers: [])
 		UNUserNotificationCenter.current().setNotificationCategories([chargeCare, slowCharge])
-	}
-
-	// 保养提醒延后判定（纯函数，供单测直测）：到点前静音
-	nonisolated static func isChargeCareSnoozed(snoozeUntil: Date?, now: Date) -> Bool {
-		ChargeCareAlertEvaluator.isChargeCareSnoozed(snoozeUntil: snoozeUntil, now: now)
 	}
 
 	// 用户点了"延后 30 分钟"：静音窗口 + 重新武装提醒（到点后若仍在线上会再喊一次）
