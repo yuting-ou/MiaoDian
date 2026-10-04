@@ -14,18 +14,43 @@ mkdir -p "$OUT"
 # 收集除 @main 入口外的全部源文件（入口与测试的 main.swift 冲突）
 SOURCES=()
 EXCLUDED_MACRO=()
+EXCLUDED_VIEW=()
 while IFS= read -r f; do
 	[ "$(basename "$f")" = "ChargeMonitorApp.swift" ] && continue
 	# SwiftUIMacros(@State 等)需要 macro plugin; CLT-only 工具链(缺 Xcode)会全挂。
 	# 单元测试目标是逻辑层(Models/Services/Utilities/Core 渲染器): UI 视图与
 	# 面板控制器层动态排除——UI/ 全目录、import SwiftUI 的 Core/Settings 文件、
 	# 以及含 macro 的文件都不进测试编译面。逻辑文件今后 import SwiftUI 需过测试门。
+	#
+	# 视图宿主排除（这两处都是"自己没进测试面，却引用被排掉的 UI/ 类型"）：
+	# 判据是形状而不是文件名——NSHostingView(rootView:) 的实参类型若来自 UI/，
+	# 整个文件必然编不过。漏排的形态是编译期报"cannot find type"，不是假绿，
+	# 但它会把构建门堵死，所以这里逐个列明并在下方有断言核对（见 run_exclusion_audit）。
 	case "$f" in
 		*/UI/BatteryInfoFormatter.swift) ;;  # 逻辑格式化器(放错在 UI/), 白名单进测试面
 		*/UI/*) continue ;;                  # 其余视图层与 macro 文件互耦, 全排
-		*/Core/ChargeCurveWindowController.swift) continue ;;  # 窗口控制器, 引用 UI/ 的 Host 视图
+		*/Core/ChargeCurveWindowController.swift)
+			EXCLUDED_VIEW+=("Core/ChargeCurveWindowController.swift"); continue ;;
+		*/Core/MenuBarPanelController.swift)
+			EXCLUDED_VIEW+=("Core/MenuBarPanelController.swift"); continue ;;
 	esac
-	if grep -qE '@(State|StateObject|AppStorage|SceneStorage|FocusedValue|EnvironmentObject|Environment|Observable)\b' "$f"; then
+	# 宏宿主判据：SwiftUI 属性包装器/宏。SDK 27 起 @State 等改为宏实现，
+	# CLT-only 工具链（缺 SwiftUIMacros 插件）编不动 ⇒ 这类文件必须排除。
+	#
+	# 三条踩过的坑，写在这里防止改回去（2026-10-04，架构师审计订正过其中两条）：
+	# ① 边界**绝不能用 \b**。本机 PATH 里的 grep 是 WorkBuddy 注入的 toybox 0.8.13
+	#    shim（/Applications/WorkBuddy.app/.../brokered-bin/grep），它**不认 \b**：
+	#    实测同输入 '@State\b' 下 /usr/bin/grep 匹配、PATH grep 不匹配；且
+	#    '@ObservedObject\b' 在 shim 下返回 0 而 '@ObservedObject' 返回 5。
+	#    ⇒ 整条判据恒假 ⇒ 宏宿主静默漏排 ⇒ 编译门被堵死。写 ([[:space:]]|$) 两边都认。
+	# ② 宏判据必须剔注释行——AppServices.swift 的**注释里**写着"不再挂在 App 结构的
+	#    @StateObject 上"，不剔会把纯逻辑文件误排除。误排除不报错，只是悄悄少一批
+	#    断言（本项目最恨的静默失效）。
+	# ③ 名单里 @ObservedObject/@Bindable **不是宏**（27.0 SDK 的 swiftinterface 里
+	#    `macro ObservedObject` 计数为 0），留着无害但别当"补漏"讲——真正的漏排原因是 ①。
+	#    反过来别把非 SwiftUI 的 @Observable 拿掉：它是本项目 7 个 recorder 的宿主标记。
+	_CODE_LINES="$(grep -v '^[[:space:]]*//' "$f")"
+	if printf '%s\n' "$_CODE_LINES" | grep -qE '@(State|StateObject|AppStorage|SceneStorage|FocusedValue|EnvironmentObject|Environment|Observable|ObservedObject|Bindable)([[:space:]]|$)'; then
 		EXCLUDED_MACRO+=("$f")  # 宏宿主编译不了, 排除但必须显式回显, 防静默侵蚀
 		continue
 	fi
@@ -36,6 +61,120 @@ if [ ${#EXCLUDED_MACRO[@]} -gt 0 ]; then
 	echo "==> 宏宿主排除 ${#EXCLUDED_MACRO[@]} 个（清单如下，逻辑层新增宏宿主=架构越界信号）"
 	printf '    %s\n' "${EXCLUDED_MACRO[@]}"
 fi
+
+if [ ${#EXCLUDED_VIEW[@]} -gt 0 ]; then
+	echo "==> 视图宿主排除 ${#EXCLUDED_VIEW[@]} 个（引用 UI/ 类型，形状判据见 run_exclusion_audit）"
+	printf '    %s\n' "${EXCLUDED_VIEW[@]}"
+fi
+
+# 排除清单自检：排除是**手写名单**，新增 Core/Settings 文件若引用了被排掉的类型
+# 会静默漏排、把构建门堵死（2026-10-04 实际发生过，形态是 swiftc 报 cannot find type）。
+# 架构师审计指出两类形态：
+#   ① 视图宿主——Core/ 下用 NSHostingView(rootView:) 承载 UI/ 类型；
+#   ② 符号引用——Settings/ 等非 UI 文件直接引用 UI/ 里的符号（实测
+#      SettingsView 用了 UI/BatteryHeaderView.swift 里的 PanelText）。
+# 只钉 ① 会漏掉 ②，所以两条都在这里按"文件在不在测试面"核对，而不是只按名字硬编。
+# 已知边界（如实声明）：真"新增"一个 UI 符号并让非 UI 文件引用它，本自检看不见——
+# 那种漏排会以 cannot find type 报红，只是报错位置不友好。这里守的是既有三条接线。
+run_exclusion_audit() {
+	local LEAK=() f rel
+	while IFS= read -r f; do
+		rel="${f#$SRC/}"
+		case " ${EXCLUDED_VIEW[*]:-} " in
+			*" $rel "*) continue ;;  # 已在排除名单里，符合预期
+		esac
+		LEAK+=("$rel")
+	done < <(grep -rl 'NSHostingView(' "$SRC" 2>/dev/null | sort || true)
+	local REAL=()
+	for rel in "${LEAK[@]:-}"; do
+		case "$rel" in
+			UI/*) ;;                       # UI/ 本就全排
+			*) [ -n "$rel" ] && REAL+=("$rel") ;;
+		esac
+	done
+	if [ ${#REAL[@]} -gt 0 ]; then
+		echo "==> 排除清单自检失败：这些文件用 NSHostingView 承载视图却没被排除（会编译失败）：" >&2
+		printf '    %s\n' "${REAL[@]}" >&2
+		echo "    修法：加入上方 case 的视图宿主排除分支，并说明它引用哪个 UI/ 类型" >&2
+		return 1
+	fi
+	# 形态②：非 UI 文件在**代码**（非注释）里引用 UI/ 声明的符号。
+	# 必须剔注释行——实测 Utilities/CardDragEngine.swift、Utilities/PanelCardHeights.swift
+	# 只是在头部注释里提到 "随 BatteryPopoverView 生命周期"，代码零引用；不剔就会把
+	# 一大批能正常编过的逻辑文件判成泄漏，判据立刻退化成"永远红"或"永远不查"。
+	# 只认 UI/ 目录的**顶层声明**；嵌套与 private 类型拿不到，宁可漏也不误报。
+	#
+	# 性能：逐文件逐符号双层 grep 是 82×N 次进程，跑 2 分钟收不住、会被 CI 超时杀掉
+	# （2026-10-04 实测 exit 137）。改成两次扫描求交：候选文件 grep -o 一次取出全部
+	# 大写开头的标识符去重，再与 UI/ 符号表做一次 awk 求交。
+	#
+	# 第二条工具链坑（2026-10-04 踩的，**当时归因错了、后经复测定案**）：
+	# 这里曾写成"toybox grep 不接受多个文件参数"——**那是错的**。复测证据：
+	#   grep -h 'func ' a.swift b.swift            → 10（toybox）
+	#   /usr/bin/grep -h 'func ' a.swift b.swift   → 10（一致）
+	# 多文件参数本身没问题。真正让判据恒空的是**管道里文件列表为空**：当时写成
+	#   grep -rhv PAT "$(find … | tr '\n' ' ')"
+	# 而那条 find 在同一管道里被 head 截断/路径写错，展开成空列表 ⇒ grep 无文件可读 ⇒ 恒 0 行。
+	# 教训比结论重要：**判据恒空时先打印文件数与命中数，别急着归咎工具**。
+	# 现在用 find | xargs -0，且下面有 N_LINES < 100 的行数自检兜底。
+	local CAND UI_SYMS SYM N_LINES
+	CAND="$(mktemp)"
+	find "$SRC" -name '*.swift' -not -path '*/UI/*' -not -name 'ChargeMonitorApp.swift' -print0 \
+		| xargs -0 grep -hv '^[[:space:]]*//' 2>/dev/null > "$CAND.lines" || true
+	N_LINES="$(wc -l < "$CAND.lines" | tr -d ' ')"
+	if [ "${N_LINES:-0}" -lt 100 ]; then
+		echo "==> 排除清单自检失败：候选文件扫描只得到 $N_LINES 行（应至少数百）——" >&2
+		echo "    多半是 grep 的多文件参数在本机 toybox 下不工作（返回 0 行），判据会恒空。" >&2
+		echo "    修法：保持 find | xargs -0 管道，不要改回 grep PAT \$(find ...)。" >&2
+		rm -f "$CAND" "$CAND.lines"
+		return 1
+	fi
+	# 候选集要扣掉**已排除的文件**——它们引用 UI/ 符号是合法的（本来就编不过、已排）。
+	# 实测剩下的两处正是这种：MenuBarPanelController 与 ChargeCurveWindowController
+	# 引用 BatteryPopoverView / ChargeCurveWindowHost，两个文件都在 EXCLUDED_VIEW 里。
+	# 判据的职责是"抓漏排"，不是"抓已排"。
+	grep -oE '[A-Z][A-Za-z0-9_]+' "$CAND.lines" 2>/dev/null | sort -u > "$CAND" || true
+	# 逐个剔除已排除文件里的标识符（单文件读，避开 toybox 的多文件参数限制）
+	if [ ${#EXCLUDED_VIEW[@]} -gt 0 ]; then
+		for v in "${EXCLUDED_VIEW[@]}"; do
+			if [ -f "$SRC/$v" ]; then
+				grep -hv '^[[:space:]]*//' "$SRC/$v" 2>/dev/null \
+					| grep -oE '[A-Z][A-Za-z0-9_]+' | sort -u > "$CAND.ex" || true
+				grep -vxF -f "$CAND.ex" "$CAND" > "$CAND.keep" 2>/dev/null || cp "$CAND" "$CAND.keep"
+				mv "$CAND.keep" "$CAND"
+				rm -f "$CAND.ex"
+			fi
+		done
+	fi
+	# 扣掉 BatteryInfoFormatter.swift：它是"逻辑格式化器放错在 UI/"，被显式放进测试面
+	# （见文件头的 case 分支），它声明的符号被 Utilities/BatteryReportBuilder.swift
+	# 引用是**合法**的；不扣这条判据会永远红。
+	UI_SYMS="$(find "$SRC/UI" -name '*.swift' -not -name 'BatteryInfoFormatter.swift' -print0 \
+		| xargs -0 grep -hoE '^(struct|enum|final class|class|actor|protocol) [A-Z][A-Za-z0-9_]+' 2>/dev/null \
+		| awk '{print $2}' | sort -u || true)"
+	if [ -z "$UI_SYMS" ]; then
+		echo "==> 排除清单自检失败：UI/ 符号表为空——多文件 grep 在本机不可用，判据会恒空。" >&2
+		rm -f "$CAND" "$CAND.lines"
+		return 1
+	fi
+	# UI_SYMS 是**多行字符串**，绝不能直接当 awk 的文件参数——那会把每个符号名
+	# 当成一个文件名（实测报 "awk: can't open file BatteryCheckupSection"）。
+	# 落盘后再求交。SYM 记符号名（不含文件），报告里点明形态即可。
+	printf '%s\n' "$UI_SYMS" > "$CAND.syms"
+	SYM=""
+	if [ -s "$CAND" ]; then
+		SYM="$(awk 'NR==FNR{u[$0]=1;next} ($0 in u){print}' "$CAND.syms" "$CAND" 2>/dev/null || true)"
+	fi
+	rm -f "$CAND" "$CAND.lines" "$CAND.syms"
+	if [ -n "$SYM" ]; then
+		echo "==> 排除清单自检（形态②）发现非 UI 文件在代码里引用 UI/ 符号：" >&2
+		printf '    %s\n' $SYM >&2
+		echo "    这类符号由 UI/ 声明，其宿主在 SDK 27 下会因缺 SwiftUIMacros 插件编译失败。" >&2
+		echo "    修法：把对应宿主文件加入排除名单；若确实编得过，把该接线登记进白名单并注明理由。" >&2
+		return 1
+	fi
+	echo "==> 排除清单自检：NSHostingView 宿主与 UI 符号跨层引用均已核对（漏排会在此变红）"
+}
 
 # 源文件级守卫：UI/ 不进测试编译面，这些主张只能在源码文本上兑现。
 # 收成一个函数是为了能在**变异副本**上复跑一次——见文件末尾的元守卫。
@@ -141,10 +280,17 @@ run_source_guards() {
 	# ① 面板与设置窗里不许出现 .bold（圆角设计本身有辨识度，bold 只是噪音）；
 	# ② 信息行的值必须走 PanelText.primary（那 19 行是全屏最显眼的文字，曾整批 semibold）。
 	# 计数一律 grep -o | wc -l，并剔掉注释行（v2.9.16 假绿教训）。
-	BOLD="$(grep -rE 'weight: \.bold' "$SRC/UI" "$SRC/Settings" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d '[:space:]')"
+	# 这里原来用 `grep -rE PAT "$SRC/UI" "$SRC/Settings"`（多文件参数）。
+	# 2026-10-04 我一度判定它"恒假、形同虚设"——**那是误判**：注入
+	# `weight: .bold` 实测旧写法命中 1、新写法也命中 1，多文件参数工作正常。
+	# 保留 find | xargs 写法是为了与形态②统一（可读性），不是行为修复。
+	BOLD="$(find "$SRC/UI" "$SRC/Settings" -name '*.swift' -print0 \
+		| xargs -0 grep -hE 'weight: \.bold' 2>/dev/null \
+		| grep -vE '^[[:space:]]*//' | wc -l | tr -d '[:space:]')"
 	if [ "${BOLD:-0}" != "0" ]; then
 		echo "==> 字阶守卫失败：面板/设置里还有 $BOLD 处 .bold（字重预算只到 semibold，且仅限区块标题/头部主数字/表格值列/按钮标题）"
-		grep -rnE 'weight: \.bold' "$SRC/UI" "$SRC/Settings" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | sed 's/^/    /'
+		find "$SRC/UI" "$SRC/Settings" -name '*.swift' -print0 \
+			| xargs -0 grep -nE 'weight: \.bold' 2>/dev/null | grep -vE ':[[:space:]]*//' | sed 's/^/    /'
 		exit 1
 	fi
 	ROW_CALL="$(grep -E 'size: PanelText\.primary, weight: \.regular' "$SRC/UI/Components/PopoverComponents.swift" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | wc -l | tr -d '[:space:]')"
@@ -245,6 +391,7 @@ run_source_guards() {
 }
 
 # 真源码上跑一遍：守卫不过即构建失败（与拆分前行为一致）
+run_exclusion_audit
 run_source_guards
 
 # 元守卫：证明上面那些守卫**真的在工作**。
@@ -348,6 +495,33 @@ fi
 rm -rf "$EDGE_PROBE"
 trap - EXIT
 echo "==> 元守卫：注释顶替真调用 → 边沿出口守卫以预期信息变红（判定不抄第二遍是实门）"
+
+# 字阶守卫的专属变异（2026-10-04）：这条守卫的期望值是**0**（"面板/设置里不许有 .bold"），
+# 而期望 0 的计数守卫最危险——判据一旦恒假就永远绿，且没有任何报错。
+# 探针：在源码副本的 UI/ 文件里注入一条真实存在的 .bold 写法
+# （.font(.system(size: 12, weight: .bold))，与项目里 weight: .semibold 同一形态），
+# 字阶守卫必须红，且红的信息必须是字阶守卫自己的。
+BOLD_PROBE="$(mktemp -d)"
+trap 'rm -rf "$BOLD_PROBE"' EXIT
+cp -R "$SRC" "$BOLD_PROBE/src"
+printf '\n.probe(font: .system(size: 12, weight: .bold))\n' >> "$BOLD_PROBE/src/UI/DailySummarySection.swift"
+# 注意输出去向：字阶守卫的错误信息走 **stdout**（同脚本里多数守卫用 >&2，但这一个用 echo
+# 不带重定向）。所以这里必须 2>&1 一起收，只取 stderr 会误判成"红错了信息"。
+BOLD_GOT_RED=0
+BOLD_OUT="$( SRC="$BOLD_PROBE/src"; run_source_guards 2>&1 )" || BOLD_GOT_RED=1
+if [ "$BOLD_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：注入 .bold 后字阶守卫仍然全过——期望 0 的计数守卫恒假了，本次「全绿」不作数" >&2
+	printf '    探针实际输出：%s\n' "$BOLD_OUT" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$BOLD_OUT" | grep -q "字阶守卫失败"; then
+	echo "==> 元守卫失败：注入 .bold 后守卫红了，但红的不是字阶守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$BOLD_OUT" >&2
+	exit 1
+fi
+rm -rf "$BOLD_PROBE"
+trap - EXIT
+echo "==> 元守卫：注入 .bold → 字阶守卫以预期信息变红（期望 0 的守卫不是恒假）"
 
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，

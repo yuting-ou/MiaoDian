@@ -36,6 +36,12 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
 - 能量红线（§1 不可谈判之一）用 `bash 工具/自身成本.sh 60` 复跑：并报"累计 CPU 时间"与"`sample` 在栈样本"两个口径，**禁止用 `top -l N` 当证据**（它把脉冲负载平均成 0.0%）；2026-09-23 实测 0.07%~0.23% 区间、无热点
 - 内存基线（单点 RSS 不可跨条件比较；2026-09-24 我拿 30MB 与 80MB 两个不同条件的单点当版本回归，白起一轮疑点）：`bash 工具/内存基线.sh [app路径] [旧版dmg]`——冷启动、面板不开、t+0.5/+2min 定点采；同口径实测 v2.9.12 与 v2.9.13 均 79→70/71MB，本机正常区间约 70–82MB
 - 测试基线（2026-10-03 v2.9.20）：本机 **1526** / `TZ=UTC` **1527** 全绿零警告（1502 之上 +24 条边沿 evaluator 断言；UTC 1527 为实测；门面顺序断言与 clock 接线守卫见架构节；新增源文件级守卫一律带元守卫变异验证）。轮17 改动已提交（`8647c35`，v2.9.17）；v2.9.18 架构轮已提交（`b7ed487`）；v2.9.19 保养拆分 + 回写修复已发布；v2.9.20 边沿族拆分 + 测试门修复已发布
+- **测试编译面排除规则（2026-10-04 修，工具链三坑 + 两条守卫）**：`run_tests.sh` 排①`UI/` 全目录（白名单 `UI/BatteryInfoFormatter.swift`）②手写**视图宿主名单**（`Core/ChargeCurveWindowController.swift`、`Core/MenuBarPanelController.swift`——都用 `NSHostingView` 承载被排掉的 UI/ 类型，漏排会让 swiftc 报 `cannot find type` 把门堵死）③**宏宿主正则**。新增 `run_exclusion_audit()` 按两种形态自检：① 用 `NSHostingView(` 却不在名单里；② 非 UI 文件在**代码**里引用 UI/ 顶层声明的符号（剔注释、扣白名单 `BatteryInfoFormatter.swift`、扣已排除文件自身）。形态② 已变异验证：往 `EnergyAggregation.swift` 注入 `_ = SparkAreaChart.self` → 精确点名变红。
+  - **本机工具链坑 + 一条方法论（2026-10-04 实测，写在这里防止改回去）**：**PATH 里的 grep 是 WorkBuddy 注入的 toybox 0.8.13 shim**（`/Applications/WorkBuddy.app/.../brokered-bin/grep`），**不认 `\b`**——同输入 `'@State\b'` 下 `/usr/bin/grep` 匹配、shim 不匹配。宏判据边界一律写 `([[:space:]]|$)`；写成 `\b` 会让整条判据**恒假** ⇒ 宏宿主静默漏排。**这条是本轮唯一一个已坐实的工具链坑。**
+  - **方法论（比结论更值钱）**：本轮我一度把"判据恒空"归因为"toybox grep 不接受多文件参数"，并把它写进了 AGENTS——**复测证明那是误判**（`grep -h 'func ' a.swift b.swift` toybox 与 `/usr/bin/grep` 同为 10，多文件参数完全正常）。真因是管道里文件列表为空。**所以：判据恒空时，先打印文件数与命中数，再动工具；不要把一次环境观察写成平台规律。** 形态①/② 已各配自检（`N_LINES < 100` 行数下限、`UI_SYMS` 空集即红），这类"恒空不可能静默"的自检比再写十条守卫更根本。
+  - `@ObservedObject`/`@Bindable` **不是宏**（27.0 SDK swiftinterface 里 `macro ObservedObject` 计数为 0），留在正则里无害但别当"补漏"讲；真正的漏排原因是坑①。反过来别把 `@Observable` 拿掉——它是 7 个 recorder 的宿主标记。
+  - 宏判据必须**剔注释行**：`Core/AppServices.swift` 注释里写着"不再挂在 App 结构的 `@StateObject` 上"，不剔会把这个纯逻辑文件误排除（误排除不报错、只是悄悄少一批断言）。修后宏宿主从 2 个降到 1 个（只剩 `SettingsView`），**覆盖净增**。
+  - 排除任何文件前先确认里面没有可测逻辑——UI 层 5046 行（占生产代码 29%）目前零测试信号，是本项目最大的结构性风险。
 - 发布线：**v2.9.20**（拆分 1b 第二刀：充满/低电/高温三条边沿提醒判定抽进 `Services/ThresholdAlertEvaluators.swift`，Controller 转发层删除（18 处断言改直调 evaluator）；**测试门两处假绿洞修复**：①编译失败原先不拦——swiftc 失败后旧二进制照跑/127 被降级分支接住照样 exit 0，现在清旧二进制+查退出码必红；②"零警告"从来只是口号——账本 2026-09-05 的警告门规则从未落进脚本，轮20 起 3 条 var 警告被历轮记成零警告，现在编译警告门+4 条警告修掉；边沿出口守卫带专属元守卫探针；详见 `CHANGELOG.md`）
   - v2.9.19（拆分 1b 第一刀：`evaluateChargeCare` 状态判定抽进纯 evaluator `ChargeCareAlertEvaluator`；补拆分引入的状态回写遗漏 `didNotifyChargeCare`——不补就是"提醒过一次就再也提醒不了"；漏接线必红守卫进 `run_source_guards()` 并带元守卫专属变异；**GitHub Release 恢复发版，DMG 同时携带从未单独发版的 v2.9.18 架构轮改动**）
   - v2.9.18（架构轮：历史采集拆成门面 + 7 个域 recorder、时间序列搬出 UserDefaults 到一键一文件、面板布局判定抽出、守卫补元守卫、CI 补量具编译审计；已提交 `b7ed487`，未单独发版）
@@ -45,7 +51,7 @@ bash 测试/run_tests.sh # 单独跑测试（自制断言 harness，与主程序
   - v2.9.14（卡片高度登记表 `PanelCardHeights`：体检卡与洞察卡按实测与真实折行数给高，洞察上限两侧共用一个常量并有源文件级门）；队列余 E2（需用户配合）/ H4 / 每轮询成本拆解（触发条件见经验账本）
 - 工具链与 SDK：SDK 27 起 SwiftUI 属性包装器（`@State` 等）是宏实现，而 CLT 27 工具链不带 SwiftUIMacros 插件——build.sh **不按路径名猜环境**，用 `@State` 探针实测当前工具链能用哪个 SDK 编 UI：能编用默认 SDK，否则回落到最新的可编 26.x SDK，全失败则报错给指引（2026-09-15 在 macOS 27.0 + CLT 27 实测：默认 27 失败、回落 26.5 成功；装完整 Xcode 后自动走默认）。测试面不钉旧 SDK，用默认 SDK 编译并回显版本，故逻辑层一直吃本机最新 SDK 的信号
 - 已知边界：极端时区（`TZ=Pacific/Midway`、`Pacific/Kiritimati`）下有 4 条既有断言会红（v2.9.12 的驻留倒计时夹具与月份键对照），HEAD 同样红——本机/UTC/Berlin 三条链路全绿是 declared 门禁，扩到全时区前别把它当已修
-- 编译信号边界：CI 在测试面之外另跑全量源码 Swift 6 审计（含 UI 层），保证「CI 绿 = 可构建」；但 CI runner 是 macos-26（GitHub 尚无 macos-27 镜像，2026-09-15 实测其 README 404），**UI 层在 SDK 27 下的编译暂无自动信号**——macos-27 镜像可用后把 `.github/workflows/tests.yml` 的 `runs-on` 换过去补上
+- 编译信号边界：CI 在测试面之外另跑全量源码 Swift 6 审计（含 UI 层），保证「CI 绿 = 可构建」；UI 层在 SDK 27 下的编译信号由 2026-10-04 新增的 `sdk27-audit` 实验门补上（`.github/workflows/tests.yml`：`xcode-27` 镜像 = macOS 27 底座 + Xcode 27.0，preview，`continue-on-error` 不挡发布门）——镜像转正后删掉 `continue-on-error` 并把主门 `runs-on` 收敛过去。开发机仍是 CLT 27（缺 SwiftUIMacros 插件），UI 这一路本地只能编 26.5（build.sh 探针自动选，装完整 Xcode 后自动走默认 SDK，脚本零改动）
 
 ## 架构（v2.9.18 拆分后）
 
