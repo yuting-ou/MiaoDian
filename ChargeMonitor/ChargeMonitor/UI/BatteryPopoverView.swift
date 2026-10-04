@@ -463,73 +463,67 @@ struct BatteryPopoverView: View {
 		powerItems: [BatteryInfoItem],
 		batteryItems: [BatteryInfoItem]
 	) -> [(id: CardID, height: CGFloat)] {
-		let options = configuration.enabledOptions
-		var result: [(CardID, CGFloat)] = []
-		// 语义分簇排序（v1.10.0）：充电中 → 电池健康 → 用电行为 → 外设与事件。
-		// 同簇相邻，扫读不跳；簇间靠配平算法自然留出间隙。仅调顺序，不动任何出现条件与高度
-		// —— 充电中：协议/档位/功率/充电器 + 这次和历史的充电记录
-		if !powerItems.isEmpty { result.append((.powerInfo, 22 + 26 * CGFloat(powerItems.count))) }
-		if options.contains(.chargeHistory), !historyRecorder.recentSessions.isEmpty {
-			result.append((.chargeHistory, cardHeight(.chargeHistory, expanded: 50 + 40 * CGFloat(min(3, historyRecorder.recentSessions.count)))))
-		}
-		// —— 电池健康：状态/体检/身份证/保养建议/温度/趋势 ——
-		if !batteryItems.isEmpty { result.append((.batteryInfo, 22 + 26 * CGFloat(batteryItems.count))) }
-		// 出现条件与高度共用同一段解析（panelCheckup），不各写一遍 evaluate：
-		// 否则配平按"有估计项"给了高、渲染却按另一个快照算了没这行
-		if options.contains(.batteryCheckup), let checkup = panelCheckup {
-			// 有估计项时卡里多一行"含估计项：…"，声明高必须跟着长（原先恒写 58）
-			result.append((.checkup, PanelCardHeights.checkup(estimatedInputs: checkup.estimatedInputs)))
-		}
-		// 电池身份证：静态出厂信息，有跳变记录时多留一行状态位
-		if options.contains(.batteryIdentity), let identity = monitor.batteryIdentity, identity.isMeaningful {
-			let jumpExtra: CGFloat = socJumpCount30d > 0 ? 26 : 0
-			result.append((.batteryIdentity, cardHeight(.batteryIdentity, expanded: 104 + jumpExtra)))
-		}
-		if options.contains(.habitInsight), !habitInsights.isEmpty {
-			result.append((.habitInsight, cardHeight(.habitInsight, expanded: PanelCardHeights.habitInsight(messages: habitInsights.map(\.message)))))
-		}
-		if options.contains(.temperatureChart), monitor.temperatureSamples.count >= 2 { result.append((.temperatureChart, cardHeight(.temperatureChart, expanded: 96))) }
-		if options.contains(.healthTrend), showsHealthCurve { result.append((.healthTrend, cardHeight(.healthTrend, expanded: 142))) }
-		// —— 用电行为：今日/日历/时段/24h/功耗/续航换算/高耗电 ——
-		if options.contains(.dailySummary), let usage = historyRecorder.todayUsage,
-		   usage.drainedPercent > 0 || usage.chargedPercent > 0 {
+		// 判定与高度公式已搬进 PanelCardVisibility（纯逻辑，进测试面，74 行 → 0 行）。
+		// 搬动的原因：这块原先是 UI/ 里零测试信号的最大一块——17 张卡的出现条件与高度
+		// 全部只有源码可查，"内容长高了、声明没跟上"这个错已经在今日用电/体检/洞察卡上
+		// 各犯过一次（2.9.11、2.9.14），每次都靠人眼截图发现。现在有行为断言兜着。
+		// 视图只负责把实例状态拍平成 Input，判定本身在逻辑层。
+		var input = PanelCardVisibilityInput()
+		input.enabledOptions = configuration.enabledOptions
+		input.collapsedCards = configuration.collapsedCards
+		input.powerItemCount = powerItems.count
+		input.batteryItemCount = batteryItems.count
+		input.showsHealthCurve = showsHealthCurve
+		input.recentSessionCount = historyRecorder.recentSessions.count
+		input.checkupEstimatedInputs = panelCheckup?.estimatedInputs ?? []
+		input.hasCheckup = panelCheckup != nil
+		input.batteryIdentityMeaningful = monitor.batteryIdentity?.isMeaningful == true
+		input.socJumpCount30d = socJumpCount30d
+		input.habitInsightMessages = habitInsights.map(\.message)
+		input.temperatureSampleCount = monitor.temperatureSamples.count
+		if let usage = historyRecorder.todayUsage {
+			input.todayUsage = usage
 			// 高度与卡内说明行同源：说明行长出来了，配平就得看见它长高了
-			let summaryHeight = DwellTracking.dailySummaryHeight(usage: usage, history: historyRecorder.dailyHistory)
-			result.append((.dailySummary, cardHeight(.dailySummary, expanded: summaryHeight)))
+			input.dailySummaryHeight = DwellTracking.dailySummaryHeight(usage: usage, history: historyRecorder.dailyHistory)
 		}
-		if options.contains(.usageCalendar), historyRecorder.dailyHistory.count >= 3 {
-			result.append((.usageCalendar, cardHeight(.usageCalendar, expanded: 128)))
-		}
-		if options.contains(.hourlyDrainChart), historyRecorder.hourlyDrainStats.accumulatedDays >= 3 {
-			result.append((.hourlyDrain, cardHeight(.hourlyDrainChart, expanded: 96)))
-		}
-		if options.contains(.socChart), historyRecorder.socSamples.count >= 2 { result.append((.socChart, cardHeight(.socChart, expanded: 120))) }
-		if options.contains(.powerChart), monitor.powerSamples.count >= 2 { result.append((.powerChart, cardHeight(.powerChart, expanded: 102))) }
-		// 续航换算：只在电池模式且有掉电估算时出现
-		if options.contains(.runtimeScenarios), monitor.snapshot.powerSource == .battery,
-			let estimate = monitor.drainEstimate, estimate.percentPerHour > 0,
-			monitor.snapshot.stateOfChargePercent != nil {
-			// 校准口径行会多占一行，配平高度给余量（不裁内容，只影响双列配平）
-			let calPending = RuntimeScenarioCalibration.pendingSameBucketDays(history: historyRecorder.dailyHistory)
-			let calNote = RuntimeScenarioCalibration.calibrationNote(
-				factor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory),
-				pendingDays: calPending
-			)
-			let noteExtra: CGFloat = calNote.isEmpty ? 0 : 16
-			result.append((.runtimeScenarios, cardHeight(.runtimeScenarios, expanded: 118 + noteExtra)))
-		}
-		if options.contains(.significantEnergyApps) {
-			let energyExtra = weeklyAppEnergy.isEmpty ? 0 : 22 + 20 * CGFloat(weeklyAppEnergy.count)
-			result.append((.energyApps, 44 + 26 * CGFloat(max(1, min(3, monitor.significantEnergyApps.count))) + energyExtra))
-		}
-		// —— 外设与事件 ——
-		if options.contains(.powerEvents), !historyRecorder.powerEvents.isEmpty {
-			result.append((.powerEvents, cardHeight(.powerEvents, expanded: 44 + 26 * CGFloat(min(6, historyRecorder.powerEvents.count)))))
-		}
-		if options.contains(.bluetoothDevices), !monitor.bluetoothDevices.isEmpty {
-			result.append((.bluetooth, 40 + 34 * CGFloat(monitor.bluetoothDevices.count)))
-		}
-		return result.map { (id: $0.0, height: $0.1) }
+		input.dailyHistoryCount = historyRecorder.dailyHistory.count
+		input.hourlyDrainAccumulatedDays = historyRecorder.hourlyDrainStats.accumulatedDays
+		input.socSampleCount = historyRecorder.socSamples.count
+		input.powerSampleCount = monitor.powerSamples.count
+		input.runtimeScenarioEligible = monitor.snapshot.powerSource == .battery
+			&& (monitor.drainEstimate?.percentPerHour ?? 0) > 0
+			&& monitor.snapshot.stateOfChargePercent != nil
+		input.runtimeCalibrationNoteEmpty = RuntimeScenarioCalibration.calibrationNote(
+			factor: RuntimeScenarioCalibration.intensityFactor(history: historyRecorder.dailyHistory),
+			pendingDays: RuntimeScenarioCalibration.pendingSameBucketDays(history: historyRecorder.dailyHistory)
+		).isEmpty
+		input.significantEnergyAppCount = monitor.significantEnergyApps.count
+		input.weeklyAppEnergyCount = weeklyAppEnergy.count
+		input.powerEventCount = historyRecorder.powerEvents.count
+		input.bluetoothDeviceCount = monitor.bluetoothDevices.count
+
+		let spec: [String: (option: DisplayOption, expanded: CGFloat, id: CardID)] = [
+			"powerInfo": (.adapterName, 0, .powerInfo),
+			"batteryInfo": (.batteryHealth, 0, .batteryInfo),
+			"checkup": (.batteryCheckup, 0, .checkup),
+			"batteryIdentity": (.batteryIdentity, 0, .batteryIdentity),
+			"habitInsight": (.habitInsight, 0, .habitInsight),
+			"temperatureChart": (.temperatureChart, 0, .temperatureChart),
+			"healthTrend": (.healthTrend, 0, .healthTrend),
+			"dailySummary": (.dailySummary, 0, .dailySummary),
+			"usageCalendar": (.usageCalendar, 0, .usageCalendar),
+			"hourlyDrain": (.hourlyDrainChart, 0, .hourlyDrain),
+			"socChart": (.socChart, 0, .socChart),
+			"powerChart": (.powerChart, 0, .powerChart),
+			"runtimeScenarios": (.runtimeScenarios, 0, .runtimeScenarios),
+			"energyApps": (.significantEnergyApps, 0, .energyApps),
+			"powerEvents": (.powerEvents, 0, .powerEvents),
+			"bluetooth": (.bluetoothDevices, 0, .bluetooth),
+			"chargeHistory": (.chargeHistory, 0, .chargeHistory),
+		]
+		return PanelCardVisibility
+			.entries(input: input, collapsed: configuration.collapsedCards, spec: spec)
+			.map { (id: $0.id, height: $0.height) }
 	}
 
 	// 可折叠卡片折起后只剩一行标题，配平时按 32pt 算，否则按展开高度

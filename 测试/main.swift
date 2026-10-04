@@ -6218,6 +6218,191 @@ MainActor.assumeIsolated {
 		   "门面顺序边界：handleWillSleep 的 onAC 定格本组盖不住（monitor 快照注不进），只测顺序")
 }
 
+// MARK: - 卡片可见性与声明高度（PanelCardVisibility）
+//
+// 这族断言存在的理由：17 张卡的出现条件与高度原先全在 UI/ 的 visibleCards 里，
+// 而 UI/ 不进测试编译面 ⇒ 这块零行为信号。而"内容长高了、声明没跟上"这个错项目里
+// 已经犯过三次（今日用电 2.9.11、体检卡与洞察卡 2.9.14），每次都靠人眼截图发现。
+// 现在判定在逻辑层，可以逐条件夹具验证。
+do {
+	// spec 用字符串 key + 假 ID，避免测试面依赖 UI/ 的 private CardID
+	func spec() -> [String: (option: DisplayOption, expanded: CGFloat, id: String)] {
+		[
+			"powerInfo": (.adapterName, 0, "powerInfo"),
+			"batteryInfo": (.batteryHealth, 0, "batteryInfo"),
+			"checkup": (.batteryCheckup, 0, "checkup"),
+			"batteryIdentity": (.batteryIdentity, 0, "batteryIdentity"),
+			"habitInsight": (.habitInsight, 0, "habitInsight"),
+			"temperatureChart": (.temperatureChart, 0, "temperatureChart"),
+			"healthTrend": (.healthTrend, 0, "healthTrend"),
+			"dailySummary": (.dailySummary, 0, "dailySummary"),
+			"usageCalendar": (.usageCalendar, 0, "usageCalendar"),
+			"hourlyDrain": (.hourlyDrainChart, 0, "hourlyDrain"),
+			"socChart": (.socChart, 0, "socChart"),
+			"powerChart": (.powerChart, 0, "powerChart"),
+			"runtimeScenarios": (.runtimeScenarios, 0, "runtimeScenarios"),
+			"energyApps": (.significantEnergyApps, 0, "energyApps"),
+			"powerEvents": (.powerEvents, 0, "powerEvents"),
+			"bluetooth": (.bluetoothDevices, 0, "bluetooth"),
+			"chargeHistory": (.chargeHistory, 0, "chargeHistory"),
+		]
+	}
+	var allOn = PanelCardVisibilityInput()
+	allOn.enabledOptions = Set(DisplayOption.allCases)
+	func run(_ input: PanelCardVisibilityInput,
+			collapsed: Set<String> = []) -> [String: CGFloat] {
+		var m: [String: CGFloat] = [:]
+		for e in PanelCardVisibility.entries(input: input, collapsed: collapsed, spec: spec()) {
+			m[e.id] = e.height
+		}
+		return m
+	}
+	/// 以 full 为基线改几个字段再跑（比一堆 { var x = full; … }() 闭包可读，
+	/// 也避开 Swift 对多语句闭包要显式 return 的坑）
+	func variant(_ changes: (inout PanelCardVisibilityInput) -> Void,
+			collapsed: Set<String> = []) -> [String: CGFloat] {
+		var x = full
+		changes(&x)
+		return run(x, collapsed: collapsed)
+	}
+
+	// —— 全开：17 张卡里除依赖数据的几张外都该出现，高度逐张钉住 ——
+	var full = allOn
+	full.powerItemCount = 3
+	full.batteryItemCount = 4
+	full.recentSessionCount = 5
+	full.hasCheckup = true
+	full.batteryIdentityMeaningful = true
+	full.socJumpCount30d = 2
+	full.habitInsightMessages = ["一句建议"]
+	full.temperatureSampleCount = 10
+	full.showsHealthCurve = true
+	full.todayUsage = DailyUsage(dayKey: "2026-10-04", drainedPercent: 5, chargedPercent: 0)
+	full.dailySummaryHeight = 64
+	full.dailyHistoryCount = 7
+	full.hourlyDrainAccumulatedDays = 4
+	full.socSampleCount = 20
+	full.powerSampleCount = 30
+	full.runtimeScenarioEligible = true
+	full.runtimeCalibrationNoteEmpty = false
+	full.significantEnergyAppCount = 6
+	full.weeklyAppEnergyCount = 2
+	full.powerEventCount = 9
+	full.bluetoothDeviceCount = 3
+	let m = run(full)
+	expect(m.count == 17, "可见性：全开时 17 张卡全部出现（实际 \(m.count)）")
+	// 头部两张：22 + 26×行数
+	expect(m["powerInfo"] == 22 + 26 * 3, "可见性：充电卡高 = 22 + 26×行数")
+	expect(m["batteryInfo"] == 22 + 26 * 4, "可见性：电池卡高 = 22 + 26×行数")
+	// 充电记录：50 + 40×min(3, 会话数)
+	expect(m["chargeHistory"] == 50 + 40 * 3, "可见性：充电记录卡高 = 50 + 40×min(3,5) = 170")
+	// 体检卡走 PanelCardHeights（有估计项 38+12=50）
+	// full 夹具未设 estimatedInputs（默认空）⇒ 走无估计项那一档
+	expect(m["checkup"] == PanelCardHeights.checkup(estimatedInputs: []), "可见性：体检卡高走 PanelCardHeights")
+	// 有估计项时必须多算那一行（这个错在体检卡上犯过一次，v2.9.14 修）
+	expect(variant { $0.checkupEstimatedInputs = ["循环"] }["checkup"]
+		== PanelCardHeights.checkup(estimatedInputs: ["循环"]),
+		   "可见性：体检卡有估计项时高度随之变化（与卡内那行同源）")
+	// 身份证：跳变记录 >0 时多一行 26
+	expect(m["batteryIdentity"] == 104 + 26, "可见性：身份证卡有跳变记录时 +26")
+	expect(variant { $0.socJumpCount30d = 0 }["batteryIdentity"] == 104,
+		   "可见性：身份证卡无跳变记录时不加那 26")
+	// 洞察卡走 PanelCardHeights
+	expect(m["habitInsight"] == PanelCardHeights.habitInsight(messages: ["一句建议"]),
+		   "可见性：洞察卡高走 PanelCardHeights（上限 3 条）")
+	// 固定高度的几张
+	expect(m["temperatureChart"] == 96, "可见性：温度曲线固定 96")
+	expect(m["healthTrend"] == 142, "可见性：健康趋势固定 142")
+	expect(m["usageCalendar"] == 128, "可见性：用电日历固定 128")
+	expect(m["hourlyDrain"] == 96, "可见性：时段用电固定 96")
+	expect(m["socChart"] == 120, "可见性：24h 电量固定 120")
+	expect(m["powerChart"] == 102, "可见性：功耗曲线固定 102")
+	// 今日用电：高度与说明行同源
+	expect(m["dailySummary"] == 64, "可见性：今日用电卡高 = 说明行高（同源，不写死）")
+	// 续航换算：校准口径行非空时 +16
+	expect(m["runtimeScenarios"] == 118 + 16, "可见性：续航换算有校准口径行时 118+16")
+	expect(variant { $0.runtimeCalibrationNoteEmpty = true }["runtimeScenarios"] == 118,
+		   "可见性：续航换算无校准口径行时 118")
+	// 高耗电应用：44 + 26×min(3, 6) + 排行附加
+	let expectEnergyApps: CGFloat = 44 + 26 * 3 + (22 + 20 * 2)
+	expect(m["energyApps"] == expectEnergyApps, "可见性：高耗电应用 = 44+26×min(3,6)+排行行")
+	expect(variant { $0.weeklyAppEnergyCount = 0 }["energyApps"] == 44 + 26 * 3,
+		   "可见性：无 7 日排行时不加排行附加")
+	// 电源事件：44 + 26×min(6, 9)
+	expect(m["powerEvents"] == 44 + 26 * 6, "可见性：电源事件 = 44 + 26×min(6,9)")
+	// 蓝牙：40 + 34×count
+	expect(m["bluetooth"] == 40 + 34 * 3, "可见性：蓝牙外设 = 40 + 34×count")
+
+	// —— 逐条件：关掉开关就不该出现 ——
+	for (key, opt) in [("checkup", DisplayOption.batteryCheckup), ("habitInsight", .habitInsight),
+		("temperatureChart", .temperatureChart), ("healthTrend", .healthTrend),
+		("usageCalendar", .usageCalendar), ("hourlyDrain", .hourlyDrainChart),
+		("socChart", .socChart), ("powerChart", .powerChart),
+		("runtimeScenarios", .runtimeScenarios), ("energyApps", .significantEnergyApps),
+		("powerEvents", .powerEvents), ("bluetooth", .bluetoothDevices),
+		("chargeHistory", .chargeHistory)] {
+		var x = full
+		x.enabledOptions = allOn.enabledOptions.subtracting([opt])
+		expect(run(x)[key] == nil, "可见性：\(key) 关掉开关后不出现")
+	}
+
+	// —— 逐条件：数据不足就不该出现（阈值边界，必须钉死 >= 还是 >）——
+	expect(run({ var x = allOn; x.temperatureSampleCount = 1; return x }())["temperatureChart"] == nil,
+		   "可见性：温度样本 1 个（<2）不出现")
+	expect(run({ var x = allOn; x.dailyHistoryCount = 2; return x }())["usageCalendar"] == nil,
+		   "可见性：日历史 2 天（<3）不出现")
+	expect(run({ var x = allOn; x.hourlyDrainAccumulatedDays = 2; return x }())["hourlyDrain"] == nil,
+		   "可见性：时段用电累计 2 天（<3）不出现")
+	expect(run({ var x = allOn; x.socSampleCount = 1; return x }())["socChart"] == nil,
+		   "可见性：SOC 样本 1 个（<2）不出现")
+	expect(run({ var x = allOn; x.powerSampleCount = 1; return x }())["powerChart"] == nil,
+		   "可见性：功率样本 1 个（<2）不出现")
+	// 今日用电：耗电与充电都为 0 时不出现（这是"有行但无活动"的边界）
+	expect(run({ var x = allOn; x.todayUsage = DailyUsage(dayKey: "2026-10-04", drainedPercent: 0, chargedPercent: 0); return x }())["dailySummary"] == nil,
+		   "可见性：今日用电行存在但耗电与充电都为 0 时不出现")
+	expect(run({ var x = allOn; x.todayUsage = DailyUsage(dayKey: "2026-10-04", drainedPercent: 0, chargedPercent: 1); return x }())["dailySummary"] != nil,
+		   "可见性：今日有充入（耗电 0）也算出现")
+	// 头部两张：行数为 0 就不出现
+	expect(run(allOn)["powerInfo"] == nil, "可见性：无充电行时充电卡不出现")
+	expect(run(allOn)["batteryInfo"] == nil, "可见性：无电池行时电池卡不出现")
+	// 充电记录上限：min(3, n) —— 20 次会话也只按 3 行算
+	expect(run({ var x = allOn; x.recentSessionCount = 20; return x }())["chargeHistory"] == 50 + 40 * 3,
+		   "可见性：充电记录 min(3,20) 封顶在 3 行")
+	// 电源事件上限：min(6, n)
+	expect(run({ var x = allOn; x.powerEventCount = 20; return x }())["powerEvents"] == 44 + 26 * 6,
+		   "可见性：电源事件 min(6,20) 封顶在 6 行")
+	// 高耗电应用下限：0 个应用时仍按 max(1,·) 算一行
+	expect(run({ var x = allOn; x.significantEnergyAppCount = 0; return x }())["energyApps"] == 44 + 26 * 1,
+		   "可见性：高耗电应用 0 个时按 max(1,·) 仍算一行")
+
+	// —— 折叠：命中折叠集合一律 32pt ——
+	let collapsed = run(full, collapsed: Set<String>([DisplayOption.dailySummary.rawValue, DisplayOption.bluetoothDevices.rawValue]))
+	expect(collapsed["dailySummary"] == PanelCardVisibility.collapsedHeight,
+		   "可见性：折叠卡一律 32pt（今日用电）")
+	expect(collapsed["bluetooth"] == PanelCardVisibility.collapsedHeight,
+		   "可见性：折叠卡一律 32pt（蓝牙）")
+	expect(collapsed["powerChart"] == 102, "可见性：未折叠的卡不受折叠集合影响")
+	expect(PanelCardVisibility.height(expanded: 999, collapsed: true) == 32
+		&& PanelCardVisibility.height(expanded: 999, collapsed: false) == 999,
+		   "可见性：height() 折叠优先")
+
+	// —— 顺序：语义分簇（充电中 → 电池健康 → 用电行为 → 外设与事件）——
+	var ordered = allOn
+	ordered.powerItemCount = 1
+	ordered.batteryItemCount = 1
+	ordered.bluetoothDeviceCount = 1
+	ordered.powerEventCount = 1
+	ordered.recentSessionCount = 1
+	ordered.temperatureSampleCount = 5
+	let ids = PanelCardVisibility.entries(input: ordered, collapsed: [], spec: spec()).map(\.id)
+	// 簇内次序也照抄原实现：高耗电应用(523) 在 电源事件(527) 之前 —— 别按"名字直觉"改
+	expect(ids == ["powerInfo", "chargeHistory", "batteryInfo", "temperatureChart", "energyApps", "powerEvents", "bluetooth"],
+		   "可见性：按语义分簇顺序排列（簇内高耗电应用在电源事件之前，与原实现逐字一致），实际 \(ids)")
+
+	// —— 空输入：一张卡都不出（而不是给一堆 0 高或崩溃）——
+	expect(run(PanelCardVisibilityInput()).isEmpty, "可见性：空输入不产出任何卡片")
+}
+
 // MARK: - 汇总
 
 print("")
