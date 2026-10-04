@@ -228,7 +228,29 @@ run_source_guards() {
 		echo "==> 动效门守卫失败：头部墙钟动画 $TICKS 处（期望 5）、滚动门控 $GATES 处（期望 3=充电三处；警示两处必须豁免）"
 		exit 1
 	fi
-	echo "==> 动效门守卫：头部墙钟动画 5 处、其中充电 3 处经滚动门控（警示 2 处按规矩豁免）"
+	# 计数只证明"有 5 处动画、3 处门控"，**不证明它们配对正确**——把门控挪到别处、
+	# 或者 3 处门控全挤在同一分支而另外两处动画裸奔，计数照样是 5/3。
+	# 配对判据：每处 TimelineView 往上 20 行内必须能看到 holdsDecorativeAnimation
+	#（它们是 if/else 配对：门控在 if 分支、TimelineView 在 else 分支，跨度约 7 行）。
+	# 期望恰好 3 处带门控、2 处豁免（警示通道：热脉冲/低电呼吸，节奏本身就是信息）。
+	PAIRED="$(awk '
+		{ lines[NR]=$0 }
+		END {
+			for (n=1; n<=NR; n++) {
+				if (lines[n] ~ /TimelineView\(/) {
+					c=0
+					for (m=n-20; m<n; m++) if (m>0 && lines[m] ~ /holdsDecorativeAnimation/) c=1
+					if (c) gated++
+				}
+			}
+			print gated+0
+		}' "$HEADER_UI" 2>/dev/null)"
+	if [ "${PAIRED:-0}" != "3" ]; then
+		echo "==> 动效门守卫失败：$TICKS 处动画里只有 ${PAIRED:-0} 处上方有滚动门控（期望 3）——" >&2
+		echo "    计数 5/3 只证明数量对，不证明配对正确；充电三处必须各有门控停帧，警示两处必须豁免。" >&2
+		exit 1
+	fi
+	echo "==> 动效门守卫：头部墙钟动画 5 处、其中充电 3 处经滚动门控（警示 2 处按规矩豁免）；配对已核对（3 处带门控）"
 
 	# 单一出口守卫：v2.9.16 收口的 #20 起源于"同一判断抄了两遍"——面板传全 8 条来源、
 	# 资格侧只传 5 条，于是"面板出着洞察卡、资格集判无数据"，那张卡没落进 rows，
@@ -522,6 +544,42 @@ fi
 rm -rf "$BOLD_PROBE"
 trap - EXIT
 echo "==> 元守卫：注入 .bold → 字阶守卫以预期信息变红（期望 0 的守卫不是恒假）"
+
+# 动效门守卫的专属变异（2026-10-04）：本轮给它补了**配对验证**（计数只证明数量，
+# 不证明门控与动画一一对应）。所以探针必须构造"计数全对、配对错"的形态——
+# 把第 3 处门控搬到一个与任何 TimelineView 都不相邻的 struct 里，计数仍是 5/3，
+# 旧版守卫会全绿。动效门必须以自己的信息变红。
+MOTION_PROBE="$(mktemp -d)"
+trap 'rm -rf "$MOTION_PROBE"' EXIT
+cp -R "$SRC" "$MOTION_PROBE/src"
+python3 - "$MOTION_PROBE/src/UI/BatteryHeaderView.swift" <<'MUTATE_MOTION'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+tgt = [i for i, l in enumerate(lines) if "PanelMotionGate.holdsDecorativeAnimation" in l]
+if len(tgt) != 3:
+    sys.exit("变异没打上：期望恰好 3 处门控，实际 %d 处" % len(tgt))
+gate = lines[tgt[2]]
+expr = gate.split("if ", 1)[1].rstrip().rstrip("{").rstrip()
+del lines[tgt[2]]
+lines += ["\n", "struct __GateParking {\n", "\tlet x: Bool = %s\n" % expr, "}\n"]
+p.write_text("".join(lines), encoding="utf-8")
+MUTATE_MOTION
+MOTION_GOT_RED=0
+MOTION_OUT="$( SRC="$MOTION_PROBE/src"; run_source_guards 2>&1 )" || MOTION_GOT_RED=1
+if [ "$MOTION_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：门控被挪到不与动画相邻处后动效门守卫仍然全过——配对判据没在工作" >&2
+	printf '    探针实际输出：%s\n' "$MOTION_OUT" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$MOTION_OUT" | grep -q "动效门守卫失败"; then
+	echo "==> 元守卫失败：门控被挪走后守卫红了，但红的不是动效门守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$MOTION_OUT" >&2
+	exit 1
+fi
+rm -rf "$MOTION_PROBE"
+trap - EXIT
+echo "==> 元守卫：门控挪位（计数 5/3 全对但配对错） → 动效门守卫以预期信息变红"
 
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
