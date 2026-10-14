@@ -2,7 +2,7 @@
 
 macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) 的汉化增强版。全部数据只在本机处理，不联网、不上传。
 
-![妙电面板（液态玻璃）](docs/glass/after/panel-bg-light.png)
+![妙电面板（液态玻璃）]
 
 ## 功能一览
 
