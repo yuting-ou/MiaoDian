@@ -8,9 +8,10 @@ on:
 jobs:
   test:
     # 测试编译用 -default-isolation MainActor，需要 Swift 6.2+（Xcode 26，macos-26 镜像自带）
-    # 已知边界（2026-09-15）：macos-27 镜像尚不存在（其 README 404），所以 UI 层在
-    # SDK 27 下的编译在这条门上拿不到信号；镜像出现后把 runs-on 换成 macos-27 即补上
-    # ——本仓库开发机已在 macOS 27 + CLT 27（缺 SwiftUIMacros 插件），本地也补不了这一路。
+    # UI 层在 SDK 27 下的编译信号由下面的 sdk27-audit 实验门补（2026-10-04：GitHub 仍无
+    # macos-27 系统镜像，但 xcode-27 镜像已可用——macOS 27 底座 + Xcode 27，preview）。
+    # 本仓库开发机是 macOS 27 + CLT 27（缺 SwiftUIMacros 插件），UI 这一路本地只能编 26.5，
+    # 见 build.sh 的 SDK 探针。
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +30,30 @@ jobs:
       # 而这套量具正是"性能/布局有没有回归"的唯一证据来源，烂掉等于证据链断了。
       # 带 @main 的量具要 -parse-as-library；顶层脚本（对比度测量）反而不能用它。
       - name: 量具编译审计（工具/ 不在其他任何编译面里）
+        run: |
+          set -e
+          SRC=$(find ChargeMonitor/ChargeMonitor -name '*.swift' ! -name 'ChargeMonitorApp.swift' ! -name 'MenuBarPanelController.swift' | sort)
+          COMMON="-swift-version 6 -default-isolation MainActor -target arm64-apple-macosx15.0 -typecheck"
+          for tool in 工具/滚动成本.swift 工具/离屏验收.swift; do
+            echo "== $tool（@main，走 -parse-as-library）"
+            swiftc $COMMON -parse-as-library $SRC "$tool"
+          done
+          echo "== 工具/对比度测量.swift（顶层脚本，不能加 -parse-as-library）"
+          swiftc $COMMON 工具/对比度测量.swift
+
+  # UI 层 SDK 27 编译信号（实验门）。xcode-27 镜像 = macOS 27 底座 + Xcode 27.0 默认
+  # （自带 SwiftUIMacros 宏插件与 macOS 27.0 SDK），正好是开发机 CLT 27 缺的那块；
+  # 同样的两条审计在这里等于拿 macOS 27 SDK 重跑一遍，主门（macos-26/SDK 26）不动。
+  # 镜像还是 preview（actions/runner-images#14404），先 continue-on-error 不挡发布门；
+  # 转正后删掉 continue-on-error 并把主门 runs-on 收敛过来。
+  sdk27-audit:
+    runs-on: xcode-27
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: 全量源码 Swift 6 审计（含 UI 层，macOS 27 SDK）
+        run: swiftc -swift-version 6 -default-isolation MainActor -target arm64-apple-macosx15.0 -typecheck -parse-as-library $(find ChargeMonitor/ChargeMonitor -name '*.swift' | sort)
+      - name: 量具编译审计（macOS 27 SDK）
         run: |
           set -e
           SRC=$(find ChargeMonitor/ChargeMonitor -name '*.swift' ! -name 'ChargeMonitorApp.swift' ! -name 'MenuBarPanelController.swift' | sort)

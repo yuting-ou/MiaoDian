@@ -432,6 +432,20 @@ do {
 		expect(item.animatesOnChange == !perTick.contains(item.label),
 			   "淡变登记表完备性：「\(item.label)」淡变开关与登记表不符（每拍行不淡变、事件行保留淡变）")
 	}
+
+	// 图标颜色预算（与淡变登记表同一套完备性写法）：颜色只编码状态，不做装饰。
+	// 全板只有充电器行的 tint 有语义（橙=没认过的头，绿=已识别）；新增行想染色，
+	// 必须来这里把标签加进 tintedLabels 并说清它编码什么——否则这条必红。
+	// 为什么不用 grep 数源码条数：那条只看得见「写了 iconTint」，看不见「这行会不会真被产出」。
+	let tintedLabels: Set<String> = ["充电器"]
+	for item in acItems + batItems where item.iconTint != nil {
+		expect(tintedLabels.contains(item.label),
+			   "图标颜色预算：「\(item.label)」给了 tint 但它不编码状态（常态图标一律 labelOnGlass，染色要来说清编码什么）")
+	}
+	// tint 预算不许是空转的：充电器行必须真被夹具产出并真带色，
+	// 否则上面那条 for 一条都不迭代，「预算」是假的
+	expect(acItems.contains { $0.label == "充电器" && $0.iconTint != nil },
+		   "图标颜色预算：夹具没产出带 tint 的充电器行，上面那条断言就是空转")
 }
 
 // 时长格式化边界：整小时不带分钟，不满一小时不带小时
@@ -1541,6 +1555,39 @@ do {
 	// 播种与配对：奇数张落单成宽行
 	expectEqual(PanelPresets.paired([.powerInfo, .batteryInfo, .checkup]),
 		[["powerInfo", "batteryInfo"], ["checkup"]], "配对：两张一行，落单成宽行")
+
+	// —— 出厂布局（v2.9.21 安静档）：新装机第一屏只铺极简四张 ——
+	let factory = PanelPresets.factoryLayout
+	let allCardIDs = LayoutCard.allCases.map(\.rawValue)
+	expectEqual(factory.rows ?? [], [["powerInfo", "batteryInfo"], ["dailySummary", "socChart"]],
+		"出厂布局：极简四张按对落行")
+	// 每张卡必须要么落行、要么显式隐藏、要么属于头部例外（体检）：既不许漏（漏了=以后自己冒出来），
+	// 也不许两边都有（自相矛盾的布局）
+	let factoryPlaced = (factory.rows ?? []).flatMap { $0 } + factory.hidden
+		+ PanelPresets.factoryHeaderOnly.map(\.rawValue)
+	expectEqual(factoryPlaced.sorted(), allCardIDs.sorted(),
+		"出厂布局：17 张卡全部要么落行、要么显式隐藏、要么是头部例外（一个都不许漏）")
+	expectEqual(Set(factoryPlaced).count, factoryPlaced.count, "出厂布局：没有卡同时出现在行里和隐藏名单里")
+	// 这条是"安静档会不会自己长回原样"的承重断言：PanelFlow.normalize 会把 known 里
+	// 既不在 rows 也不在 hidden 的卡追加到行表尾——隐藏名单漏一张，那张就在有数据那天冒出来。
+	// 头部例外只有 checkup 一张，它被追加成一行也无害（宽面板的卡片列表把它过滤进头部）
+	expectEqual(PanelFlow.normalize(factory, known: Set(allCardIDs)).hidden, factory.hidden,
+		"出厂布局：归一不改隐藏名单（安静档不会自己长回满屏）")
+	expectEqual(PanelFlow.normalize(factory, known: Set(allCardIDs)).rows ?? [],
+		(factory.rows ?? []) + [["checkup"]],
+		"出厂布局：归一只追加 checkup 这一行（其余 12 张都被 hidden 接住）")
+	// 白名单不许被抄第二遍：出厂四张与「极简」预设在资格集全在场时必须是同一个布局
+	expectEqual(PanelPresets.apply(.minimal, eligible: LayoutCard.allCases, base: nil)?.rows ?? [],
+		factory.rows ?? [], "出厂布局与极简预设共用同一份白名单")
+	// ⚠ 体检必须是头部例外（对抗审查抓到的自相矛盾）：出厂档若把 checkup 写进 hidden，
+	// 宽面板头部徽章与窄面板体检卡会同时消失——本轮"头部徽章"那条改动对新装机就成了死代码。
+	// 这条断言在修复前必红，是这整个例外的存在理由
+	var factoryConfig = AppConfiguration()
+	factoryConfig.panelLayout = factory
+	expect(factoryConfig.showsHeaderCheckup(hasHealth: true),
+		   "出厂布局：体检分仍然可见（checkup 不许进 hidden，否则头部与卡片两条路一起断）")
+	expect(!factoryConfig.showsHeaderCheckup(hasHealth: false),
+		   "出厂布局：读不到健康度时仍如实不显示（例外不等于硬凑）")
 
 	// 上下移：与阅读序相邻卡原地换位（行形态不变）
 	let moveBase = PanelLayout(rows: [["a", "b"], ["c"]])
@@ -4667,6 +4714,9 @@ do {
 // MARK: - 配置存储纪律（CRITICAL：坏档不得写回默认覆盖用户字节）
 
 do {
+	// 顶层代码是 nonisolated 上下文，而 ConfigurationManager 是 @MainActor：同步进入
+	// （与下面「域持久化」那处同一写法，全程零 await——一让出主线程真快照就会插进来）
+	MainActor.assumeIsolated {
 	final class SpyConfigStore: ConfigurationStoring {
 		var hasStoredBytes: Bool
 		var loadResult: AppConfiguration?
@@ -4679,40 +4729,41 @@ do {
 		func save(_ configuration: AppConfiguration) { saveCount += 1 }
 	}
 
-	// 与 ConfigurationManager.init 同构的三路分支（纯逻辑锁）
-	func bootstrap(store: ConfigurationStoring) -> AppConfiguration {
-		if let loaded = store.load() {
-			let initial = loaded.normalized()
-			store.save(initial)
-			return initial
-		} else if store.hasStoredBytes {
-			return AppConfiguration.default.normalized()
-		} else {
-			let initial = AppConfiguration.default.normalized()
-			store.save(initial)
-			return initial
-		}
-	}
-
+	// ⚠ 这里**直接构造生产的 ConfigurationManager**，不再抄一份同构的三路分支。
+	// 原先那个 `func bootstrap(store:)` 是手抄副本，且已经与生产漂移：生产的「从未写过」
+	// 分支多了 factoryLayout 那行，副本没有——副本跑绿不等于生产跑绿（"同一判断抄两遍"的
+	// 教科书形态，v2.9.16 同族病）。改成真构造后，三路分支的行为断言第一次真的在生产身上跑。
 	let corrupt = SpyConfigStore(hasStoredBytes: true, loadResult: nil)
-	let corruptBoot = bootstrap(store: corrupt)
+	let corruptBoot = ConfigurationManager(store: corrupt)
 	expectEqual(corrupt.saveCount, 0, "配置纪律：坏档不得 save（不覆盖磁盘）")
 	expectEqual(
-		corruptBoot.lowBatteryThresholdPercent,
+		corruptBoot.configuration.lowBatteryThresholdPercent,
 		AppConfiguration.default.normalized().lowBatteryThresholdPercent,
 		"配置纪律：坏档内存用默认继续跑"
 	)
+	// 坏档那一支拿的是**纯默认**（自动模式），不许顺手种出厂档：
+	// 磁盘原样保留意味着用户还有救回真配置的机会，内存里先给他一个满屏面板才是诚实的
+	expect(corruptBoot.configuration.panelLayout == nil,
+		   "配置纪律：坏档不种出厂布局（内存用纯默认＝自动模式，磁盘留原档）")
 
 	let fresh = SpyConfigStore(hasStoredBytes: false, loadResult: nil)
-	_ = bootstrap(store: fresh)
+	let freshBoot = ConfigurationManager(store: fresh)
 	expectEqual(fresh.saveCount, 1, "配置纪律：从未写过才落默认")
+	// 接线断言（取代源码守卫）：纯函数有没有被接上，这里第一次是真跑出来的
+	expectEqual(freshBoot.configuration.panelLayout, PanelPresets.factoryLayout,
+				"出厂档接线：新装机（无存档）确实拿到出厂布局")
 
 	var good = AppConfiguration.default
 	good.lowBatteryThresholdPercent = 30
+	good.panelLayout = PanelLayout(rows: [["socChart", "powerInfo"]], hidden: ["checkup"])
 	let ok = SpyConfigStore(hasStoredBytes: true, loadResult: good)
-	let okBoot = bootstrap(store: ok)
-	expectEqual(okBoot.lowBatteryThresholdPercent, 30, "配置纪律：好档读入")
+	let okBoot = ConfigurationManager(store: ok)
+	expectEqual(okBoot.configuration.lowBatteryThresholdPercent, 30, "配置纪律：好档读入")
 	expectEqual(ok.saveCount, 1, "配置纪律：好档允许回写 normalized")
+	// 这条是老用户的全部保障：已有配置**绝不**被出厂档覆盖，哪怕它藏了卡、排过序
+	expectEqual(okBoot.configuration.panelLayout, good.panelLayout,
+				"出厂档不覆盖老用户：已有自定义布局原样读回（含用户自己藏的卡）")
+	}
 }
 
 // MARK: - C3 驻留效果追踪 DwellTracking
@@ -6371,9 +6422,21 @@ do {
 	// 电源事件上限：min(6, n)
 	expect(run({ var x = allOn; x.powerEventCount = 20; return x }())["powerEvents"] == 44 + 26 * 6,
 		   "可见性：电源事件 min(6,20) 封顶在 6 行")
-	// 高耗电应用下限：0 个应用时仍按 max(1,·) 算一行
-	expect(run({ var x = allOn; x.significantEnergyAppCount = 0; return x }())["energyApps"] == 44 + 26 * 1,
-		   "可见性：高耗电应用 0 个时按 max(1,·) 仍算一行")
+	// 高耗电应用的空态（v2.9.21）：既无当前大户、也无本周累计 → 卡里只剩一句状态话，
+	// 不配标题也不按整卡占位（旧口径 max(1,·) 会把这一行虚报成 70pt）
+	var appsEmpty = allOn
+	appsEmpty.significantEnergyAppCount = 0
+	expect(run(appsEmpty)["energyApps"] == PanelCardHeights.energyAppsEmptyHeight,
+		   "可见性：高耗电应用空态（无当前大户 + 无周累计）按空态行算，不再按 max(1,·) 铺整卡")
+	// 空态判据是「两个都空」，不是「当前没有」：有本周累计时卡里真有内容，必须仍铺整卡。
+	// 变异守门：把 isEnergyAppsEmpty 写成只看 appCount → 这条红
+	// （拆成具名变量而非内联闭包：两处 mutation 加一长串算术会让类型检查超时）
+	var weeklyOnly = allOn
+	weeklyOnly.significantEnergyAppCount = 0
+	weeklyOnly.weeklyAppEnergyCount = 2
+	let weeklyDeclared: CGFloat = 44 + 26 + 22 + 40
+	expect(run(weeklyOnly)["energyApps"] == weeklyDeclared,
+		   "可见性：高耗电应用无当前大户但有本周累计 → 仍按整卡算（空态判据不许只看 appCount）")
 
 	// —— 折叠：命中折叠集合一律 32pt ——
 	let collapsed = run(full, collapsed: Set<String>([DisplayOption.dailySummary.rawValue, DisplayOption.bluetoothDevices.rawValue]))

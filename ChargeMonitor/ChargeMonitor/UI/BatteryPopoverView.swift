@@ -172,7 +172,7 @@ struct BatteryPopoverView: View {
 					}
 					.buttonStyle(.plain)
 				}
-				.padding(.horizontal, 10)
+				.padding(.horizontal, PopoverLayout.faceHorizontalPadding)
 				.padding(.vertical, 6)
 				.cardSection()
 				.transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
@@ -1212,10 +1212,6 @@ struct BatteryPopoverView: View {
 	}
 
 	// 动作组之间的小间距（不加文字标题：控制行栈已占近 1/4 面板高，再加标题只会更长）
-	private var controlGroupGap: some View {
-		Spacer().frame(height: 4)
-	}
-
 	private var controlRows: some View {
 		// v1.24.1 行距 4：药丸各自成件后留出玻璃缝隙（贴死会连成一条，失去"浮在玻璃上"的节奏）
 		VStack(spacing: 3) {
@@ -1243,18 +1239,14 @@ struct BatteryPopoverView: View {
 			// buttonStyle(.plain) 剥掉 SettingsLink 自带的链接态底色——行观感必须与其他控制行完全一致
 			// 华容网格：进编辑模式重排/隐藏卡片（仅双列面板提供——当前会话配平出两列即满足）
 			if !assignedLeft.isEmpty || !assignedRight.isEmpty {
-				PopoverActionRow("隐藏卡片", systemImageName: "eye.slash") {
+				PopoverActionRow("隐藏卡片") {
 					enterLayoutEdit()
 				}
 			}
 
 			SettingsLink {
 				GlassRow {
-					HStack(spacing: 6) {
-						Image(systemName: "gear")
-							.font(.system(size: PanelText.secondary, weight: .regular))
-							.foregroundStyle(GlassTokens.labelOnGlass)
-							.frame(width: 16)
+					HStack(spacing: PopoverLayout.iconTextGap) {
 						Text("设置")
 							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(.primary)
@@ -1270,37 +1262,46 @@ struct BatteryPopoverView: View {
 				NSApp.activate(ignoringOtherApps: true)
 			})
 			
-			controlGroupGap
-			PopoverActionRow("导出报告", systemImageName: "square.and.arrow.up") {
-				exportReport()
-			}
+			// 低频动作收进一格菜单（原先是 5 行平铺，控制行栈吃掉面板约 1/4 高度）。
+			// 留在面板上的只有：状态行、「隐藏卡片」（自定义布局的唯一入口）、「设置」、「退出」
+			// 「已复制」原来是就地改行标题的；收进菜单后菜单一点就关，反馈会看不见。
+			// 所以把反馈抬到这一行的标题上——行是常驻的，2 秒回弹的节奏与改动前一致
+			//
+			// 这四个动作行**等距**（原先在 设置↔更多操作、更多操作↔退出 之间各插一个
+			// controlGroupGap，只有 隐藏卡片↔设置 没有 ⇒ 行距 25/32/32pt，看着就是"没排齐"）。
+			// 状态行与动作行的分组由上面那条 Divider() 承担，动作行内部再切三组没有依据
+			PopoverMenuRow(reportCopied ? "报告已复制到剪贴板" : "更多操作", items: moreMenuItems)
 
-			PopoverActionRow(reportCopied ? "已复制" : "复制报告",
-							 systemImageName: reportCopied ? "checkmark.circle.fill" : "doc.on.doc") {
-				copyReport()
-			}
-
-			PopoverActionRow("导出数据 (CSV)", systemImageName: "tablecells") {
-				exportCSV()
-			}
-			
-			// 体检分可算时才提供“生成分享卡片”
-			if batteryCheckup != nil {
-				PopoverActionRow("生成体检卡片", systemImageName: "photo.badge.checkmark") {
-					exportShareCard()
-				}
-			}
-			
-			controlGroupGap
-			PopoverActionRow("电池设置", systemImageName: "slider.horizontal.3") {
-				openBatterySettings()
-			}
-			
-			PopoverActionRow("退出", systemImageName: "power") {
+			PopoverActionRow("退出") {
 				NSApplication.shared.terminate(nil)
 			}
 			.keyboardShortcut("q")
 		}
+	}
+
+	/// 「更多操作」菜单项（AppKit NSMenu 的数据，见 `PanelMenuPresenter`）
+	private var moreMenuItems: [PanelMenuItem] {
+		var items: [PanelMenuItem] = []
+		// 出厂安静档的出口。出现条件刻意是"布局**仍然等于**出厂态"而不是"有卡被藏着"：
+		// restoreDefaultLayout 会把行序一起清成自动配平，用户自己排过序的话这一键
+		// 就不只是取消隐藏，而是顺手毁掉他的布局——那种改动该走设置里带确认框的那条路
+		if configurationManager.configuration.panelLayout == PanelPresets.factoryLayout {
+			items.append(.action("显示全部卡片（恢复默认布局）", "rectangle.stack.badge.plus") {
+				configurationManager.restoreDefaultLayout()
+			})
+			items.append(.divider)
+		}
+		items.append(.action("导出报告", "square.and.arrow.up") { exportReport() })
+		items.append(.action("复制报告", "doc.on.doc") { copyReport() })
+		items.append(.action("导出数据 (CSV)", "tablecells") { exportCSV() })
+		// 体检分可算时才提供"生成分享卡片"
+		if batteryCheckup != nil {
+			items.append(.action("生成体检卡片", "photo.badge.checkmark") { exportShareCard() })
+		}
+		items.append(.divider)
+		// 原名「电池设置」与上面的「设置」并排时撞名，用户只能点进去才知道是两个东西
+		items.append(.action("系统电池设置…", "battery.100") { openBatterySettings() })
+		return items
 	}
 
 	private func openBatterySettings() {
@@ -1323,11 +1324,11 @@ struct BatteryPopoverView: View {
 	private var notificationPermissionWarning: some View {
 		Button(action: openNotificationSettings) {
 			GlassRow {
-				HStack(spacing: 6) {
+				HStack(spacing: PopoverLayout.iconTextGap) {
 					Image(systemName: "bell.slash.fill")
 						.font(.system(size: PanelText.secondary, weight: .regular))
 						.foregroundStyle(Color.orange)
-						.frame(width: 16)
+						.frame(width: PopoverLayout.iconColumnWidth)
 					Text("通知权限未开启，提醒收不到 · 点此开启")
 						.font(.system(size: 11))
 						.foregroundStyle(.primary)  // 文字走证明过的色，紧迫性由橙色图标承担（彩色小字坐药丸面不达 AA）

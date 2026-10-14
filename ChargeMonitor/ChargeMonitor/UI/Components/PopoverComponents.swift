@@ -40,6 +40,21 @@ enum PopoverLayout {
 	// 值从这条线起左对齐——值列左缘不再随值长短锯齿化
 	static let infoLabelColumnWidth: CGFloat = 64
 	static let infoValueFontSize: CGFloat = 12.5
+	/// 面板内所有"面"（卡片／头部／编辑模式提示条）的左右内边距，**一个数**。
+	/// 原先卡片 10、头部 12、编辑条 10 并存 ⇒ 头部整列比下面的卡右移 2pt，
+	/// 首行读数与卡片标题不在一条竖线上
+	static let faceHorizontalPadding: CGFloat = 10
+	/// 图标列宽与"图标→文字"间距，**信息行/控制行/菜单行/状态行共用**。
+	/// 原先信息行 HStack spacing 8、其余三处 6 ⇒ 同一列文字差 2pt 对不齐
+	///
+	/// **面板的两条竖线（v2.9.21 用户指出底部 4 行错位后定下的规矩）**：
+	/// 挂了图标列的行，文字落在 面内缩+16+6 = 面内缩+22；不挂的落在 面内缩。
+	/// 前者是**数据行**（卡内读数、高耗电应用、状态行），后者是**标题级**
+	/// （卡片标题、折叠行标题、控制行动作）。控制行原本也挂了图标 ⇒ 它的文字
+	/// 比正上方 时段用电/24小时电量/功耗曲线 整条右移 22pt，跨组扫读就是"没对齐"。
+	/// 所以控制行的四个动作**不挂图标**：动作名自解释，图标不携带信息。
+	static let iconColumnWidth: CGFloat = 16
+	static let iconTextGap: CGFloat = 6
 }
 
 /// 面板字阶（唯一来源，替代散在 12 个文件里的 135 处硬编码 `.font(.system(size:))`）。
@@ -146,7 +161,7 @@ struct PopoverCard<Content: View>: View {
 		VStack(alignment: .leading, spacing: 0) {
 			content
 		}
-		.padding(.horizontal, 10)
+		.padding(.horizontal, PopoverLayout.faceHorizontalPadding)
 		.padding(.vertical, 3)   // v2.1.2：7→6→5→4→3，12 张卡共省 ~96pt（面板必须整块落在 Dock 之上）
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.cardSection()
@@ -159,16 +174,43 @@ struct PopoverCard<Content: View>: View {
 // 层次靠**颜色与列位置**承担（标签 secondary、值 primary），字重一律 regular——
 // 19 行值全 semibold 的年代，每行都在喊，层次反而糊掉（见 PanelText 的字重预算）。
 // 彩色小字坐玻璃面不达 AA，见测试「文字色锁」，所以区分不给颜色，给明度与位置。
+/// 图标光学重心微调表。
+///
+/// 依据：`bash 工具/离屏验收.sh symbols`（8× 超采样扫墨迹包围盒，量"墨迹中心 − 布局框中心"）。
+/// 名册 24 个符号：**17 个 dx = 0.00、5 个 −0.06，只有下面两个 ≥ 0.25pt**，
+/// 所以只登记这两个——其余进表就是在拟合噪声。
+///
+/// **口径**：只量 `PanelText.secondary`（11pt）这一档。洞察卡（12/9pt）、事件时间轴
+/// 与续航换算（9.5pt）也走 16pt 图标列，但偏心量随字号缩放，拿 11pt 的数填进去是假精度，
+/// 所以那三处**故意不补偿**。
+///
+/// 用 `.offset` 不用 `.padding`：offset 只改渲染不改布局，
+/// 所以卡片的声明高、折行预测、`PanelCardHeights` 全都不受影响。
+enum PanelIconOptics {
+	/// 水平微调（pt，正=右移）。dy 全 ≤0.25pt 且各符号基线一致，不做纵向表
+	nonisolated static func dx(_ symbol: String) -> CGFloat {
+		switch symbol {
+		case "thermometer.medium": return -0.56      // 电池温度：墨迹偏右 0.56pt
+		case "bolt.badge.clock": return -0.62        // 充电记录行：墨迹偏右 0.62pt
+		default: return 0
+		}
+	}
+}
+
 struct PopoverInfoRow: View {
 	let item: BatteryInfoItem
 
 	var body: some View {
-		HStack(spacing: 8) {
+		HStack(spacing: PopoverLayout.iconTextGap) {
 			Image(systemName: item.symbol)
 				.font(.system(size: PanelText.secondary, weight: .regular))
 				.symbolRenderingMode(.hierarchical)
-				.foregroundStyle(item.iconTint ?? Color.secondary)
-				.frame(width: 16)
+				// 图标色是**预算**，不是装饰：常态一律 labelOnGlass（与信息行/控制行同一个证明过的色），
+				// 只有携带语义的 tint 才染色（当前只有充电器行：橙=没认过的头，绿=已识别）。
+				// 原先 16 条行各配一个固定色相，颜色不编码任何信息，红/橙还伪装成警示态
+				.foregroundStyle(item.iconTint ?? GlassTokens.labelOnGlass)
+				.frame(width: PopoverLayout.iconColumnWidth)
+				.offset(x: PanelIconOptics.dx(item.symbol))
 
 			Text(item.label)
 				.font(.system(size: PanelText.label))
@@ -202,6 +244,76 @@ struct PopoverInfoRow: View {
 	}
 }
 
+/// 菜单项：`.action(标题, SF Symbol, 动作)` 或 `.divider`
+enum PanelMenuItem {
+	case action(String, String, () -> Void)
+	case divider
+}
+
+/// 用 AppKit 弹原生菜单。
+///
+/// 为什么不用 SwiftUI 的 `Menu`：行的**视觉**得交给 `Menu` 的 label 摆位，而
+/// `borderlessButton` 按自己的内容缩进放 label。常数灰背景上逐行量过三种写法：
+///   玻璃套在 label 里 → 药丸完全不画（`Menu` 不合成 label 内部的玻璃层）；
+///   玻璃施在控件外圈 → 药丸高 16.00pt，同排其它行 23.00pt；
+///   `GeometryReader` 钉死宽高 → 面与高都对了（12.0..571.5pt / 23.00pt），
+///   但**图标与文字仍比同排三行靠左 6.5pt**（首墨 16.0pt vs 22.5/24.0/24.5pt）。
+/// 即"框对得上、列对不上"，而那个偏移来自控件内部、没有可钉的公开尺寸。
+///
+/// 换成 AppKit 后，行就是上下几行用的**同一个** `PopoverActionRow`：
+/// 几何由构造保证，不需要补偿常量，也不需要靠我盯放大图判断"看起来齐了"。
+@MainActor
+final class PanelMenuPresenter: NSObject {
+	static let shared = PanelMenuPresenter()
+	private var actions: [() -> Void] = []
+
+	@objc private func fire(_ sender: NSMenuItem) {
+		guard sender.tag >= 0, sender.tag < actions.count else { return }
+		actions[sender.tag]()
+	}
+
+	func popUp(_ items: [PanelMenuItem]) {
+		actions.removeAll(keepingCapacity: true)
+		let menu = NSMenu()
+		for item in items {
+			switch item {
+			case .divider:
+				menu.addItem(.separator())
+			case .action(let title, let symbol, let handler):
+				let entry = NSMenuItem(title: title, action: #selector(fire(_:)), keyEquivalent: "")
+				entry.target = self
+				entry.tag = actions.count
+				entry.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+				actions.append(handler)
+				menu.addItem(entry)
+			}
+		}
+		// view 传 nil 时 location 是屏幕坐标（左下原点），NSEvent.mouseLocation 正是同一坐标系。
+		// 这个 SDK 的 `at:` 不是可选型，没有"传 nil 就用鼠标位置"的写法可用
+		menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+		// 闭包捕获的是 configurationManager/export* 这一整批上下文，菜单关掉后没有理由再持有
+		actions.removeAll(keepingCapacity: true)
+	}
+}
+
+/// 控制行的「更多」一格：视觉复用 `PopoverActionRow`（同一个视图、同一套几何），
+/// 点击弹 AppKit 原生菜单。低频动作收在这里，控制行不再用 8 行吃掉面板约 1/4 高度
+struct PopoverMenuRow: View {
+	private let title: String
+	private let items: [PanelMenuItem]
+
+	init(_ title: String, items: [PanelMenuItem]) {
+		self.title = title
+		self.items = items
+	}
+
+	var body: some View {
+		PopoverActionRow(title, showsChevron: true) {
+			PanelMenuPresenter.shared.popUp(items)
+		}
+	}
+}
+
 struct PopoverActionRow: View {
 	private let title: String
 	private let icon: NSImage?
@@ -220,18 +332,20 @@ struct PopoverActionRow: View {
 	var body: some View {
 		Button(action: action) {
 			GlassRow {
-				HStack(spacing: 6) {
+				HStack(spacing: PopoverLayout.iconTextGap) {
 					if let icon {
+						// 应用图标也走同一条图标列（原先是 20pt）：高耗电应用卡的文字
+						// 因此比其它卡右移 4pt，跨卡扫读时整列错位
 						Image(nsImage: icon)
 							.resizable()
 							.scaledToFit()
-							.frame(width: 20, height: 20)
+							.frame(width: PopoverLayout.iconColumnWidth, height: PopoverLayout.iconColumnWidth)
 							.cornerRadius(4)
 					} else if let systemImageName {
 						Image(systemName: systemImageName)
 							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
-							.frame(width: 16)
+							.frame(width: PopoverLayout.iconColumnWidth)
 					}
 					Text(title)
 						.font(.system(size: PanelText.secondary, weight: .regular))
@@ -254,16 +368,15 @@ struct PopoverActionRow: View {
 	}
 }
 
-// 可交互玻璃行：控制行/警示行的统一底。26 上常态即淡玻璃药丸（按钮可供性写在材质上），
+// 可交互玻璃行：控制行/警示行/菜单行的统一底。26 上常态即淡玻璃药丸（按钮可供性写在材质上），
 // interactive 玻璃自己响应悬停与按压的镜面高光；15–25 退回原悬停灰底行为
 struct GlassRow<Content: View>: View {
 	private let content: Content
-	@State private var isHovering = false
-	
+
 	init(@ViewBuilder content: () -> Content) {
 		self.content = content()
 	}
-	
+
 	var body: some View {
 		if #available(macOS 26.0, *) {
 			// v1.24.1 浓 tint 药丸：行文字坐 tint（控制行自成才，不再依赖 v1.24.0 的整块卡纱垫板）
@@ -277,4 +390,6 @@ struct GlassRow<Content: View>: View {
 				.onHover { isHovering = $0 }
 		}
 	}
+
+	@State private var isHovering = false
 }

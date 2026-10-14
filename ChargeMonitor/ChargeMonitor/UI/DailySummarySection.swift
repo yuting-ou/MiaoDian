@@ -131,7 +131,7 @@ struct DailySummarySection: View {
 	}()
 	
 	private func statItem(symbol: String, color: Color, value: String, label: String) -> some View {
-		HStack(spacing: 5) {
+		HStack(spacing: PopoverLayout.iconTextGap) {
 			Image(systemName: symbol)
 				.font(.system(size: 13))
 				.foregroundStyle(color)

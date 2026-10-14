@@ -13,8 +13,9 @@ struct BatteryInfoItem: Identifiable {
 	let value: String
 	var iconTint: Color? = nil
 	// 值文字不再有"染色"通道（v2.1.x 用户裁决：玻璃优先）——彩色小字坐透玻璃面
-	// 在多数壁纸下只有 1~2.4:1，异常语义改由 value 文案直说（"（偏低）/（偏高）/（偏快）"），
-	// 颜色只留给图标（图形，且与文字冗余）
+	// 在多数壁纸下只有 1~2.4:1，异常语义改由 value 文案直说（"（偏低）/（偏高）/（偏快）"）。
+	// 图标色同样按预算发：只有编码状态的行才给 tint（现仅充电器行的新/旧），
+	// 其余走 labelOnGlass——固定色相不携带信息，且常配的橙/红会被读成警示态
 	// 悬停 tooltip：充电功率行用它解释"为什么功率小"这类读数疑惑
 	var helpText: String? = nil
 	// 值变化时要不要做交叉淡入。淡变本身不是装饰而是代价：一条在飞的 `.animation(value:)`
@@ -131,8 +132,7 @@ struct BatteryInfoFormatter {
 			group: .power,
 			symbol: "hourglass",
 			label: "充满还需",
-			value: DurationFormatter.chinese(minutes: minutes),
-			iconTint: .green
+			value: DurationFormatter.chinese(minutes: minutes)
 		)
 	}
 	
@@ -144,8 +144,7 @@ struct BatteryInfoFormatter {
 			group: .power,
 			symbol: "bolt.horizontal.circle.fill",
 			label: "充电协议",
-			value: name,
-			iconTint: .yellow
+			value: name
 		)
 	}
 	
@@ -175,8 +174,7 @@ struct BatteryInfoFormatter {
 			group: .power,
 			symbol: "speedometer",
 			label: "当前档位",
-			value: value,
-			iconTint: .blue
+			value: value
 		)
 	}
 	
@@ -198,8 +196,7 @@ struct BatteryInfoFormatter {
 			group: .power,
 			symbol: "square.grid.2x2",
 			label: "可选档位",
-			value: compacted.joined(separator: "/"),
-			iconTint: .blue
+			value: compacted.joined(separator: "/")
 		)
 	}
 	
@@ -211,7 +208,6 @@ struct BatteryInfoFormatter {
 			symbol: "arrow.down.circle.fill",
 			label: "输入功率",
 			value: formatWatts(watts),
-			iconTint: .teal,
 			animatesOnChange: false
 		)
 	}
@@ -232,7 +228,6 @@ struct BatteryInfoFormatter {
 			symbol: "bolt.circle.fill",
 			label: "充电功率",
 			value: formatWatts(watts) + phaseSuffix,
-			iconTint: .green,
 			helpText: help,
 			animatesOnChange: false
 		)
@@ -246,7 +241,6 @@ struct BatteryInfoFormatter {
 			symbol: "cpu",
 			label: "当前功耗",
 			value: formatWatts(watts),
-			iconTint: .purple,
 			animatesOnChange: false
 		)
 	}
@@ -329,8 +323,7 @@ struct BatteryInfoFormatter {
 			symbol: "arrow.triangle.2.circlepath",
 			label: "循环次数",
 			// 对比苹果标称的 1000 次循环寿命，数字才有参照系
-			value: snapshot.cycleCount.map { "\($0) / 1000" } ?? "—",
-			iconTint: .teal
+			value: snapshot.cycleCount.map { "\($0) / 1000" } ?? "—"
 		)
 	}
 	
@@ -347,7 +340,6 @@ struct BatteryInfoFormatter {
 			symbol: "heart.fill",
 			label: "电池健康",
 			value: value,
-			iconTint: .pink,
 			// H1：与系统设置对不上时用户能问到口径（可溯源）
 			helpText: HealthCaliber.disclosure(
 				hasDesignCapacity: snapshot.designCapacityMAh != nil,
@@ -365,8 +357,7 @@ struct BatteryInfoFormatter {
 			group: .battery,
 			symbol: "chart.line.uptrend.xyaxis",
 			label: "健康趋势",
-			value: "\(trend.earliest.healthPercent)% → \(trend.latest.healthPercent)% · 近\(days)天",
-			iconTint: .mint
+			value: "\(trend.earliest.healthPercent)% → \(trend.latest.healthPercent)% · 近\(days)天"
 		)
 	}
 	
@@ -380,7 +371,6 @@ struct BatteryInfoFormatter {
 			symbol: "thermometer.medium",
 			label: "电池温度",
 			value: String(format: "%.1f°C", temperature) + (isHot ? "（偏高）" : ""),
-			iconTint: .orange,
 			animatesOnChange: false
 		)
 	}
@@ -399,7 +389,6 @@ struct BatteryInfoFormatter {
 			symbol: "bolt.ring.closed",
 			label: "电流电压",
 			value: String(format: "%.2fV · %@A", volts, ampsText),
-			iconTint: .cyan,
 			animatesOnChange: false
 		)
 	}
@@ -413,8 +402,7 @@ struct BatteryInfoFormatter {
 			group: .battery,
 			symbol: "clock",
 			label: "剩余可用时间",
-			value: DurationFormatter.chinese(minutes: minutes),
-			iconTint: .indigo
+			value: DurationFormatter.chinese(minutes: minutes)
 		)
 	}
 	
@@ -436,7 +424,6 @@ struct BatteryInfoFormatter {
 			symbol: "arrow.down.right.circle",
 			label: "掉电速度",
 			value: value,
-			iconTint: .red,
 			animatesOnChange: false
 		)
 	}
@@ -447,8 +434,7 @@ struct BatteryInfoFormatter {
 			group: .battery,
 			symbol: "desktopcomputer",
 			label: "开机时长",
-			value: formatUptime(snapshot.systemUptimeSeconds) ?? "—",
-			iconTint: .gray
+			value: formatUptime(snapshot.systemUptimeSeconds) ?? "—"
 		)
 	}
 	
@@ -481,7 +467,6 @@ struct BatteryInfoFormatter {
 			symbol: "moon.zzz.fill",
 			label: "睡眠掉电",
 			value: value,
-			iconTint: .indigo,
 			helpText: help
 		)
 	}

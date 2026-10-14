@@ -165,14 +165,7 @@ struct BatteryCheckupSection: View {
 		}
 	}
 	
-	private var color: Color {
-		switch checkup.tier {
-		case .excellent: return .green
-		case .good: return .teal
-		case .aging: return .orange
-		case .poor: return .red
-		}
-	}
+	private var color: Color { checkup.tier.checkupColor }
 }
 
 // 24 小时电量走势：充电段绿色、放电段主题色，断档（关机/长睡）不连线

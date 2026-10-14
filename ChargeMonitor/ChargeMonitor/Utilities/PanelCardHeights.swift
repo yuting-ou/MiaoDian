@@ -20,8 +20,13 @@ nonisolated enum PanelCardHeights {
 	nonisolated static let insightSingleItemHeight: CGFloat = 36
 	nonisolated static let insightExtraItemHeight: CGFloat = 14
 	nonisolated static let insightWrappedLineHeight: CGFloat = 12
-	/// 洞察正文的可用文字宽：列 275 − 卡片水平内边距 10×2 − 图标 14 − 图标与文字间距 6
-	nonisolated static let insightTextWidth: CGFloat = 235
+	/// 高耗电应用的空态行（既无当前大户、也无本周累计）：卡里没有内容可配标题，
+	/// 标题行本身就是白占的一格，所以空态不铺整卡、只留一行状态话。
+	/// 量具实测 26pt（预热中与"没有大户"两种空态同高），旧口径按 max(1,·) 报 70pt
+	nonisolated static let energyAppsEmptyHeight: CGFloat = 26
+	/// 洞察正文的可用文字宽：列 275 − 卡片水平内边距 10×2 − 图标列 16 − 图标与文字间距 6
+	/// （后两项与 `PopoverLayout.iconColumnWidth`/`iconTextGap` 同源，改那边必须改这里）
+	nonisolated static let insightTextWidth: CGFloat = 233
 	/// 首条正文 11pt、其余 10pt（与 TrendAndCalendarSections 的字号同源）
 	nonisolated static let insightFirstFontSize: CGFloat = 11
 	nonisolated static let insightRestFontSize: CGFloat = 10

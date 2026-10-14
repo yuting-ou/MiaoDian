@@ -180,6 +180,36 @@ nonisolated enum LayoutPreset: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum PanelPresets {
+	/// 出厂布局的四张卡（与 `.minimal` 预设同一份白名单，不许各抄一遍）
+	nonisolated static let factoryWhitelist: [LayoutCard] = [.powerInfo, .batteryInfo, .dailySummary, .socChart]
+
+	/// 出厂布局里**既不落行、也不隐藏**的卡：只有体检。
+	///
+	/// 为什么它是例外：宽面板的体检分住在头部、不占卡位，而头部那条判据是
+	/// `AppConfiguration.showsHeaderCheckup` = 开关 ∧ **未被隐藏**。一旦把 `checkup` 写进
+	/// hidden，宽面板头部与窄面板卡片两条路会同时断掉（宽面板的卡片列表本来就把
+	/// checkup 过滤进头部），新装机于是永远看不到体检分——出厂档会把"头部徽章"
+	/// 这条改动变成死代码。留在行表里也不行：宽面板不消费行、窄面板会多出一张占位卡。
+	nonisolated static let factoryHeaderOnly: [LayoutCard] = [.checkup]
+
+	/// 出厂布局（v2.9.21）：新装机第一屏只铺极简四张，其余**全部显式隐藏**
+	/// （体检是唯一例外，见 `factoryHeaderOnly`）。
+	///
+	/// 为什么 hidden 要写全而不是留空：`PanelFlow.normalize` 会把 known 里既不在 rows
+	/// 也不在 hidden 的卡追加到行表尾——留空等于"以后有数据的卡自己冒出来"，
+	/// 安静档会在几天内自己长回原样。
+	///
+	/// 只在 `ConfigurationManager` 的「从未写过」分支种：已有配置走解码、用户的选择优先，
+	/// 升级不会被静默改档。这条接线有行为断言钉（见 测试/main.swift 的「配置存储三路分支」）。
+	nonisolated static var factoryLayout: PanelLayout {
+		PanelLayout(
+			rows: paired(factoryWhitelist),
+			hidden: LayoutCard.allCases
+				.filter { !factoryWhitelist.contains($0) && !factoryHeaderOnly.contains($0) }
+				.map(\.rawValue)
+		)
+	}
+
 	/// 应用预设 → 新布局；nil = 默认预设（回自动模式，panelLayout 置空）。
 	/// kept 白名单 ∩ 资格集按资格序成对落行；资格集内其余进 hidden；
 	/// 资格集外的卡保持原状（不显示、也不由预设代用户表态）。
@@ -188,7 +218,7 @@ nonisolated enum PanelPresets {
 		let whitelist: [LayoutCard]
 		switch preset {
 		case .standard: return nil
-		case .minimal: whitelist = [.powerInfo, .batteryInfo, .dailySummary, .socChart]
+		case .minimal: whitelist = factoryWhitelist
 		case .charging: whitelist = [.powerInfo, .chargeHistory, .batteryInfo, .checkup, .dailySummary, .powerEvents, .habitInsight]
 		case .dataNerd: whitelist = LayoutCard.allCases
 		}

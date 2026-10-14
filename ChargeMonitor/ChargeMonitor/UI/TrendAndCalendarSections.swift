@@ -82,12 +82,12 @@ struct HabitInsightSection: View {
 					.font(.system(size: 9))
 					.foregroundStyle(GlassTokens.labelOnGlass)
 				ForEach(Array(insights.prefix(PanelCardHeights.visibleInsightLines).enumerated()), id: \.offset) { index, insight in
-					HStack(alignment: .top, spacing: 6) {
+					HStack(alignment: .top, spacing: PopoverLayout.iconTextGap) {
 						Image(systemName: insight.symbol)
 							.font(.system(size: index == 0 ? 12 : 9))
 							.symbolRenderingMode(.hierarchical)
 							.foregroundStyle(Color.accentColor)
-							.frame(width: 14)
+							.frame(width: PopoverLayout.iconColumnWidth)
 						Text(insight.message)
 							.font(.system(size: index == 0 ? 11 : 10))
 							.foregroundStyle(index == 0 ? Color.primary : GlassTokens.labelOnGlass)

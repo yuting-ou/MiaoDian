@@ -100,43 +100,24 @@ struct BatteryHeaderView: View {
 		return parts.joined(separator: "，")
 	}
 	
-	// 头部版体检徽章：环形进度 + 中心分数 + 右侧评语
+	// 头部版体检：徽章 + 评语。原先这里是一枚 34pt 环形仪表，与左侧电量圆环并排
+	// ——两个圆盘抢"先看哪个"，入口被自己劈成两半。分数与评语一个都不少，
+	// 只是换成本面板已有的语义徽章语言（色在底、字走证明过的自适应色）
 	private func headerCheckup(_ checkup: BatteryCheckup) -> some View {
-		HStack(spacing: 7) {
-			ZStack {
-				Circle()
-					.stroke(checkupColor(checkup.score).opacity(0.15), lineWidth: 3)
-				Circle()
-					.trim(from: 0, to: CGFloat(checkup.score) / 100)
-					.stroke(checkupColor(checkup.score), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-					.rotationEffect(.degrees(-90))
-				Text("\(checkup.score)")
-					.font(.system(size: PanelText.primary, weight: .regular, design: .rounded).monospacedDigit())
-					.foregroundStyle(.primary)
-			}
-			.frame(width: 34, height: 34)
-			
-			VStack(alignment: .leading, spacing: 1) {
-				Text("电池体检")
-					.font(.system(size: 9))
-					.foregroundStyle(GlassTokens.labelOnGlass)
-				Text(checkup.verdict)
-					.font(.system(size: 10.5, weight: .regular))
-					.foregroundStyle(.primary)
-					.fixedSize(horizontal: false, vertical: true)
-			}
-			.frame(width: 92, alignment: .leading)
+		VStack(alignment: .trailing, spacing: 3) {
+			GlassBadge(
+				text: "体检 \(checkup.score) 分",
+				color: checkup.tier.checkupColor
+			)
+			Text(checkup.verdict)
+				.font(.system(size: 10.5, weight: .regular))
+				.foregroundStyle(GlassTokens.labelOnGlass)
+				.multilineTextAlignment(.trailing)
+				.lineLimit(2)
+				.fixedSize(horizontal: false, vertical: true)
+				.frame(width: 96, alignment: .trailing)
 		}
 		.help("综合健康度、循环次数、温度与高电量驻留的加权评分")
-	}
-	
-	private func checkupColor(_ score: Int) -> Color {
-		switch BatteryCheckup.tier(for: score) {
-		case .excellent: return .green
-		case .good: return .teal
-		case .aging: return .orange
-		case .poor: return .red
-		}
 	}
 	
 	private var percentFraction: CGFloat {
@@ -567,7 +548,7 @@ private struct HeaderSection: ViewModifier {
 	func body(content: Content) -> some View {
 		if #available(macOS 26.0, *) {
 			content
-				.padding(.horizontal, 12)
+				.padding(.horizontal, PopoverLayout.faceHorizontalPadding)
 				.padding(.vertical, 10)
 				.frame(maxWidth: .infinity, alignment: .leading)
 				.glassSection()

@@ -28,12 +28,12 @@ struct PowerEventTimelineSection: View {
 				ForEach(Array(rows), id: \.latest) { row in
 					let style = Self.style(row.kind)
 					let times = PowerEventTimeline.times(in: events, of: row)
-					HStack(spacing: 8) {
+					HStack(spacing: PopoverLayout.iconTextGap) {
 						Image(systemName: style.symbol)
 							.font(.system(size: PanelText.caption, weight: .regular))
 							.symbolRenderingMode(.hierarchical)
 							.foregroundStyle(style.color)
-							.frame(width: 16)
+							.frame(width: PopoverLayout.iconColumnWidth)
 
 						Text(row.count > 1 ? "\(style.title) ×\(row.count)" : style.title)
 							.font(.system(size: PopoverLayout.bodyFontSize))
@@ -187,6 +187,10 @@ struct ChargeHistorySection: View {
 	// 2 条：面板整体高度必须落在 Dock 之上（实测 12 张卡全开时超出可用高 90pt，
 	// 底部"电池设置/退出"被 Dock 盖住点不到）；最近两次充电足以回答"上次充了多久"
 	private static let maxVisibleSessions = 2
+	/// 符号名**只写一次**：渲染与光学补偿必须读同一个值。分成两个字面量的话，
+	/// 以后改上面那行、下面那行照旧按旧符号给 −0.56pt 反向偏移，比不补偿更糟，
+	/// 而 `PanelIconOptics` 的 `default: 0` 永远不会为此报错
+	private static let sessionSymbol = "bolt.badge.clock"
 	
 	var body: some View {
 		PopoverCard {
@@ -204,11 +208,12 @@ struct ChargeHistorySection: View {
 					Button {
 						onSelect(session)
 					} label: {
-						HStack(spacing: 8) {
-							Image(systemName: "bolt.badge.clock")
+						HStack(spacing: PopoverLayout.iconTextGap) {
+							Image(systemName: Self.sessionSymbol)
 								.font(.system(size: PanelText.secondary, weight: .regular))
 								.foregroundStyle(Color.green)
-								.frame(width: 16)
+								.frame(width: PopoverLayout.iconColumnWidth)
+								.offset(x: PanelIconOptics.dx(Self.sessionSymbol))
 
 							// 两行式：第一行电量变化（核心信息不可被截），第二行时长·峰值·时间
 							VStack(alignment: .leading, spacing: 1) {

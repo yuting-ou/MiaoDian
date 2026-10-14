@@ -89,6 +89,15 @@ enum PanelCardVisibility {
 		collapsed ? collapsedHeight : expanded
 	}
 
+	/// 高耗电应用的**空态判据**：既没有当前耗电大户、也没有本周累计。
+	///
+	/// 渲染侧（`SignificantEnergySection`）与配平侧必须走这一个函数——两边各自
+	/// `apps.isEmpty && weeklyTop.isEmpty` 就是"同一个判断抄两遍"，v2.9.16 的 #20
+	/// 正是这么长出来的。空态时卡里只剩一句状态话，不配标题、不铺整卡。
+	static func isEnergyAppsEmpty(appCount: Int, weeklyCount: Int) -> Bool {
+		appCount == 0 && weeklyCount == 0
+	}
+
 	/// 17 张卡的出现条件与声明高度。
 	///
 	/// - Parameters:
@@ -176,10 +185,15 @@ enum PanelCardVisibility {
 			push("runtimeScenarios", 118 + noteExtra)
 		}
 		if let s = spec["energyApps"], on.contains(s.option) {
+			let compact = isEnergyAppsEmpty(appCount: input.significantEnergyAppCount,
+											weeklyCount: input.weeklyAppEnergyCount)
 			let energyExtra = input.weeklyAppEnergyCount == 0
 				? 0 : 22 + 20 * CGFloat(input.weeklyAppEnergyCount)
+			let expanded: CGFloat = compact
+				? PanelCardHeights.energyAppsEmptyHeight
+				: 44 + 26 * CGFloat(max(1, min(3, input.significantEnergyAppCount))) + energyExtra
 			out.append(PanelCardEntry(id: s.id, height: height(
-				expanded: 44 + 26 * CGFloat(max(1, min(3, input.significantEnergyAppCount))) + energyExtra,
+				expanded: expanded,
 				collapsed: collapsed.contains(s.option.rawValue))))
 		}
 

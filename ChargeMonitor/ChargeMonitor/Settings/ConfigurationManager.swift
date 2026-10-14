@@ -19,8 +19,11 @@ final class ConfigurationManager: ObservableObject {
             // 绝不 save(.default) 覆盖（那会静默销毁用户配置，CRITICAL）
             self.configuration = AppConfiguration.default.normalized()
         } else {
-            // 从未写过：安全落一份默认
-            let initial = AppConfiguration.default.normalized()
+            // 从未写过：安全落一份默认。默认带出厂布局（极简四张，其余显式隐藏）——
+            // 只在这一个分支种：上面「有字节但解码失败」那一支磁盘原样保留、内存用纯默认（自动模式），
+            // 已有配置走解码，用户的选择优先，升级不会被静默改档
+            var initial = AppConfiguration.default.normalized()
+            initial.panelLayout = PanelPresets.factoryLayout
             self.configuration = initial
             store.save(initial)
         }

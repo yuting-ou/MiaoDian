@@ -8,18 +8,27 @@ struct SignificantEnergySection: View {
 	let weeklyTop: [(name: String, seconds: Double, window: String?)]
 	let onRevealInFinder: (URL?) -> Void
 
+	// 空态判据走逻辑层那一个函数：配平侧的声明高与这里的渲染分支必须同进同退
+	private var isEmpty: Bool {
+		PanelCardVisibility.isEnergyAppsEmpty(appCount: apps.count, weeklyCount: weeklyTop.count)
+	}
+
 	var body: some View {
 		PopoverCard {
-			PopoverSectionHeader("高耗电应用")
-				.padding(.bottom, 2)
+			// 空态不配标题：卡里只剩一句状态话，标题行本身就是白占的一格
+			if !isEmpty {
+				PopoverSectionHeader("高耗电应用")
+					.padding(.bottom, 2)
+			}
 
 			if apps.isEmpty {
 				if isWarmingUp {
 					// 诚实的等待：说清还要多久，而不是给一个过早的"没有"
-					HStack(spacing: 6) {
+					HStack(spacing: PopoverLayout.iconTextGap) {
 						Image(systemName: "hourglass")
-							.font(.system(size: 12))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
+							.frame(width: PopoverLayout.iconColumnWidth)
 						Text("正在积累样本（约 2 分钟）…")
 							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
@@ -29,10 +38,11 @@ struct SignificantEnergySection: View {
 					.padding(.vertical, PopoverLayout.rowVerticalPadding)
 				} else {
 					// 没有耗电大户是好消息，直接用绿色对勾说清楚
-					HStack(spacing: 6) {
+					HStack(spacing: PopoverLayout.iconTextGap) {
 						Image(systemName: "checkmark.circle.fill")
-							.font(.system(size: 12))
+							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(Color.green)
+							.frame(width: PopoverLayout.iconColumnWidth)
 						Text("没有明显的耗电大户")
 							.font(.system(size: PanelText.secondary, weight: .regular))
 							.foregroundStyle(GlassTokens.labelOnGlass)
@@ -58,6 +68,8 @@ struct SignificantEnergySection: View {
 					.padding(.bottom, 2)
 
 				ForEach(Array(weeklyTop.enumerated()), id: \.offset) { index, entry in
+					// 这一行的 12pt 列是**名次数字**、不是图标列（`iconColumnWidth` 不适用），
+					// 所以它刻意不接那个常量；间距也保持 8——数字比图标窄，收成 6 会让名字贴住名次
 					HStack(spacing: 8) {
 						Text("\(index + 1)")
 							.font(.system(size: PanelText.caption, weight: .regular, design: .rounded).monospacedDigit())
@@ -199,11 +211,11 @@ struct RuntimeScenarioSection: View {
 					.padding(.top, 2)
 
 				ForEach(scenarioRows, id: \.scenario) { row in
-					HStack(spacing: 6) {
+					HStack(spacing: PopoverLayout.iconTextGap) {
 						Image(systemName: row.scenario.symbolName)
 							.font(.system(size: PanelText.caption, weight: .regular))
 							.foregroundStyle(tint(for: row.scenario))
-							.frame(width: 14)
+							.frame(width: PopoverLayout.iconColumnWidth)
 						Text(row.scenario.title)
 							.font(.system(size: 10.5))
 							.foregroundStyle(GlassTokens.labelOnGlass)

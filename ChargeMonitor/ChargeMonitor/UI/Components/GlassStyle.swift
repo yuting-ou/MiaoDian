@@ -71,6 +71,19 @@ enum GlassControlShape {
 	case rect, circle
 }
 
+/// 体检分档 → 语义色。**头部徽章与体检卡共用这一处**：原先两边各抄了一份逐字相同的
+/// switch，改分档名或加一档时其中一处会静默错色（同一个判断抄两遍，v2.9.16 同族病）
+extension BatteryCheckup.Tier {
+	nonisolated var checkupColor: Color {
+		switch self {
+		case .excellent: return .green
+		case .good: return .teal
+		case .aging: return .orange
+		case .poor: return .red
+		}
+	}
+}
+
 /// "关闭"按钮样式：26 玻璃胶囊、15–25 系统淡底——曲线窗口空态用
 struct CloseButtonStyle: ButtonStyle {
 	@ViewBuilder
