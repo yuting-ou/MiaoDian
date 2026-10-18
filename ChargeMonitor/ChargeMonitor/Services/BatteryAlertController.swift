@@ -59,33 +59,15 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private var didObserveSystemHoldAtLine = false
 	
 	// 阈值大多由用户在设置里调，重置线随阈值派生，避免临界抖动
-	private static let slowChargeRatio = 0.55
-	private static let slowChargeMinRatedWatts = 10
-	private static let deviceLowResetMargin = 5
-	private static let highDrainResetMargin = 5.0
-	// 睡眠掉电异常：合盖≥ 1 小时、掉电≥ 5% 且折算≥ 2%/小时才提醒
-	// nonisolated：纯判定函数 shouldAlertSleepDrain 要在非隔离上下文读它们
-	nonisolated private static let sleepDrainAlertMinMinutes = 60
-	nonisolated private static let sleepDrainAlertMinPercent = 5
-	nonisolated private static let sleepDrainAlertMinPerHour = 2.0
-	// 只对醒来后这段时间内的记录报警，启动时从磁盘捧出来的旧记录不算
-	nonisolated private static let sleepDrainAlertFreshnessSeconds: TimeInterval = 8 * 3600
+	// 睡眠掉电的时长/掉电/折算阈值与新鲜度窗在 HistoryAlertEvaluators（判定与常量同源）
 	// 已报过的那一觉（按 wakeDate 记）：醒来 10 分钟内重启应用不能把同一条通知再发一遍
 	private static let sleepDrainAlertedKey = "lastSleepDrainAlertWakeDate"
-	// 低电预判：按当前掉速距警示线不足 45 分钟就提前喊一声
-	private static let lowForecastLeadMinutes = 45.0
-	// 温度骤升：5 分钟内涨 3°C 且已到 35°C 以上
-	private static let tempSurgeWindowSeconds: TimeInterval = 5 * 60
-	private static let tempSurgeDeltaC = 3.0
-	private static let tempSurgeMinC = 35.0
-	// 健康度里程碑：跌破这几档各提醒一次（一生只发三条的克制提醒）
-	private static let healthMilestones = [90, 85, 80]
+	// 低电预判与温度骤升的窗口/阈值在 DrainAlertEvaluators（判定与常量同源）
 	private static let healthMilestoneKey = "healthMilestoneLastSeen"
 	private static let weeklyDigestDateKey = "lastWeeklyDigestDate"
 	private static let monthlyDigestDateKey = "lastMonthlyDigestDate"
-	// 电量计校准提醒的冷却键：30 天内不重复提醒（跳变条件可能长期成立）
+	// 电量计校准提醒的冷却键；30 天冷却窗在 HistoryAlertEvaluators（判定与常量同源）
 	private static let gaugeCalibrationAlertKey = "gaugeCalibrationAlertedAt"
-	private static let gaugeCalibrationCooldownSeconds: TimeInterval = 30 * 86400
 	// 保养提醒"延后一会儿"的标记：到点前不再提醒，到点后重新武装
 	private static let chargeCareSnoozeKey = "chargeCareSnoozeUntil"
 	// 可交互通知类别：保养提醒可延后，慢充可复制诊断信息
@@ -321,22 +303,22 @@ final class BatteryAlertController: NSObject, ObservableObject {
 
 	// 外设低电：每个设备独立边沿触发，充回阈值+5 以上才允许再次提醒
 	private func evaluateBluetoothDevices(_ devices: [BluetoothDeviceBattery]) {
-		guard alertEnabled(.alertDeviceLow) else { return }
-		let threshold = configuration.deviceLowThresholdPercent
-		
-		for device in devices {
-			if device.percent <= threshold, device.percent > 0 {
-				guard !notifiedLowDevices.contains(device.name) else { continue }
-				// 免打扰被吞时不入集合——下轮条件仍成立则补发（v1.19.1）
-				if send(
-					id: "device-low-\(device.name)",
-					title: "外设电量不足",
-					body: "\(device.name) 只剩 \(device.percent)%，记得充电"
-				) {
-					notifiedLowDevices.insert(device.name)
-				}
-			} else if device.percent >= threshold + Self.deviceLowResetMargin {
-				notifiedLowDevices.remove(device.name)
+		// 判定在 DeviceLowAlertEvaluator（纯逻辑、可测）；外壳先写回升重置后的集合，
+		// 再对本次该发的设备逐个发送——只有发送成功才入集合，免打扰被吞时下轮补发。
+		let result = DeviceLowAlertEvaluator.evaluate(.init(
+			devices: devices,
+			thresholdPercent: configuration.deviceLowThresholdPercent,
+			isReminderEnabled: alertEnabled(.alertDeviceLow),
+			notifiedDevices: notifiedLowDevices
+		))
+		notifiedLowDevices = result.notifiedDevices
+		for device in result.devicesToNotify {
+			if send(
+				id: "device-low-\(device.name)",
+				title: "外设电量不足",
+				body: "\(device.name) 只剩 \(device.percent)%，记得充电"
+			) {
+				notifiedLowDevices.insert(device.name)
 			}
 		}
 	}
@@ -355,69 +337,60 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	private func evaluateHighDrain(_ estimate: DrainRateEstimate?) {
 		guard isEnabled else { return }
 		evaluateLowForecast(estimate)
-		guard let rate = estimate?.percentPerHour else {
-			// 接上电源后估算器清空、发布 nil：视作离开异常状态，重置提醒
-			// 电池模式下的 nil（睡眠清空重新积累）不重置，防止一觉醒来被重复轰炸
-			if lastSnapshot.powerSource != .battery { didNotifyHighDrain = false }
-			return
+		// 判定在 HighDrainAlertEvaluator（纯逻辑、可测）；外壳只读值、回写边沿、
+		// 组装正文并在发送成功后才置位。
+		let result = HighDrainAlertEvaluator.evaluate(.init(
+			powerSource: lastSnapshot.powerSource,
+			ratePerHour: estimate?.percentPerHour,
+			thresholdPerHour: configuration.highDrainThresholdPerHour,
+			isReminderEnabled: alertEnabled(.alertHighDrain),
+			didNotify: didNotifyHighDrain
+		))
+		didNotifyHighDrain = result.didNotify
+		guard result.shouldSend, let rate = estimate?.percentPerHour else { return }
+		// 口径与 estimate.windowSeconds 同源：短窗时不得仍写「最近一小时」
+		var body = String(format: "%@掉电 %.0f%%/小时，比平时快不少", Self.drainWindowText(estimate), rate)
+		if let culprit = monitor?.significantEnergyApps.first?.name, !culprit.isEmpty {
+			body += "，「\(culprit)」正在高耗电"
 		}
-		let threshold = Double(configuration.highDrainThresholdPerHour)
-		
-		let isAbnormal = lastSnapshot.powerSource == .battery && rate >= threshold
-		if isAbnormal {
-			guard !didNotifyHighDrain, alertEnabled(.alertHighDrain) else { return }
-			// 口径与 estimate.windowSeconds 同源：短窗时不得仍写「最近一小时」
-			var body = String(format: "%@掉电 %.0f%%/小时，比平时快不少", Self.drainWindowText(estimate), rate)
-			if let culprit = monitor?.significantEnergyApps.first?.name, !culprit.isEmpty {
-				body += "，「\(culprit)」正在高耗电"
-			}
-			if send(id: "high-drain", title: "掉电有点快", body: body) {
-				didNotifyHighDrain = true
-			}
-		} else if lastSnapshot.powerSource != .battery || rate < threshold - Self.highDrainResetMargin {
-			didNotifyHighDrain = false
+		if send(id: "high-drain", title: "掉电有点快", body: body) {
+			didNotifyHighDrain = true
 		}
 	}
 	
 	// 低电预判：还没到警示线，但按当前掉速撞线在即，提前喊一声好找插座
 	private func evaluateLowForecast(_ estimate: DrainRateEstimate?) {
-		guard let soc = lastSnapshot.stateOfChargePercent else { return }
-		let threshold = configuration.lowBatteryThresholdPercent
-		
-		// 接电、已进低电区、或估算消失（插电清空）都重置
-		if lastSnapshot.powerSource != .battery || soc <= threshold {
-			didNotifyLowForecast = false
-			return
-		}
-		guard let rate = estimate?.percentPerHour, rate > 0.5 else { return }
-		
-		let minutesToThreshold = Double(soc - threshold) / rate * 60
-		if minutesToThreshold <= Self.lowForecastLeadMinutes {
-			guard !didNotifyLowForecast, alertEnabled(.alertLowForecast) else { return }
-			if send(
-				id: "low-forecast",
-				title: "电量快要告急",
-				body: "按当前掉电速度，约 \(Int(minutesToThreshold)) 分钟后就到 \(threshold)% 了，附近有插座就充上吧"
-			) {
-				didNotifyLowForecast = true
-			}
-		} else if minutesToThreshold > Self.lowForecastLeadMinutes * 2 {
-			// 掉速回落、缓冲充足后才重置，避免在临界点反复横跳
-			didNotifyLowForecast = false
+		// 判定与距线分钟数都在 LowForecastAlertEvaluator（纯逻辑、可测）；
+		// 外壳只读值、回写边沿、组装正文并在发送成功后才置位。
+		let result = LowForecastAlertEvaluator.evaluate(.init(
+			snapshot: lastSnapshot,
+			ratePerHour: estimate?.percentPerHour,
+			thresholdPercent: configuration.lowBatteryThresholdPercent,
+			isReminderEnabled: alertEnabled(.alertLowForecast),
+			didNotify: didNotifyLowForecast
+		))
+		didNotifyLowForecast = result.didNotify
+		guard result.shouldSend, let minutes = result.minutesToThreshold else { return }
+		if send(
+			id: "low-forecast",
+			title: "电量快要告急",
+			body: "按当前掉电速度，约 \(Int(minutes)) 分钟后就到 \(configuration.lowBatteryThresholdPercent)% 了，附近有插座就充上吧"
+		) {
+			didNotifyLowForecast = true
 		}
 	}
 	
 	// 充满预告：插电开充后预告一声几点能充满，一次性不骚扰
 	private func evaluateFullForecast(_ snapshot: BatterySnapshot) {
-		if snapshot.powerSource != .powerAdapter {
-			// 只有真拔电才重置：优化充电在 80% 暂停/恢复不算新一次充电
-			didNotifyFullForecast = false
-			return
-		}
-		guard snapshot.isCharging, !snapshot.isFull else { return }
-		guard let minutes = snapshot.timeToFullChargeMinutes, minutes >= 10 else { return }
-		guard !didNotifyFullForecast, alertEnabled(.alertFullForecast) else { return }
-
+		// 判定在 FullForecastAlertEvaluator（纯逻辑、可测）；外壳只读值、回写边沿、
+		// 组装正文并在发送成功后才置位。
+		let result = FullForecastAlertEvaluator.evaluate(.init(
+			snapshot: snapshot,
+			isReminderEnabled: alertEnabled(.alertFullForecast),
+			didNotify: didNotifyFullForecast
+		))
+		didNotifyFullForecast = result.didNotify
+		guard result.shouldSend, let minutes = result.minutes else { return }
 		if send(
 			id: "full-forecast",
 			title: "开始充电",
@@ -429,60 +402,52 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	
 	// 温度骤升：不等到高温线，短时间内快速升温就先提个醒
 	private func evaluateTempSurge(_ snapshot: BatterySnapshot) {
-		guard let celsius = snapshot.temperatureC else { return }
-		let now = clock.now()
-		
-		// 采样断档（睡过）则清空重来，跨睡眠的温差没意义
-		if let last = recentTemps.last, now.timeIntervalSince(last.date) > 120 {
-			recentTemps.removeAll()
-		}
-		recentTemps.append((now, celsius))
-		recentTemps.removeAll { now.timeIntervalSince($0.date) > Self.tempSurgeWindowSeconds + 60 }
-		
-		// 找窗口起点（约 5 分钟前）的温度作对比
-		guard let baseline = recentTemps.first(where: { now.timeIntervalSince($0.date) <= Self.tempSurgeWindowSeconds }) else { return }
-		guard now.timeIntervalSince(baseline.date) >= Self.tempSurgeWindowSeconds * 0.8 else { return }
-		let delta = celsius - baseline.celsius
-		
-		if delta >= Self.tempSurgeDeltaC, celsius >= Self.tempSurgeMinC {
-			guard !didNotifyTempSurge, alertEnabled(.alertTempSurge) else { return }
-			if send(
-				id: "temp-surge",
-				title: "温度上升较快",
-				body: String(format: "5 分钟内从 %.1f°C 升到 %.1f°C，留意下是不是在跑重任务或散热不良", baseline.celsius, celsius)
-			) {
-				didNotifyTempSurge = true
-			}
-		} else if delta < 1 {
-			didNotifyTempSurge = false
+		// 判定与环形缓存在 TempSurgeAlertEvaluator（纯逻辑、可测）；外壳只把缓存
+		// 读成值、回写状态、组装正文并在发送成功后才置位。缺温度时 evaluator
+		// 原样返回状态——缓存不清，等下一拍有读数再比。
+		let result = TempSurgeAlertEvaluator.evaluate(.init(
+			temperatureCelsius: snapshot.temperatureC,
+			now: clock.now(),
+			isReminderEnabled: alertEnabled(.alertTempSurge),
+			state: TempSurgeAlertEvaluator.State(
+				recentTemps: recentTemps.map { TempSurgeAlertEvaluator.Sample(date: $0.date, celsius: $0.celsius) },
+				didNotify: didNotifyTempSurge
+			)
+		))
+		recentTemps = result.state.recentTemps.map { ($0.date, $0.celsius) }
+		didNotifyTempSurge = result.state.didNotify
+		guard result.shouldSend,
+			  let baseline = result.baselineCelsius,
+			  let celsius = snapshot.temperatureC
+		else { return }
+		if send(
+			id: "temp-surge",
+			title: "温度上升较快",
+			body: String(format: "5 分钟内从 %.1f°C 升到 %.1f°C，留意下是不是在跑重任务或散热不良", baseline, celsius)
+		) {
+			didNotifyTempSurge = true
 		}
 	}
 	
-	// 健康度里程碑：跌破 90/85/80 各提醒一次，基准持久化防重启后重发
+	// 健康度里程碑：跌破 90/85/80 各提醒一次，基准持久化防重启后重发。
+	// 判定在 HealthMilestoneAlertEvaluator（纯逻辑、可测）；两种写回时机分开：
+	// milestoneToPersist 是非发送路径马上写的（首次/回升/开关关着穿越），
+	// shouldSend 那条必须等 send 成功后才落基准。
 	private func evaluateHealthMilestone(_ snapshot: BatterySnapshot) {
-		guard let health = snapshot.healthPercent else { return }
-		
-		let stored = defaults.integer(forKey: Self.healthMilestoneKey)
-		guard stored > 0 else {
-			// 首次运行只记基准不提醒：装上时已经 87% 的电池没必要补刀
-			defaults.set(health, forKey: Self.healthMilestoneKey)
-			return
+		let result = HealthMilestoneAlertEvaluator.evaluate(.init(
+			healthPercent: snapshot.healthPercent,
+			isReminderEnabled: alertEnabled(.alertHealthMilestone),
+			storedMilestone: defaults.integer(forKey: Self.healthMilestoneKey),
+			milestones: HealthMilestoneAlertEvaluator.defaultMilestones
+		))
+		if let persist = result.milestoneToPersist {
+			defaults.set(persist, forKey: Self.healthMilestoneKey)
 		}
-		guard health < stored else {
-			// 健康度读数回升（校准波动）时抬高基准，保持“只在真跌破时提醒”
-			if health > stored { defaults.set(health, forKey: Self.healthMilestoneKey) }
-			return
-		}
-		// 一跳跨多档要报全：92→81 必须交代 90/85/80，不能只报最高档后把其余档静默吞掉
-		let crossed = Self.healthMilestones.filter { stored > $0 && health <= $0 }.sorted(by: >)
-		guard let lowest = crossed.last else { return }
-
-		guard alertEnabled(.alertHealthMilestone) else {
-			// 开关关着也要推进基准，避免打开后补报陈年穿越
-			defaults.set(health, forKey: Self.healthMilestoneKey)
-			return
-		}
-		let crossedList = crossed.map(String.init).joined(separator: "/")
+		guard result.shouldSend,
+			  let lowest = result.lowestCrossed,
+			  let health = result.healthPercent
+		else { return }
+		let crossedList = result.crossedMilestones.map(String.init).joined(separator: "/")
 		let suffix = lowest == 80 ? "，已到官方建议检测电池的参考线" : "，属正常老化，留意即可"
 		// 投递失败（免打扰）不落基准，下一轮仍可补发（v1.19.1）
 		if send(
@@ -498,44 +463,44 @@ final class BatteryAlertController: NSObject, ObservableObject {
 
 	private static let healthDeclineDedupKey = "healthDeclineLastNotifiedDay"
 
-	nonisolated static func healthDeclineDayKey(date: Date, calendar: Calendar = .current) -> String {
-		let c = calendar.dateComponents([.year, .month, .day], from: date)
-		return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
-	}
-
 	func evaluateHealthAnomalies(snapshot: BatterySnapshot) {
 		guard alertEnabled(.alertHealthMilestone) else { return }
 		let config = configuration
+		let now = clock.now()
+		let todayKey = HealthAnomalyAlertEvaluator.dayKey(date: now)
 
-		// 30 天降幅：同一天只提醒一次
-		if let finding = HealthAnomalyDetector.healthDeclineFinding(
+		// 30 天降幅：同一天只提醒一次；判定在 HealthAnomalyAlertEvaluator（纯逻辑、可测）
+		let decline = HealthAnomalyDetector.healthDeclineFinding(
 			// 换电池边界过滤后才比：新旧电芯尾/头相连会拼出假骤降
 			samples: historyRecorder?.trendHealthSamples ?? [],
 			thresholdPoints: config.healthDeclineThresholdPoints,
 			windowDays: HealthAnomalyDetector.defaultDeclineWindowDays,
-			now: clock.now()
-		) {
-			let dayKey = Self.healthDeclineDayKey(date: clock.now())
-			if defaults.string(forKey: Self.healthDeclineDedupKey) != dayKey {
-				if send(id: finding.notificationID, title: finding.title, body: finding.body) {
-					defaults.set(dayKey, forKey: Self.healthDeclineDedupKey)
-				}
-			}
-		}
-
+			now: now
+		)
 		// 循环里程碑：配置里的 lastCycleMilestoneSeen 做跨过检测
-		if let finding = HealthAnomalyDetector.cycleMilestoneFinding(
+		let cycle = HealthAnomalyDetector.cycleMilestoneFinding(
 			cycleCount: snapshot.cycleCount,
 			lastSeenCycles: config.lastCycleMilestoneSeen,
 			milestones: config.cycleMilestoneThresholds
-		) {
-			if send(id: finding.notificationID, title: finding.title, body: finding.body) {
-				// 成功才推进 seen，免打扰吞掉后下轮可补
-				var cfg = config
-				cfg.lastCycleMilestoneSeen = snapshot.cycleCount ?? cfg.lastCycleMilestoneSeen
-				// 经 ConfigurationManager 同源写入
-				applyCycleMilestoneSeen(cfg.lastCycleMilestoneSeen)
-			}
+		)
+		let result = HealthAnomalyAlertEvaluator.evaluate(.init(
+			declineFinding: decline,
+			lastDeclineNotifiedDay: defaults.string(forKey: Self.healthDeclineDedupKey),
+			todayDayKey: todayKey,
+			cycleFinding: cycle,
+			cycleCount: snapshot.cycleCount
+		))
+
+		if let finding = result.declineToSend,
+		   send(id: finding.notificationID, title: finding.title, body: finding.body) {
+			defaults.set(todayKey, forKey: Self.healthDeclineDedupKey)
+		}
+
+		if let finding = result.cycleToSend,
+		   send(id: finding.notificationID, title: finding.title, body: finding.body),
+		   let seen = result.cycleMilestoneToPersist {
+			// 成功才推进 seen，免打扰吞掉后下轮可补
+			applyCycleMilestoneSeen(seen)
 		}
 	}
 
@@ -546,27 +511,22 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	}
 	
 	private func evaluateSlowCharge(_ snapshot: BatterySnapshot) {
-		guard snapshot.powerSource == .powerAdapter else {
-			didNotifySlowCharge = false
-			return
-		}
-		guard alertEnabled(.alertSlowCharge) else { return }
-		guard
-			snapshot.isCharging, !snapshot.isFull,
-			let rated = snapshot.adapterRatedWatts, rated >= Self.slowChargeMinRatedWatts,
-			let voltageMV = snapshot.negotiatedVoltageMV,
-			let currentMA = snapshot.negotiatedCurrentMA,
-			voltageMV > 0, currentMA > 0
+		// 判定在 SlowChargeAlertEvaluator（纯逻辑、可测）；外壳只读值、回写边沿、
+		// 组装正文并在发送成功后才置位。
+		let result = SlowChargeAlertEvaluator.evaluate(.init(
+			snapshot: snapshot,
+			isReminderEnabled: alertEnabled(.alertSlowCharge),
+			didNotify: didNotifySlowCharge
+		))
+		didNotifySlowCharge = result.didNotify
+		guard result.shouldSend,
+			  let watts = result.negotiatedWatts,
+			  let rated = result.ratedWatts
 		else { return }
-		
-		let negotiatedWatts = Double(voltageMV) * Double(currentMA) / 1_000_000.0
-		guard negotiatedWatts < Double(rated) * Self.slowChargeRatio else { return }
-		guard !didNotifySlowCharge else { return }
-
 		if send(
 			id: "slow-charge",
 			title: "检测到慢充",
-			body: String(format: "协商档位仅 %.0fW（充电器额定 %dW），请检查数据线或接口", negotiatedWatts, rated),
+			body: String(format: "协商档位仅 %.0fW（充电器额定 %dW），请检查数据线或接口", watts, rated),
 			category: Self.slowChargeCategoryID
 		) {
 			didNotifySlowCharge = true
@@ -575,9 +535,16 @@ final class BatteryAlertController: NSObject, ObservableObject {
 	
 	// 睡眠掉电异常：合盖一觉掉得太多，多半是有应用在阻止休眠或“断电时唤醒”在捣鬼
 	private func evaluateSleepDrain(_ record: SleepDrainRecord) {
-		guard isEnabled, configuration.enabledOptions.contains(.sleepDrainReport) else { return }
-		let lastAlerted = defaults.object(forKey: Self.sleepDrainAlertedKey) as? Date
-		guard Self.shouldAlertSleepDrain(record: record, now: clock.now(), lastAlertedWakeDate: lastAlerted) else { return }
+		// 判定在 SleepDrainAlertEvaluator（纯逻辑、可测）；外壳只读持久化、组装正文，
+		// 发送成功后才记 wakeDate（同一觉去重）。
+		let result = SleepDrainAlertEvaluator.evaluate(.init(
+			record: record,
+			now: clock.now(),
+			lastAlertedWakeDate: defaults.object(forKey: Self.sleepDrainAlertedKey) as? Date,
+			isEnabled: isEnabled,
+			isReportEnabled: configuration.enabledOptions.contains(.sleepDrainReport)
+		))
+		guard result.shouldSend else { return }
 
 		// 元凶名单由历史记录器在醒来时抓取并留档，这里直接复述
 		var body = String(format: "合盖 %@ 掉了 %d%%（%.1f%%/小时），可能有应用在阻止睡眠", DurationFormatter.chinese(minutes: record.durationMinutes), record.droppedPercent, record.dropPerHour)
@@ -586,43 +553,33 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		}
 		// 投递失败（免打扰）不记账；evaluate() 周期会带着同一觉重试，
 		// 新鲜度窗（8h）内免打扰结束后补发一次，wakeDate 去重保证不轰炸
-		let delivered = send(id: "sleep-drain", title: "睡眠掉电偏多", body: body)
-		if delivered {
-			defaults.set(record.wakeDate, forKey: Self.sleepDrainAlertedKey)
+		if send(id: "sleep-drain", title: "睡眠掉电偏多", body: body),
+		   let wake = result.wakeDateToPersist {
+			defaults.set(wake, forKey: Self.sleepDrainAlertedKey)
 		}
-	}
-	
-	// 纯判定，供单测直接调：
-	// 同一觉已报过不重发（重启后订阅会立刻回放磁盘里的旧记录）；
-	// 醒来超过新鲜窗口不报；时长/掉电/折算任一不达标不报
-	nonisolated static func shouldAlertSleepDrain(record: SleepDrainRecord, now: Date, lastAlertedWakeDate: Date?) -> Bool {
-		if let lastAlertedWakeDate, lastAlertedWakeDate == record.wakeDate { return false }
-		guard now.timeIntervalSince(record.wakeDate) < sleepDrainAlertFreshnessSeconds else { return false }
-		return record.durationMinutes >= sleepDrainAlertMinMinutes
-			&& record.droppedPercent >= sleepDrainAlertMinPercent
-			&& record.dropPerHour >= sleepDrainAlertMinPerHour
 	}
 	
 	// 电量计校准提醒：30 天内跳变攒够阈值提醒做一次完整充放循环；
 	// 条件可能长期成立（老化的电量计跳变是常态），用时间冷却而不是边沿重置防轰炸
 	private func evaluateGaugeCalibration(_ events: [SocJumpEvent]) {
-		guard isEnabled, alertEnabled(.alertGaugeCalibration) else { return }
+		// 判定在 GaugeCalibrationAlertEvaluator（纯逻辑、可测）；外壳只算 30 天跳变计数、
+		// 读冷却标记，发送成功后才写冷却起点（免打扰吞掉时不能空转 30 天）。
 		let now = clock.now()
 		let count = UsagePatternAnalyzer.socJumpCount(events, withinDays: 30, now: now)
-		guard UsagePatternAnalyzer.gaugeNeedsCalibration(jumpCount: count) else { return }
-		// 先记账再发：投递失败也不靠重复轰炸补偿
-		guard !Self.gaugeCooldownActive(
+		let result = GaugeCalibrationAlertEvaluator.evaluate(.init(
+			jumpCount: count,
+			isEnabled: isEnabled,
+			isReminderEnabled: alertEnabled(.alertGaugeCalibration),
 			lastAlerted: defaults.object(forKey: Self.gaugeCalibrationAlertKey) as? Date,
-			now: now,
-			cooldown: Self.gaugeCalibrationCooldownSeconds
-		) else { return }
-		// 投递成功才进冷却——免打扰吞掉时不能空转 30 天
+			now: now
+		))
+		guard result.shouldSend, let alertAt = result.alertAtToPersist else { return }
 		if send(
 			id: "gauge-calibration",
 			title: "电量计可能失准",
 			body: "最近 30 天记录到 \(count) 次电量跳变（电量突然变化 2% 以上）。建议做一次完整的充放循环，帮电量计重新校准"
 		) {
-			defaults.set(now, forKey: Self.gaugeCalibrationAlertKey)
+			defaults.set(alertAt, forKey: Self.gaugeCalibrationAlertKey)
 		}
 	}
 
@@ -633,13 +590,6 @@ final class BatteryAlertController: NSObject, ObservableObject {
 		guard let lastSent else { return true }
 		if lastSent.timeIntervalSince(now) > futureTolerance { return true }
 		return lastSent < due
-	}
-
-	// 电量计校准冷却同理：未来的冷却标记（时钟调快留下的）视为失效
-	nonisolated static func gaugeCooldownActive(lastAlerted: Date?, now: Date, cooldown: TimeInterval) -> Bool {
-		guard let lastAlerted else { return false }
-		guard now >= lastAlerted else { return false }
-		return now.timeIntervalSince(lastAlerted) < cooldown
 	}
 
 	// 每周电池周报：周日 20 点后第一次有机会时发；错过就顺延到下次启动

@@ -1014,24 +1014,47 @@ do {
 	let heavy = SleepDrainRecord(sleepDate: sleepStart, wakeDate: wake, startPercent: 80, endPercent: 72)
 	let now = wake.addingTimeInterval(60)
 
-	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: nil), "睡眠掉电：刚醒来的异常记录应提醒")
-	expect(!BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: wake), "睡眠掉电：同一觉已报过，重启不重发")
+	let shouldAlert = { (record: SleepDrainRecord, now: Date, last: Date?) in
+		SleepDrainAlertEvaluator.evaluate(.init(
+			record: record, now: now, lastAlertedWakeDate: last,
+			isEnabled: true, isReportEnabled: true
+		)).shouldSend
+	}
+	expect(shouldAlert(heavy, now, nil), "睡眠掉电：刚醒来的异常记录应提醒")
+	expect(!shouldAlert(heavy, now, wake), "睡眠掉电：同一觉已报过，重启不重发")
 
 	let otherWake = wake.addingTimeInterval(86400)
-	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: now, lastAlertedWakeDate: otherWake), "睡眠掉电：别的觉的旧标记不误伤新记录")
+	expect(shouldAlert(heavy, now, otherWake), "睡眠掉电：别的觉的旧标记不误伤新记录")
 
 	// 免打扰补发：醒来 2 小时后仍未投递，仍在新鲜度窗内允许补发（v2.9.1）
 	let retryNow = wake.addingTimeInterval(2 * 3600)
-	expect(BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: retryNow, lastAlertedWakeDate: nil), "睡眠掉电：免打扰后 2h 仍可补发（8h 窗）")
+	expect(shouldAlert(heavy, retryNow, nil), "睡眠掉电：免打扰后 2h 仍可补发（8h 窗）")
 
 	let staleNow = wake.addingTimeInterval(9 * 3600)
-	expect(!BatteryAlertController.shouldAlertSleepDrain(record: heavy, now: staleNow, lastAlertedWakeDate: nil), "睡眠掉电：醒来超 8 小时的旧记录不提醒")
+	expect(!shouldAlert(heavy, staleNow, nil), "睡眠掉电：醒来超 8 小时的旧记录不提醒")
 
 	let mild = SleepDrainRecord(sleepDate: sleepStart, wakeDate: wake, startPercent: 80, endPercent: 78)
-	expect(!BatteryAlertController.shouldAlertSleepDrain(record: mild, now: now, lastAlertedWakeDate: nil), "睡眠掉电：只掉 2% 低于阈值不提醒")
+	expect(!shouldAlert(mild, now, nil), "睡眠掉电：只掉 2% 低于阈值不提醒")
 
 	let shortSleep = SleepDrainRecord(sleepDate: wake.addingTimeInterval(-30 * 60), wakeDate: wake, startPercent: 80, endPercent: 70)
-	expect(!BatteryAlertController.shouldAlertSleepDrain(record: shortSleep, now: now, lastAlertedWakeDate: nil), "睡眠掉电：合盖不足一小时不提醒")
+	expect(!shouldAlert(shortSleep, now, nil), "睡眠掉电：合盖不足一小时不提醒")
+
+	// 开关与写回出口：关掉任一开关都不发；该发时带出 wakeDate 供发送成功后记账
+	let disabled = SleepDrainAlertEvaluator.evaluate(.init(
+		record: heavy, now: now, lastAlertedWakeDate: nil,
+		isEnabled: false, isReportEnabled: true
+	))
+	expect(!disabled.shouldSend && disabled.wakeDateToPersist == nil, "睡眠掉电：总开关关着不发不记账")
+	let reportOff = SleepDrainAlertEvaluator.evaluate(.init(
+		record: heavy, now: now, lastAlertedWakeDate: nil,
+		isEnabled: true, isReportEnabled: false
+	))
+	expect(!reportOff.shouldSend && reportOff.wakeDateToPersist == nil, "睡眠掉电：报告开关关着不发不记账")
+	let deliverable = SleepDrainAlertEvaluator.evaluate(.init(
+		record: heavy, now: now, lastAlertedWakeDate: nil,
+		isEnabled: true, isReportEnabled: true
+	))
+	expectEqual(deliverable.wakeDateToPersist, wake, "睡眠掉电：该发时带出 wakeDate（发送成功后才记账）")
 }
 
 // MARK: - 充电会话状态机判定
@@ -1925,6 +1948,225 @@ do {
 		CardDropResolver.indicatorLine(for: .end, table: probeTable, excluding: "W"),
 		(280, 364, 270),
 		"指示线：中间卡被拖走后 end 仍锚定末卡")
+
+	// —— 面板布局模型 PanelLayoutModel（列配平 / 拖拽转移 / 布局编辑 / 渲染路由）——
+	// 这一层是 v4 华容网格的判定核心，纯值类型、无视图依赖；此前只进编译面、零断言。
+	// 每条承重断言的变异点写在名字里，改坏生产代码必须让对应行红。
+
+	// ① 贪心双列：平局给左（<= 不是 <），高度逐张累加
+	let emptyPlanCards: [(id: String, height: CGFloat)] = []
+	expect(PanelColumnPlan.balanced(emptyPlanCards).left.isEmpty, "列配平：空板出空")
+	let balancedPlan = PanelColumnPlan.balanced([("a", 100), ("b", 100), ("c", 100)] as [(id: String, height: CGFloat)])
+	expectEqual(balancedPlan.left, ["a", "c"], "列配平：平局给左（第三张 100<=100 进左列；变异：<= 改 < 必红）")
+	expectEqual(balancedPlan.right, ["b"], "列配平：右列只收非平局卡")
+	let balancedUneven = PanelColumnPlan.balanced([("a", 100), ("b", 50), ("c", 60)] as [(id: String, height: CGFloat)])
+	expectEqual(balancedUneven.left, ["a"], "列配平：高卡占左，后续卡看累计高度")
+	expectEqual(balancedUneven.right, ["b", "c"], "列配平：c 仍进较矮的右列（50 后 110）")
+
+	// ② 沿用会话分配：已有卡保持原列原序，新卡只追加较矮列，消失卡剔除
+	let mergedKeep = PanelColumnPlan.merged(
+		[("a", 100), ("b", 100), ("c", 100)] as [(id: String, height: CGFloat)],
+		left: ["b"], right: ["a"]
+	)
+	expectEqual(mergedKeep.left, ["b", "c"], "会话分配：已有顺序原样保留，新卡平局进左列")
+	expectEqual(mergedKeep.right, ["a"], "会话分配：右列不被平局新卡挤动")
+	let mergedGone = PanelColumnPlan.merged(
+		[("a", 100), ("b", 100)] as [(id: String, height: CGFloat)],
+		left: ["a", "消失"], right: ["b"]
+	)
+	expectEqual(mergedGone.left, ["a"], "会话分配：消失卡从列里剔除")
+	expectEqual(mergedGone.right, ["b"], "会话分配：另一列不受影响")
+	let mergedEmpty = PanelColumnPlan.merged(
+		[("a", 100), ("b", 100)] as [(id: String, height: CGFloat)],
+		left: ["旧"], right: ["旧2"]
+	)
+	expectEqual(mergedEmpty.left, ["a"], "会话分配：两列都失效 → 退回贪心配平（左）")
+	expectEqual(mergedEmpty.right, ["b"], "会话分配：两列都失效 → 退回贪心配平（右）")
+	// 高度必须按本次声明高现算：c 抬高右列后 d 才该回左；漏加新卡高度会让 d 也进右列
+	let mergedRecount = PanelColumnPlan.merged(
+		[("a", 100), ("b", 10), ("c", 150), ("d", 10)] as [(id: String, height: CGFloat)],
+		left: ["a"], right: ["b"]
+	)
+	expectEqual(mergedRecount.left, ["a", "d"], "会话分配：新卡高度计入累计（变异：漏加高度必红）")
+	expectEqual(mergedRecount.right, ["b", "c"], "会话分配：c 抬高右列后 d 回左列")
+
+	// ③ 拖拽转移规则：起拖 / 更新 / 幽灵手势忽略
+	expectEqual(PanelDragMachine.step(draggingCard: nil, newCard: "a"), .begin, "拖拽转移：无拖拽态 → 起拖")
+	expectEqual(PanelDragMachine.step(draggingCard: "a", newCard: "a"), .update, "拖拽转移：同卡 → 更新位移")
+	expectEqual(PanelDragMachine.step(draggingCard: "a", newCard: "b"), .ignore,
+		"拖拽转移：别的卡在拖 → 忽略（幽灵手势不得改写 translation；变异：ignore 改 update 必红）")
+
+	// 预览：出界清空 / 候选=基准不空写 / 合法落点给布局与指示线
+	let dragFromA = CardDragState(
+		card: "a", translation: CGSize(width: 0, height: 7),
+		originFrame: CGRect(x: 0, y: 0, width: 270, height: 100),
+		startPoint: CGPoint(x: 100, y: 23)   // pointer=(100,30)：排除 a 后锚 b 的上半 → 插回 b 之前
+	)
+	let previewSame = PanelDragMachine.preview(
+		drag: dragFromA, base: PanelLayout(rows: [["a", "b"], ["W"], ["c", "d"]]), table: probeTable
+	)
+	expectEqual(
+		previewSame,
+		PanelDragMachine.Preview.placed(
+			indicator: PanelDragMachine.Indicator(x: 280, y: -4, width: 270),
+			layout: nil
+		),
+		"拖拽预览：落点插回原位 → layout=nil（不产生无谓失效），指示线照画"
+	)
+	let dragToEnd = CardDragState(
+		card: "a", translation: CGSize(width: 0, height: 7),
+		originFrame: CGRect(x: 0, y: 0, width: 270, height: 100),
+		startPoint: CGPoint(x: 100, y: 393)   // pointer=(100,400)：超过末卡
+	)
+	expectEqual(
+		PanelDragMachine.preview(
+			drag: dragToEnd, base: PanelLayout(rows: [["a", "b"], ["W"], ["c", "d"]]), table: probeTable
+		),
+		PanelDragMachine.Preview.placed(
+			indicator: PanelDragMachine.Indicator(x: 280, y: 364, width: 270),
+			layout: PanelLayout(rows: [["b"], ["W"], ["c", "d"], ["a"]])
+		),
+		"拖拽预览：合法落点 → 预览布局=摘除后插入，指示线锚末卡下沿"
+	)
+	let dragOut = CardDragState(
+		card: "a", translation: CGSize(width: 0, height: 7),
+		originFrame: .zero, startPoint: CGPoint(x: 1000, y: 80)
+	)
+	expectEqual(
+		PanelDragMachine.preview(drag: dragOut, base: PanelLayout(rows: [["a", "b"]]), table: probeTable),
+		.cleared,
+		"拖拽预览：出界 → 清指示线与预览（松手不得提交上一合法落点）"
+	)
+
+	expect(PanelDragMachine.clearsOnEnd(draggingCard: "a", endingCard: "a"), "松手清理：同卡结束 → 清拖拽态")
+	expect(PanelDragMachine.clearsOnEnd(draggingCard: "a", endingCard: nil), "松手清理：缺省结束卡（兜底通道）→ 清拖拽态")
+	expect(!PanelDragMachine.clearsOnEnd(draggingCard: "a", endingCard: "b"),
+		"松手清理：幽灵手势（别的卡结束）→ 不清正在进行的拖拽")
+	expect(!PanelDragMachine.clearsOnEnd(draggingCard: nil, endingCard: "b"),
+		"松手清理：无拖拽态 → 无态可清")
+
+	let commitPreview = PanelLayout(rows: [["b"], ["a"]])
+	expect(PanelDragMachine.commit(drag: dragToEnd, preview: commitPreview, endingCard: "a") == commitPreview,
+		"松手落盘：真拖过 + 卡对得上 + 有预览 → 提交预览布局")
+	expect(PanelDragMachine.commit(drag: dragToEnd, preview: commitPreview, endingCard: "b") == nil,
+		"松手落盘：结束卡对不上 → 不提交")
+	expect(PanelDragMachine.commit(drag: dragToEnd, preview: commitPreview, endingCard: nil) != nil,
+		"松手落盘：结束卡缺省（兜底通道）→ 仍按预览提交")
+	expect(PanelDragMachine.commit(drag: nil, preview: commitPreview, endingCard: "a") == nil,
+		"松手落盘：无拖拽态 → 不提交")
+	let dragBelowThreshold = CardDragState(
+		card: "a", translation: CGSize(width: 3, height: 3),
+		originFrame: .zero, startPoint: .zero
+	)
+	expect(PanelDragMachine.commit(drag: dragBelowThreshold, preview: commitPreview, endingCard: "a") == nil,
+		"松手落盘：未越过 6pt 激活阈值 → 不提交（变异：去掉 isDragging 检查必红）")
+	expect(PanelDragMachine.commit(drag: dragToEnd, preview: nil, endingCard: "a") == nil,
+		"松手落盘：没有合法预览 → 不提交（丢弃回弹）")
+
+	expectEqual(PanelDragMachine.hoverUpdate(isDragging: true, hovering: true, id: "a"), .keep,
+		"把手悬停：拖动中一律不写（划过谁谁放大是噪音）")
+	expectEqual(PanelDragMachine.hoverUpdate(isDragging: true, hovering: false, id: "a"), .keep,
+		"把手悬停：拖动中离开也不写")
+	expectEqual(PanelDragMachine.hoverUpdate(isDragging: false, hovering: true, id: "a"), .set("a"),
+		"把手悬停：常态进入 → 写卡 id")
+	expectEqual(PanelDragMachine.hoverUpdate(isDragging: false, hovering: false, id: "a"), .set(nil),
+		"把手悬停：常态离开 → 写空")
+
+	// ④ 布局编辑态：播种优先级 / 未改动不落盘 / 退出收尾
+	let editKnown: Set<String> = ["a", "b", "c"]
+	let seedFromPersisted = PanelLayoutEdit.seed(
+		panelLayout: PanelLayout(rows: [["b"], ["a"], ["未知"]]),
+		assignedLeft: ["a", "b"], assignedRight: ["c"],
+		known: editKnown
+	)
+	expectEqual(seedFromPersisted, PanelLayout(rows: [["b"], ["a"], ["c"]]),
+		"编辑播种：已持久化布局优先于会话双列，未知卡剔除、缺失已知卡追加（变异：忽略持久化必红）")
+	let seedFromColumns = PanelLayoutEdit.seed(
+		panelLayout: nil, assignedLeft: ["a", "b"], assignedRight: ["c"], known: editKnown
+	)
+	expectEqual(seedFromColumns, PanelLayout(rows: [["a", "c"], ["b"]]),
+		"编辑播种：无持久化布局 → 会话双列按索引对齐成行")
+	let seedEmpty = PanelLayoutEdit.seed(
+		panelLayout: nil, assignedLeft: [], assignedRight: [], known: ["a", "b"]
+	)
+	expectEqual(seedEmpty, PanelLayout(rows: [["a"], ["b"]]),
+		"编辑播种：会话双列还没生成 → 已知卡全部落成单行（不丢卡）")
+	let seedHidden = PanelLayoutEdit.seed(
+		panelLayout: PanelLayout(rows: [["a", "b"]], hidden: ["a"]),
+		assignedLeft: [], assignedRight: [], known: ["a", "b"]
+	)
+	expect(seedHidden.rows == [["b"]], "编辑播种：隐藏卡不残留行表")
+	expectEqual(seedHidden.hidden, ["a"], "编辑播种：隐藏托盘保留")
+
+	let editSeed = PanelLayout(rows: [["a", "b"], ["c"]])
+	expect(PanelLayoutEdit.persistOnExit(draft: editSeed, seed: editSeed, known: editKnown) == nil,
+		"编辑落盘：草稿==种子 → 不落盘（进编辑不动保存，不改变布局形状）")
+	let editedDraft = PanelLayout(rows: [["a"], ["b", "c"]])
+	let persisted = PanelLayoutEdit.persistOnExit(draft: editedDraft, seed: editSeed, known: editKnown)
+	expect(persisted == editedDraft, "编辑落盘：真改动 → 返回归一后的布局")
+	expect(PanelLayoutEdit.persistOnExit(
+		draft: PanelLayout(rows: [["a", "b", "未知"], ["c"]]), seed: editSeed, known: editKnown
+	) == nil, "编辑落盘：未知卡在归一后消失 → 不算改动（变异：直接比较 draft 必红）")
+	expect(PanelLayoutEdit.persistOnExit(
+		draft: PanelLayout(rows: [["a", "b"], ["c"]], left: ["a"], right: ["b"]),
+		seed: editSeed, known: editKnown
+	) == nil, "编辑落盘：旧 v1.13 字段清零不算改动")
+	expect(!PanelLayoutEdit.hasChanges(draft: editSeed, seed: editSeed, known: editKnown),
+		"编辑改动判定：未改动 → false")
+	expect(PanelLayoutEdit.hasChanges(draft: editedDraft, seed: editSeed, known: editKnown),
+		"编辑改动判定：真改动 → true")
+
+	let cancelExit = PanelLayoutEdit.exit(draft: editedDraft, seed: editSeed, save: false, known: editKnown)
+	expectEqual(cancelExit, PanelLayoutEdit.Exit(persist: nil, isEditing: false, seed: nil, trayExpanded: false),
+		"编辑退出：取消 → 不落盘、开关关、种子清、托盘收起（变异：忽略 save 必红）")
+	let saveExit = PanelLayoutEdit.exit(draft: editedDraft, seed: editSeed, save: true, known: editKnown)
+	expect(saveExit.persist == editedDraft, "编辑退出：保存且真改动 → 落盘归一后的布局")
+	expectEqual(saveExit, PanelLayoutEdit.Exit(persist: editedDraft, isEditing: false, seed: nil, trayExpanded: false),
+		"编辑退出：保存后收尾状态一致")
+	expect(PanelLayoutEdit.exit(draft: editSeed, seed: editSeed, save: true, known: editKnown).persist == nil,
+		"编辑退出：保存但未改动 → 不落盘")
+	expect(PanelLayoutEdit.exit(draft: editedDraft, seed: nil, save: true, known: editKnown).persist == nil,
+		"编辑退出：没有种子 → 不落盘（flatMap 兜底）")
+
+	// ⑤ 渲染路由：双列门 / 预览 > 工作副本 > 持久化 > 空板
+	let routeDraft = PanelLayout(rows: [["draft"]])
+	let routePersisted = PanelLayout(rows: [["saved"]])
+	let routePreview = PanelLayout(rows: [["preview"]])
+	let autoRoute = PanelLayoutRouting.source(
+		twoColumns: true, isEditing: false, isDragging: false,
+		preview: nil, draft: routeDraft, persisted: nil
+	)
+	expect(!autoRoute.usingRows, "渲染路由：纯自动模式 → 走贪心双列")
+	expectEqual(autoRoute.layout, PanelLayout(),
+		"渲染路由：自动模式忽略工作副本（非编辑/非拖拽时 draft 不参与渲染；变异：draft 常驻必红）")
+	let persistedRoute = PanelLayoutRouting.source(
+		twoColumns: true, isEditing: false, isDragging: false,
+		preview: nil, draft: routeDraft, persisted: routePersisted
+	)
+	expect(persistedRoute.usingRows, "渲染路由：有持久化布局 → 走行表")
+	expectEqual(persistedRoute.layout, routePersisted, "渲染路由：非编辑态用持久化布局，不用工作副本")
+	let editingRoute = PanelLayoutRouting.source(
+		twoColumns: true, isEditing: true, isDragging: false,
+		preview: nil, draft: routeDraft, persisted: routePersisted
+	)
+	expect(editingRoute.usingRows, "渲染路由：编辑态 → 走行表")
+	expectEqual(editingRoute.layout, routeDraft, "渲染路由：编辑态工作副本优先于持久化布局")
+	let draggingRoute = PanelLayoutRouting.source(
+		twoColumns: true, isEditing: false, isDragging: true,
+		preview: nil, draft: routeDraft, persisted: routePersisted
+	)
+	expectEqual(draggingRoute.layout, routeDraft, "渲染路由：拖拽态也以工作副本为基准")
+	let previewRoute = PanelLayoutRouting.source(
+		twoColumns: true, isEditing: false, isDragging: true,
+		preview: routePreview, draft: routeDraft, persisted: routePersisted
+	)
+	expectEqual(previewRoute.layout, routePreview, "渲染路由：拖拽预览压过工作副本与持久化")
+	let singleColumnRoute = PanelLayoutRouting.source(
+		twoColumns: false, isEditing: false, isDragging: false,
+		preview: nil, draft: routeDraft, persisted: routePersisted
+	)
+	expect(!singleColumnRoute.usingRows, "渲染路由：单列面板即使有持久化布局也不走行表（布局不生效）")
+	expectEqual(singleColumnRoute.layout, routePersisted, "渲染路由：单列仍按表达式取行表来源（调用方不消费）")
 
 	// —— 面板高度预算 PanelFit（纯函数）——
 	// 可视区 987、chrome 28、topMargin 8 → available=951；实测自然高 1101 → 必须滚
@@ -4052,6 +4294,236 @@ do {
 	expect(hotDisabledHeld.didNotify && !hotDisabledHeld.shouldSend, "高温:开关关着且仍在高温 ⇒ 已置位边沿保持")
 }
 
+// MARK: - 耗电异常 / 低电预判 / 温度骤升（DrainAlertEvaluators，拆分 1b 第三刀）
+
+// 三台原先都长在构造不出来的 UN 外壳里，测试面零断言。重点锁三条：
+// ① 耗电异常的 nil 语义分叉（插电清空重置 vs 电池模式保持）；
+// ② 低电预判的 45–90 分钟缓冲带（既不发也不重置）；
+// ③ 温度骤升的环形缓存（断档清空、缺读数不动、基线不会用太新的点）。
+do {
+	// —— 耗电异常：电池 + 掉速过线提醒一次；回落到线−5 以下/离开电池重置 ——
+	let drain = { (source: PowerSourceType, rate: Double?, enabled: Bool, notified: Bool) in
+		HighDrainAlertEvaluator.evaluate(.init(
+			powerSource: source, ratePerHour: rate,
+			thresholdPerHour: 30, isReminderEnabled: enabled, didNotify: notified
+		))
+	}
+	expect(drain(.battery, 35, true, false).shouldSend, "耗电异常：电池供电、掉速过线、未提醒 ⇒ 该发")
+	expect(!drain(.battery, 35, true, true).shouldSend, "耗电异常：已提醒过 ⇒ 不再发")
+	expect(!drain(.battery, 35, false, false).shouldSend, "耗电异常：开关关着不发送")
+	expect(drain(.battery, 30, true, false).shouldSend, "耗电异常：恰好压线也算异常（>= 语义）")
+	expect(drain(.battery, 26, true, true).didNotify, "耗电异常：滞回带内（线−4）保持边沿，不重置")
+	expect(drain(.battery, 25, true, true).didNotify, "耗电异常：恰好线−5 不重置（严格 < 语义）")
+	expect(!drain(.battery, 24, true, true).didNotify, "耗电异常：回落到线−5 以下重置")
+	expect(!drain(.powerAdapter, 35, true, true).didNotify, "耗电异常：接电即重置（哪怕估算仍在）")
+	expect(!drain(.powerAdapter, 35, false, true).didNotify, "耗电异常：开关关着接电同样重置（重置不受开关挡）")
+	// nil 语义分叉（本台独立于其他提醒的隐藏语义）：
+	expect(!drain(.powerAdapter, nil, true, true).didNotify, "耗电异常：插电时估算 nil ⇒ 重置")
+	expect(drain(.battery, nil, true, true).didNotify, "耗电异常：电池时估算 nil（睡眠重新积累）⇒ 边沿保持，不重复轰炸")
+	expect(!drain(.powerAdapter, nil, false, true).didNotify, "耗电异常：开关关着插电 nil 同样重置（重置不受开关挡）")
+}
+do {
+	// —— 低电预判：距线 ≤45 分钟提醒；>90 分钟才重置；中间带保持 ——
+	let forecast = { (soc: Int?, source: PowerSourceType, rate: Double?, enabled: Bool, notified: Bool) in
+		LowForecastAlertEvaluator.evaluate(.init(
+			snapshot: batterySnap(percent: soc, onBattery: source == .battery),
+			ratePerHour: rate, thresholdPercent: 20, isReminderEnabled: enabled, didNotify: notified
+		))
+	}
+	// soc=80、threshold=20、rate=120%/h ⇒ 30 分钟撞线
+	let forecastSend = forecast(80, .battery, 120, true, false)
+	expect(forecastSend.shouldSend, "低电预判：30 分钟后撞线 ⇒ 该发")
+	expectEqual(forecastSend.minutesToThreshold, 30.0, "低电预判：带出距线分钟数供正文用（判定与格式化不各算一遍）")
+	expect(!forecast(80, .battery, 120, true, true).shouldSend, "低电预判：已提醒过 ⇒ 不再发")
+	expect(!forecast(80, .battery, 120, false, false).shouldSend, "低电预判：开关关着不发送")
+	// 45–90 分钟：缓冲带，既不发也不重置
+	let forecastBand = forecast(80, .battery, 60, true, true)   // 60 分钟
+	expect(forecastBand.didNotify && !forecastBand.shouldSend, "低电预判：缓冲带（60 分钟）保持边沿，不重置不发")
+	expect(!forecast(80, .battery, 30, true, true).didNotify, "低电预判：掉速回落（120 分钟）重置")
+	expect(!forecast(80, .powerAdapter, 120, true, true).didNotify, "低电预判：接电即重置")
+	expect(!forecast(20, .battery, 120, true, true).didNotify, "低电预判：已到警示线 ⇒ 重置（交给低电提醒）")
+	expect(forecast(nil, .battery, 120, true, true).didNotify, "低电预判：缺 SOC 不动边沿")
+	// 掉速太慢/缺失：不参与预判，边沿保持
+	expect(forecast(80, .battery, 0.5, true, true).didNotify, "低电预判：掉速不足 0.5%/h ⇒ 不动")
+	expect(forecast(80, .battery, nil, true, true).didNotify, "低电预判：估算缺失 ⇒ 不动")
+	expect(!forecast(80, .powerAdapter, 120, false, true).didNotify, "低电预判：开关关着接电同样重置（重置不受开关挡）")
+	// 边界：恰好 45 分钟算该发；恰好 90 分钟不算重置（> 而非 >=）
+	expect(forecast(65, .battery, 60, true, false).shouldSend, "低电预判：恰好 45 分钟 ⇒ 仍该发（<= 语义）")
+	expect(forecast(80, .battery, 40, true, true).didNotify, "低电预判：恰好 90 分钟不重置（> 语义）")
+}
+do {
+	// —— 温度骤升：5 分钟内涨 3°C 且 ≥35°C；缓存断档清空、缺读数不动 ——
+	let t0 = Date(timeIntervalSinceReferenceDate: 900_000_000)
+	let sample = { (secondsAgo: Double, celsius: Double) in
+		TempSurgeAlertEvaluator.Sample(date: t0.addingTimeInterval(-secondsAgo), celsius: celsius)
+	}
+	let surge = { (celsius: Double?, samples: [TempSurgeAlertEvaluator.Sample], enabled: Bool, notified: Bool) in
+		TempSurgeAlertEvaluator.evaluate(.init(
+			temperatureCelsius: celsius, now: t0,
+			isReminderEnabled: enabled,
+			state: .init(recentTemps: samples, didNotify: notified)
+		))
+	}
+	// 采样链必须连续（相邻 ≤120s）：只有 250s 前一个点会被当成"断档"清空，
+	// 这正是生产里 2 秒一拍的真实形态——测试不能拿孤立旧样本冒充窗口基线。
+	let baseline = sample(250, 30)
+	let chain = [baseline, sample(60, 33)]
+	let surgeSend = surge(36, chain, true, false)
+	expect(surgeSend.shouldSend, "温度骤升：5 分钟内升 6°C 且到 36°C ⇒ 该发")
+	expectEqual(surgeSend.baselineCelsius, 30.0, "温度骤升：带出窗口起点温度供正文用")
+	expect(!surge(36, chain, true, true).shouldSend, "温度骤升：已提醒过 ⇒ 不再发")
+	// 开关关着：不发，且边沿保持（delta 大不走重置分支）
+	let surgeDisabled = surge(36, chain, false, true)
+	expect(!surgeDisabled.shouldSend && surgeDisabled.state.didNotify, "温度骤升：开关关着不发送、边沿保持")
+	// 基线太新：窗口起点才 100s，不判
+	expect(!surge(36, [sample(100, 30)], true, false).shouldSend, "温度骤升：窗口起点不足 4 分钟 ⇒ 不判（防一两个点算骤升）")
+	// 采样断档：上次采样 200s 前（>120s）⇒ 清空重来，只剩当前点
+	let gap = surge(36, [sample(200, 30)], true, false)
+	expect(!gap.shouldSend, "温度骤升：采样断档（睡过）⇒ 清空重来，不跨睡眠比温差")
+	expectEqual(gap.state.recentTemps.count, 1, "温度骤升：断档后缓存只剩当前采样")
+	// 缺温度：状态原样（缓存不清、边沿不动）
+	let missing = surge(nil, chain, true, true)
+	expectEqual(missing.state.recentTemps, chain, "温度骤升：缺读数时缓存原样（不拿空档当断档）")
+	expect(missing.state.didNotify, "温度骤升：缺读数时边沿不动")
+	// 重置：delta < 1 才清边沿；delta = 1 整点不清
+	expect(!surge(30.5, chain, true, true).state.didNotify, "温度骤升：温差 <1°C 重置边沿")
+	expect(surge(31, chain, true, true).state.didNotify, "温度骤升：温差恰好 1°C 不重置（< 语义）")
+	// 未到 35°C：delta 大也不发（且保持边沿）
+	let warmNotHot = surge(34, chain, true, true)
+	expect(!warmNotHot.shouldSend && warmNotHot.state.didNotify, "温度骤升：未到 35°C 不提醒，边沿保持")
+	// 缓存清理：超过 360s 的旧样本被移除，当前采样追加到末尾
+	let stale = surge(36, [sample(400, 30), baseline, sample(60, 33)], true, false)
+	expectEqual(stale.state.recentTemps, [baseline, sample(60, 33), sample(0, 36)],
+		"温度骤升：超过保留窗的样本被清理，当前采样入表")
+	// 选窗口起点：数组按时间升序，取第一个仍落在 5 分钟窗内的（最早的那个）
+	let pick = surge(36, [sample(290, 29), sample(250, 31), sample(60, 33)], true, false)
+	expectEqual(pick.baselineCelsius, 29.0, "温度骤升：基线取窗口内最早样本（290s 前的 29°C）")
+	expect(pick.shouldSend, "温度骤升：按最早基线算 delta 7°C ⇒ 该发")
+}
+
+// MARK: - 外设低电 / 充满预告 / 慢充 / 电量计校准（拆分 1b 第五、六刀）
+
+do {
+	// —— 外设低电：每设备独立集合边沿；开关关着整台不动 ——
+	let device = { (name: String, percent: Int) in BluetoothDeviceBattery(name: name, percent: percent) }
+	let deviceLow = { (devices: [BluetoothDeviceBattery], enabled: Bool, notified: Set<String>) in
+		DeviceLowAlertEvaluator.evaluate(.init(
+			devices: devices, thresholdPercent: 20,
+			isReminderEnabled: enabled, notifiedDevices: notified
+		))
+	}
+	let sendOne = deviceLow([device("耳机", 15)], true, [])
+	expectEqual(sendOne.devicesToNotify.map(\.name), ["耳机"], "外设低电：过线且未提醒 → 该发")
+	expect(sendOne.notifiedDevices.isEmpty, "外设低电：evaluator 不预记集合（发送成功才由外壳记）")
+	expect(deviceLow([device("耳机", 15)], true, ["耳机"]).devicesToNotify.isEmpty,
+		"外设低电：同一设备已提醒 → 不再发")
+	expect(deviceLow([device("耳机", 25)], true, ["耳机"]).notifiedDevices.isEmpty,
+		"外设低电：充回阈值+5 → 移除标记")
+	expect(deviceLow([device("耳机", 24)], true, ["耳机"]).notifiedDevices == ["耳机"],
+		"外设低电：回升在带内（阈值+4）保持标记")
+	expect(deviceLow([device("耳机", 0)], true, []).devicesToNotify.isEmpty,
+		"外设低电：0% 是读不到的哨兵，不报")
+	let deviceDisabled = deviceLow([device("耳机", 15), device("鼠标", 25)], false, ["鼠标"])
+	expect(deviceDisabled.devicesToNotify.isEmpty && deviceDisabled.notifiedDevices == ["鼠标"],
+		"外设低电：开关关着整台不动（连回升重置都不做）")
+	expectEqual(deviceLow([device("耳机", 15), device("鼠标", 10)], true, ["鼠标"]).devicesToNotify.map(\.name),
+		["耳机"], "外设低电：每设备独立边沿（鼠标已报过不拦耳机）")
+	// 发送失败（集合未记）→ 下一轮同一设备仍在待发列表（补发语义）
+	expectEqual(deviceLow([device("耳机", 15)], true, []).devicesToNotify.count, 1,
+		"外设低电：集合未记时下一轮仍会重试")
+}
+
+do {
+	// —— 充满预告：只有真拔电才重置；预计不足 10 分钟不预告 ——
+	var charging = batterySnap(percent: 50, charging: true, onBattery: false)
+	charging.timeToFullChargeMinutes = 60
+	let forecast = { (snapshot: BatterySnapshot, enabled: Bool, notified: Bool) in
+		FullForecastAlertEvaluator.evaluate(.init(snapshot: snapshot, isReminderEnabled: enabled, didNotify: notified))
+	}
+	let sendForecast = forecast(charging, true, false)
+	expect(sendForecast.shouldSend && sendForecast.minutes == 60,
+		"充满预告：插电在充、预计 60 分钟 → 该发并带出分钟数")
+	expect(!forecast(charging, true, true).shouldSend, "充满预告：已发过 → 不再发")
+	expect(!forecast(charging, false, false).shouldSend, "充满预告：开关关着不发送")
+	expect(!forecast(batterySnap(percent: 50), true, true).didNotify, "充满预告：真拔电才重置")
+	var paused = batterySnap(percent: 80, onBattery: false)
+	paused.timeToFullChargeMinutes = 60
+	expect(forecast(paused, true, true).didNotify, "充满预告：插电但暂停（优化充电）不重置")
+	var fullNow = batterySnap(percent: 100, charging: true, onBattery: false)
+	fullNow.isFull = true
+	fullNow.timeToFullChargeMinutes = 60
+	expect(forecast(fullNow, true, true).didNotify, "充满预告：已充满不重置（等真拔电）")
+	var soon = batterySnap(percent: 95, charging: true, onBattery: false)
+	soon.timeToFullChargeMinutes = 9
+	expect(!forecast(soon, true, false).shouldSend, "充满预告：预计不足 10 分钟不预告")
+	var atTen = batterySnap(percent: 90, charging: true, onBattery: false)
+	atTen.timeToFullChargeMinutes = 10
+	expect(forecast(atTen, true, false).shouldSend, "充满预告：恰好 10 分钟仍预告（>= 语义）")
+	var unknown = batterySnap(percent: 50, charging: true, onBattery: false)
+	unknown.timeToFullChargeMinutes = nil
+	expect(!forecast(unknown, true, false).shouldSend, "充满预告：无预计时间不发")
+}
+
+do {
+	// —— 慢充：协商功率 < 额定 55%；拔电重置早于开关 ——
+	func slowSnap(rated: Int?, mv: Int?, ma: Int?, charging: Bool = true) -> BatterySnapshot {
+		var s = batterySnap(percent: 50, charging: charging, onBattery: false)
+		s.adapterRatedWatts = rated
+		s.negotiatedVoltageMV = mv
+		s.negotiatedCurrentMA = ma
+		return s
+	}
+	let slow = { (snapshot: BatterySnapshot, enabled: Bool, notified: Bool) in
+		SlowChargeAlertEvaluator.evaluate(.init(snapshot: snapshot, isReminderEnabled: enabled, didNotify: notified))
+	}
+	let tooSlow = slowSnap(rated: 65, mv: 5000, ma: 1000)   // 5W
+	let sendSlow = slow(tooSlow, true, false)
+	expect(sendSlow.shouldSend && sendSlow.negotiatedWatts == 5 && sendSlow.ratedWatts == 65,
+		"慢充：协商 5W < 额定 65W×55% → 该发并带出功率")
+	expect(!slow(tooSlow, true, true).shouldSend, "慢充：已提醒过 → 不再发")
+	expect(!slow(tooSlow, false, false).shouldSend, "慢充：开关关着不发送")
+	expect(!slow(slowSnap(rated: 65, mv: 20000, ma: 3000), true, false).shouldSend,
+		"慢充：协商 60W 正常 → 不报")
+	expect(!slow(batterySnap(percent: 50), true, true).didNotify, "慢充：拔电重置边沿")
+	expect(!slow(batterySnap(percent: 50), false, true).didNotify,
+		"慢充：开关关着拔电同样重置（重置不受开关挡）")
+	expect(slow(slowSnap(rated: 65, mv: 5000, ma: 1000, charging: false), true, true).didNotify,
+		"慢充：插电但暂停不重置（等真拔电）")
+	expect(!slow(slowSnap(rated: 5, mv: 5000, ma: 1000), true, false).shouldSend,
+		"慢充：额定 5W 不判慢充")
+	expect(!slow(slowSnap(rated: 65, mv: nil, ma: nil), true, false).shouldSend,
+		"慢充：缺协商电压电流不判")
+	// 100W×55% ≈ 55W；56W 明确在线上，不报（55W 整点受浮点表示影响，不作为契约锁）
+	expect(!slow(slowSnap(rated: 100, mv: 56000, ma: 1000), true, false).shouldSend,
+		"慢充：56W 高于额定 55% → 不报")
+	var full = slowSnap(rated: 65, mv: 5000, ma: 1000)
+	full.isFull = true
+	expect(!slow(full, true, false).shouldSend, "慢充：已充满不判")
+}
+
+do {
+	// —— 电量计校准：30 天 5 次跳变提醒；冷却 30 天；成功才进冷却 ——
+	let now = Date(timeIntervalSinceReferenceDate: 910_000_000)
+	let gauge = { (count: Int, enabled: Bool, reminder: Bool, last: Date?, now: Date) in
+		GaugeCalibrationAlertEvaluator.evaluate(.init(
+			jumpCount: count, isEnabled: enabled, isReminderEnabled: reminder,
+			lastAlerted: last, now: now
+		))
+	}
+	let sendGauge = gauge(5, true, true, nil, now)
+	expect(sendGauge.shouldSend, "电量计校准：30 天 5 次跳变且无冷却 → 该发")
+	expect(sendGauge.alertAtToPersist == now, "电量计校准：带出冷却起点（发送成功后才写）")
+	expect(!gauge(4, true, true, nil, now).shouldSend, "电量计校准：4 次未达阈值不发")
+	expect(!gauge(5, true, true, now.addingTimeInterval(-86400), now).shouldSend,
+		"电量计校准：冷却窗口内不发")
+	expect(gauge(5, true, true, now.addingTimeInterval(-40 * 86400), now).shouldSend,
+		"电量计校准：冷却期满放行")
+	expect(!gauge(5, false, true, nil, now).shouldSend, "电量计校准：总开关关着不发")
+	expect(!gauge(5, true, false, nil, now).shouldSend, "电量计校准：提醒开关关着不发")
+	expect(gauge(5, true, true, now.addingTimeInterval(86400), now).shouldSend,
+		"电量计校准：未来冷却标记失效（时钟回拨不永久静默）")
+}
+
 // MARK: - 保养提醒 vs 系统优化充电打架检测
 
 do {
@@ -4267,9 +4739,9 @@ do {
 	expect(BatteryAlertController.digestSendAllowed(lastSent: nil, due: t0, now: t0), "时钟异常：无标记可发")
 
 	// 校准冷却：未来标记失效、窗口内生效、期满放行
-	expect(!BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(86400), now: t0, cooldown: 30 * 86400), "时钟异常：未来冷却标记失效")
-	expect(BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(-86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却窗口内仍生效")
-	expect(!BatteryAlertController.gaugeCooldownActive(lastAlerted: t0.addingTimeInterval(-40 * 86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却期满放行")
+	expect(!GaugeCalibrationAlertEvaluator.isCooldownActive(lastAlerted: t0.addingTimeInterval(86400), now: t0, cooldown: 30 * 86400), "时钟异常：未来冷却标记失效")
+	expect(GaugeCalibrationAlertEvaluator.isCooldownActive(lastAlerted: t0.addingTimeInterval(-86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却窗口内仍生效")
+	expect(!GaugeCalibrationAlertEvaluator.isCooldownActive(lastAlerted: t0.addingTimeInterval(-40 * 86400), now: t0, cooldown: 30 * 86400), "时钟异常：冷却期满放行")
 }
 
 // MARK: - 蓝牙轮询卡死自愈（静默失败透镜）
@@ -5193,6 +5665,100 @@ do {
 	let multi = HealthAnomalyDetector.cycleMilestoneFinding(cycleCount: 1100, lastSeenCycles: 700)
 	expect(multi?.notificationID.contains("800") == true, "H3：跨多档 id 取最低档以便补发")
 	expect(multi?.body.contains("800") == true && multi?.body.contains("1000") == true, "H3：跨多档正文报全（800 与 1000）")
+}
+
+// MARK: - 健康里程碑 / 健康异常判定（HealthAlertEvaluators，拆分 1b 第四刀）
+
+// 这两台的写回时机就是判定本身：非发送路径（首次/回升/开关关着穿越）要马上落基准，
+// 发送路径必须等 send 成功才落。evaluator 用两个出口把这件事表达成可测的值。
+do {
+	let tiers = HealthMilestoneAlertEvaluator.defaultMilestones
+	let milestone = { (health: Int?, enabled: Bool, stored: Int, tiers: [Int]) in
+		HealthMilestoneAlertEvaluator.evaluate(.init(
+			healthPercent: health, isReminderEnabled: enabled,
+			storedMilestone: stored, milestones: tiers
+		))
+	}
+	// 首次运行：只记基准，不提醒（装上已经 87% 不补刀）
+	let first = milestone(87, true, 0, tiers)
+	expect(!first.shouldSend && first.milestoneToPersist == 87, "里程碑：首次运行只记基准不提醒")
+	// 读数回升：抬高基准，不提醒
+	let rebound = milestone(92, true, 88, tiers)
+	expect(!rebound.shouldSend && rebound.milestoneToPersist == 92, "里程碑：健康度回升抬高基准")
+	// 相等：不动
+	let equal = milestone(88, true, 88, tiers)
+	expect(!equal.shouldSend && equal.milestoneToPersist == nil, "里程碑：读数不变不写不提醒")
+	// 一跳跨三档：报全，lowest=80（81 还没跌破 80，不算跨第三档）
+	let multi = milestone(80, true, 92, tiers)
+	expect(multi.shouldSend && multi.lowestCrossed == 80, "里程碑：92→80 跨三档，取最低档 80")
+	expectEqual(multi.crossedMilestones, [90, 85, 80], "里程碑：跨档清单按高到低报全")
+	let twoTiers = milestone(81, true, 92, tiers)
+	expectEqual(twoTiers.crossedMilestones, [90, 85], "里程碑：92→81 只跨 90/85（没跌破 80 不代报）")
+	// 发送路径不落基准（等 send 成功）
+	expect(multi.milestoneToPersist == nil, "里程碑：发送路径不立即落基准（发送成功才写）")
+	// 只跨最高档
+	let one = milestone(89, true, 92, tiers)
+	expect(one.shouldSend && one.lowestCrossed == 90 && one.crossedMilestones == [90], "里程碑：只跨 90 档")
+	// 未跨档：不提醒不写
+	let none = milestone(86, true, 87, tiers)
+	expect(!none.shouldSend && none.milestoneToPersist == nil, "里程碑：未跨档不提醒不写")
+	// 开关关着穿越：不提醒，但基准必须推进（关键不变量）
+	let disabled = milestone(81, false, 92, tiers)
+	expect(!disabled.shouldSend && disabled.milestoneToPersist == 81,
+		"里程碑：开关关着穿越也要推进基准（否则打开后补报陈年穿越）")
+	// 缺健康度：什么都不动
+	let nilHealth = milestone(nil, true, 92, tiers)
+	expect(!nilHealth.shouldSend && nilHealth.milestoneToPersist == nil, "里程碑：缺健康度不动")
+	// stored 不严格大于档位时不算跨过（stored=90 不再报 90）
+	let atStored = milestone(80, true, 90, tiers)
+	expectEqual(atStored.crossedMilestones, [85, 80], "里程碑：stored 压线那一档不算跨过（严格 > 语义）")
+	// 自定义档位
+	let custom = milestone(70, true, 85, [80, 70])
+	expect(custom.shouldSend && custom.lowestCrossed == 70, "里程碑：档位可注入（80/70 取 70）")
+}
+do {
+	let decline = HealthAnomalyDetector.Finding(
+		kind: .healthDecline, notificationID: "health-decline-1",
+		title: "降", body: "降"
+	)
+	let cycle = HealthAnomalyDetector.Finding(
+		kind: .cycleMilestone, notificationID: "cycle-milestone-800",
+		title: "循环", body: "循环"
+	)
+	let anomaly = { (decline: HealthAnomalyDetector.Finding?, lastDay: String?, today: String, cycle: HealthAnomalyDetector.Finding?, count: Int?) in
+		HealthAnomalyAlertEvaluator.evaluate(.init(
+			declineFinding: decline, lastDeclineNotifiedDay: lastDay,
+			todayDayKey: today, cycleFinding: cycle, cycleCount: count
+		))
+	}
+	// 降幅：从未提醒过 → 发
+	expect(anomaly(decline, nil, "2026-10-18", nil, nil).declineToSend == decline,
+		"健康异常：从未提醒过的降幅 → 该发")
+	// 同一天已提醒 → 不发
+	expect(anomaly(decline, "2026-10-18", "2026-10-18", nil, nil).declineToSend == nil,
+		"健康异常：同一天只提醒一次")
+	// 昨天提醒过 → 今天可发
+	expect(anomaly(decline, "2026-10-17", "2026-10-18", nil, nil).declineToSend == decline,
+		"健康异常：跨日重新允许提醒")
+	// 无降幅 finding → 不发
+	expect(anomaly(nil, nil, "2026-10-18", nil, nil).declineToSend == nil, "健康异常：无降幅结果不发")
+	// 循环：有 finding → 发，并带出要推进的 seen
+	let cycleResult = anomaly(nil, nil, "2026-10-18", cycle, 820)
+	expect(cycleResult.cycleToSend == cycle, "健康异常：循环里程碑 → 该发")
+	expectEqual(cycleResult.cycleMilestoneToPersist, 820, "健康异常：带出循环 seen 供发送成功后推进")
+	// 无循环 finding → 不发不推进
+	let noCycle = anomaly(nil, nil, "2026-10-18", nil, 820)
+	expect(noCycle.cycleToSend == nil && noCycle.cycleMilestoneToPersist == nil, "健康异常：无循环跨档不发不推进")
+	// 降幅与循环同时命中：两条各自决定
+	let both = anomaly(decline, nil, "2026-10-18", cycle, 1000)
+	expect(both.declineToSend == decline && both.cycleToSend == cycle, "健康异常：降幅与循环互不吞")
+	// 日键：格式固定；日历由调用方注入，测试不抄第二份
+	var utc = Calendar(identifier: .gregorian)
+	utc.timeZone = TimeZone(identifier: "UTC")!
+	let day = Date(timeIntervalSince1970: 1_792_000_000)
+	expect(HealthAnomalyAlertEvaluator.dayKey(date: day, calendar: utc)
+		.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
+		"健康异常：日键格式固定为 yyyy-MM-dd")
 }
 
 // MARK: - E3 EnergyAggregation 能耗聚合
