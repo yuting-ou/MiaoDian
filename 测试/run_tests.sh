@@ -297,6 +297,22 @@ run_source_guards() {
 	fi
 	echo "==> 淡变守卫：视图层按标记取动画、曲线副标题零 value 动画（登记表条数改由测试断言钉，见「淡变登记表完备性」）"
 
+	# 入场时长守卫（3.0 P0-a，2026-10-16）：面板显示后 2 秒的账**量在"入场动画在飞多久"上**，
+	# 与挂动画的块数、重排弹簧族、把手层/探针的挂载都无关（这些臂整棵摘掉都不省，见
+	# UI/Components/PopoverComponents.swift 的 delay 注释与 `bash 工具/滚动成本.sh idle yes decay`）。
+	# 常数是量出来的（t=0 簇 3 208→1 520 轮、前 2 秒忙时 1 045–1 058→607–673 ms），
+	# 所以"谁把 response 改回 0.5"必须当场变红，而不是等下一次有人重新怀疑观感。
+	# 判据按源文件查（UI/ 不进测试编译面），计数用 grep -o | wc -l、模式里的点全转义、并剔注释行。
+	CASCADE_UI="$SRC/UI/Components/PopoverComponents.swift"
+	CASCADE_SPRING="$(grep -o '\.spring(response: 0\.25, dampingFraction: 0\.9)' "$CASCADE_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+	CASCADE_DELAY="$(grep -o 'min(Double(step) \* 0\.019, 0\.15)' "$CASCADE_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+	CASCADE_OLD="$(grep -vE '^[[:space:]]*//' "$CASCADE_UI" 2>/dev/null | grep -o 'response: 0\.5\|blendDuration' | wc -l | tr -d '[:space:]')"
+	if [ "${CASCADE_SPRING:-0}" != "1" ] || [ "${CASCADE_DELAY:-0}" != "1" ] || [ "${CASCADE_OLD:-0}" != "0" ]; then
+		echo "==> 入场时长守卫失败：CascadeIn 的在飞时长常数被改动（response 命中 $CASCADE_SPRING 处期望 1；delay 命中 $CASCADE_DELAY 处期望 1；旧时长写法 response0.5/blendDuration 命中 $CASCADE_OLD 处期望 0）——这组常数是消融量出来的，改回去就是每次开面板多花 ~430 ms 主线程"
+		exit 1
+	fi
+	echo "==> 入场时长守卫：CascadeIn 的 response/步长/封顶锁在实测值上（在飞时长＝面板那笔账的主项）"
+
 	# 字阶守卫（轮19）：字阶与字重预算是**写死的设计纪律**，不是"越多越好"——
 	# 层次由字号/颜色/位置承担，字重是最后手段。两条硬线：
 	# ① 面板与设置窗里不许出现 .bold（圆角设计本身有辨识度，bold 只是噪音）；
@@ -393,23 +409,26 @@ run_source_guards() {
 	fi
 	echo "==> 保养状态回写守卫：三个状态全回写、回写早于 shouldSend 分支（漏一个即静默失效）"
 
-	# 边沿判定出口守卫（轮22）：充满/低电量/高温三条边沿提醒的判定已抽进
-	# ThresholdAlertEvaluators（纯逻辑、可测）。若有人把判定条件抄回外壳方法体
-	# （绕开 evaluator），判定层断言照绿、生产却走了没被测的那份——v2.9.16 同族病。
+	# 判定出口守卫（轮22，轮24 扩到六台，轮25 扩到八台，本轮扩到十三台）：
+	# 充满/低电量/高温/耗电异常/低电预判/温度骤升六条边沿 + 健康里程碑/健康异常 +
+	# 外设低电/充满预告/慢充/睡眠掉电/电量计校准五台，判定已抽进
+	# Threshold/Drain/Health/DeviceAndCharging/History 五个 evaluator 文件（纯逻辑、可测）。
+	# 若有人把判定条件抄回外壳方法体（绕开 evaluator），判定层断言照绿、
+	# 生产却走了没被测的那份——v2.9.16 同族病。
 	# 钉法：外壳必须各调一次自己的 evaluator。
 	# ① 剔掉以 // 开头的行再数：整行注释掉真调用（v2.9.16 原始假绿形态）时计数必须掉到 0；
 	# ② grep -o|wc -l：无匹配时 grep -c 的"打 0 又退出 1"会造出双 0 让守卫假绿（第一轮就踩过）；
 	# ③ 已知边界：守卫只承诺"调用形状恰好一次"——若有人保留真调用又另抄一份判定走抄的那份，
 	#    形状守卫看不见，那是行为断言与读码的地界（探针与注释都在此声明，不冒充全知）。
 	EDGE_FILE="$SRC/Services/BatteryAlertController.swift"
-	for E in FullChargeAlertEvaluator LowBatteryAlertEvaluator HighTemperatureAlertEvaluator; do
+	for E in FullChargeAlertEvaluator LowBatteryAlertEvaluator HighTemperatureAlertEvaluator HighDrainAlertEvaluator LowForecastAlertEvaluator TempSurgeAlertEvaluator HealthMilestoneAlertEvaluator HealthAnomalyAlertEvaluator DeviceLowAlertEvaluator FullForecastAlertEvaluator SlowChargeAlertEvaluator SleepDrainAlertEvaluator GaugeCalibrationAlertEvaluator; do
 		N="$(grep -v '^[[:space:]]*//' "$EDGE_FILE" | grep -oF "${E}.evaluate(" | wc -l | tr -d ' ')"
 		if [ "$N" -ne 1 ]; then
 			echo "==> 边沿判定出口守卫失败：$E 的外壳调用 $N 处（期望 1）——判定被抄回壳里、注释掉或调用丢失" >&2
 			exit 1
 		fi
 	done
-	echo "==> 边沿判定出口守卫：三条边沿提醒外壳各调一次自己的 evaluator（判定不抄第二遍）"
+	echo "==> 判定出口守卫：十三台提醒外壳各调一次自己的 evaluator（判定不抄第二遍）"
 
 	# 注：v2.9.21 曾在这里加过一条「出厂档接线守卫」（数 ConfigurationManager 里的
 	# panelLayout = PanelPresets.factoryLayout 真赋值），本轮**删掉**，两个理由：
@@ -528,6 +547,102 @@ rm -rf "$EDGE_PROBE"
 trap - EXIT
 echo "==> 元守卫：注释顶替真调用 → 边沿出口守卫以预期信息变红（判定不抄第二遍是实门）"
 
+# 第三刀新增三台的专属变异（轮24）：上面的探针只覆盖 FullChargeAlertEvaluator，
+# 证明不了高耗电这一台也在守卫的名单里。变异形态同上：整行注释掉真调用，
+# 守卫剔注释后计数必须掉到 0、红、且红的信息必须是边沿出口守卫自己的。
+DRAIN_EDGE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$DRAIN_EDGE_PROBE"' EXIT
+cp -R "$SRC" "$DRAIN_EDGE_PROBE/src"
+python3 - "$DRAIN_EDGE_PROBE/src/Services/BatteryAlertController.swift" <<'MUTATE_DRAIN_EDGE'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+mutated, n = re.subn(
+    r"^(\t*)let result = HighDrainAlertEvaluator\.evaluate\(\.init\($",
+    r"\1// let result = HighDrainAlertEvaluator.evaluate(.init(",
+    s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("变异没打上：找不到耗电异常外壳的 evaluate 调用")
+p.write_text(mutated, encoding="utf-8")
+MUTATE_DRAIN_EDGE
+DRAIN_EDGE_GOT_RED=0
+DRAIN_EDGE_OUT="$( SRC="$DRAIN_EDGE_PROBE/src"; run_source_guards 2>&1 >/dev/null )" || DRAIN_EDGE_GOT_RED=1
+if [ "$DRAIN_EDGE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：注释掉耗电异常外壳的 evaluate 调用后守卫仍然全过——出口守卫名单漏了新三台" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$DRAIN_EDGE_OUT" | grep -q "边沿判定出口守卫失败"; then
+	echo "==> 元守卫失败：注释掉调用后守卫红了，但红的不是边沿出口守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$DRAIN_EDGE_OUT" >&2
+	exit 1
+fi
+rm -rf "$DRAIN_EDGE_PROBE"
+trap - EXIT
+echo "==> 元守卫：注释耗电异常真调用 → 边沿出口守卫以预期信息变红（新三台在名单里）"
+
+# 健康两台扩进名单的专属变异（轮25）：上面的探针只证明六台边沿在名单里，
+# 证明不了健康里程碑这两台也被看着。同形态：注释掉真调用，守卫必须红且红对信息。
+HEALTH_EDGE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$HEALTH_EDGE_PROBE"' EXIT
+cp -R "$SRC" "$HEALTH_EDGE_PROBE/src"
+python3 - "$HEALTH_EDGE_PROBE/src/Services/BatteryAlertController.swift" <<'MUTATE_HEALTH_EDGE'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+mutated, n = re.subn(
+    r"^(\t*)let result = HealthMilestoneAlertEvaluator\.evaluate\(\.init\($",
+    r"\1// let result = HealthMilestoneAlertEvaluator.evaluate(.init(",
+    s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("变异没打上：找不到健康里程碑外壳的 evaluate 调用")
+p.write_text(mutated, encoding="utf-8")
+MUTATE_HEALTH_EDGE
+HEALTH_EDGE_GOT_RED=0
+HEALTH_EDGE_OUT="$( SRC="$HEALTH_EDGE_PROBE/src"; run_source_guards 2>&1 >/dev/null )" || HEALTH_EDGE_GOT_RED=1
+if [ "$HEALTH_EDGE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：注释掉健康里程碑外壳的 evaluate 调用后守卫仍然全过——出口守卫名单漏了健康两台" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$HEALTH_EDGE_OUT" | grep -q "判定出口守卫失败"; then
+	echo "==> 元守卫失败：注释掉调用后守卫红了，但红的不是判定出口守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$HEALTH_EDGE_OUT" >&2
+	exit 1
+fi
+rm -rf "$HEALTH_EDGE_PROBE"
+trap - EXIT
+echo "==> 元守卫：注释健康里程碑真调用 → 判定出口守卫以预期信息变红（健康两台在名单里）"
+
+# 剩余五台扩进名单的专属变异：同形态注释掉慢充真调用，守卫必须红且红对信息。
+SLOW_EDGE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$SLOW_EDGE_PROBE"' EXIT
+cp -R "$SRC" "$SLOW_EDGE_PROBE/src"
+python3 - "$SLOW_EDGE_PROBE/src/Services/BatteryAlertController.swift" <<'MUTATE_SLOW_EDGE'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+mutated, n = re.subn(
+    r"^(\t*)let result = SlowChargeAlertEvaluator\.evaluate\(\.init\($",
+    r"\1// let result = SlowChargeAlertEvaluator.evaluate(.init(",
+    s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("变异没打上：找不到慢充外壳的 evaluate 调用")
+p.write_text(mutated, encoding="utf-8")
+MUTATE_SLOW_EDGE
+SLOW_EDGE_GOT_RED=0
+SLOW_EDGE_OUT="$( SRC="$SLOW_EDGE_PROBE/src"; run_source_guards 2>&1 >/dev/null )" || SLOW_EDGE_GOT_RED=1
+if [ "$SLOW_EDGE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：注释掉慢充外壳的 evaluate 调用后守卫仍然全过——出口守卫名单漏了剩余五台" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$SLOW_EDGE_OUT" | grep -q "判定出口守卫失败"; then
+	echo "==> 元守卫失败：注释掉调用后守卫红了，但红的不是判定出口守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$SLOW_EDGE_OUT" >&2
+	exit 1
+fi
+rm -rf "$SLOW_EDGE_PROBE"
+trap - EXIT
+echo "==> 元守卫：注释慢充真调用 → 判定出口守卫以预期信息变红（剩余五台在名单里）"
+
 # 字阶守卫的专属变异（2026-10-04）：这条守卫的期望值是**0**（"面板/设置里不许有 .bold"），
 # 而期望 0 的计数守卫最危险——判据一旦恒假就永远绿，且没有任何报错。
 # 探针：在源码副本的 UI/ 文件里注入一条真实存在的 .bold 写法
@@ -554,6 +669,37 @@ fi
 rm -rf "$BOLD_PROBE"
 trap - EXIT
 echo "==> 元守卫：注入 .bold → 字阶守卫以预期信息变红（期望 0 的守卫不是恒假）"
+
+# 入场时长守卫的专属变异（3.0 P0-a）：最可能的回归不是"删掉动画"而是"把时长改回柔和的一档"
+# （0.5s 看起来更"高级"，但它每次开面板多花 ~430 ms 主线程）。探针就把 response 改回 0.5，
+# 守卫必须以自己的信息变红——红不了说明这条锁是纸糊的。
+CASCADE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$CASCADE_PROBE"' EXIT
+cp -R "$SRC" "$CASCADE_PROBE/src"
+python3 - "$CASCADE_PROBE/src/UI/Components/PopoverComponents.swift" <<'MUTATE_CASCADE'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+count = s.count("response: 0.25")
+if count != 1:
+    sys.exit("变异没打上：期望源码里恰好 1 处 response: 0.25，实际 %d 处" % count)
+p.write_text(s.replace("response: 0.25", "response: 0.5"), encoding="utf-8")
+MUTATE_CASCADE
+CASCADE_GOT_RED=0
+CASCADE_OUT="$( SRC="$CASCADE_PROBE/src"; run_source_guards 2>&1 )" || CASCADE_GOT_RED=1
+if [ "$CASCADE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：把 CascadeIn 的 response 改回 0.5 后守卫仍然全过——入场时长守卫没在工作" >&2
+	printf '    探针实际输出：%s\n' "$CASCADE_OUT" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$CASCADE_OUT" | grep -q "入场时长守卫失败"; then
+	echo "==> 元守卫失败：改回 0.5 后守卫红了，但红的不是入场时长守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$CASCADE_OUT" >&2
+	exit 1
+fi
+rm -rf "$CASCADE_PROBE"
+trap - EXIT
+echo "==> 元守卫：response 改回 0.5 → 入场时长守卫以预期信息变红（在飞时长常数是真锁）"
 
 # 动效门守卫的专属变异（2026-10-04）：本轮给它补了**配对验证**（计数只证明数量，
 # 不证明门控与动画一一对应）。所以探针必须构造"计数全对、配对错"的形态——

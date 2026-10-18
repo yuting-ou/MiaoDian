@@ -49,6 +49,90 @@ nonisolated(unsafe) var publishCount = 0
 nonisolated(unsafe) var domainPublishes: Int64 = 0
 nonisolated(unsafe) var facadePublishes: Int64 = 0
 nonisolated(unsafe) var publishSubs: [AnyCancellable] = []
+// 栈采样：#25 的未知是「静置期谁在请求布局」，数轮次回答不了这个「谁」。
+// 只在 idle 模式按需打开（探针自身会扰动，默认关；开了就在报告里显式声明）
+nonisolated(unsafe) var captureStacks = false
+nonisolated(unsafe) var capturedStacks: [[UnsafeMutableRawPointer]] = []
+private let stackCaptureCap = 6000
+private let stackDepth = 24
+/// 全符号化样本预算。`Thread.callStackSymbols` 要走符号查找，单帧比 `backtrace` 贵两个数量级，
+/// 所以只采前 12 帧（12 × ~0.5 ms ≈ 6 ms，摊在 10 s 窗口里 = 0.06% 占空，可忽略）；
+/// 签名分桶仍靠便宜的 `backtrace` 覆盖全部轮次——两者一个管"是不是同一个驱动者"，一个管"它是谁"
+private let symbolSampleBudget = 12
+nonisolated(unsafe) var symbolSamplesLeft = 0
+nonisolated(unsafe) var symbolSamples: [[String]] = []
+
+/// 取一帧调用的返回地址链。malloc 不管——探针进程短命，够用即可
+private func sampleStack() {
+	if symbolSamplesLeft > 0 {
+		symbolSamplesLeft -= 1
+		symbolSamples.append(Thread.callStackSymbols)
+	}
+	guard capturedStacks.count < stackCaptureCap else { return }
+	var buffer = [UnsafeMutableRawPointer?](repeating: nil, count: stackDepth)
+	let n = backtrace(&buffer, Int32(stackDepth))
+	capturedStacks.append(buffer.prefix(Int(n)).compactMap { $0 })
+}
+
+/// 打印前若干条全符号化栈，跳过最内的布局机器帧（由调用方给帧序）
+func reportSymbolizedStacks(maxStacks: Int = 3, skipFrames: Int = 1) {
+	guard !symbolSamples.isEmpty else {
+		print("  ⚠ 符号样本为空——探针没在工作")
+		return
+	}
+	var counts: [String: Int] = [:]
+	for stack in symbolSamples {
+		let tail = stack.count > skipFrames ? Array(stack[skipFrames...]) : stack
+		counts[tail.joined(separator: "\n        "), default: 0] += 1
+	}
+	let ranked = counts.sorted { $0.value > $1.value }
+	print("  全符号化栈（采 \(symbolSamples.count) 条，唯一形状 \(counts.count) 类）：")
+	for entry in ranked.prefix(maxStacks) {
+		print(String(format: "    ── ×%d/%d 样本 ──", entry.value, symbolSamples.count))
+		print("        " + entry.key)
+	}
+}
+
+/// 单帧符号 → 「模块名 + 符号前缀」，去掉地址与偏移量（每次运行都不同，无法跨桶合并）
+private func shortSymbol(_ raw: String) -> String {
+	let parts = raw.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+	let head = parts.first.map(String.init) ?? raw
+	guard parts.count > 1 else { return head }
+	return "\(head) \(parts[1].split(separator: " ").prefix(3).joined(separator: " "))"
+}
+
+/// 把采到的栈按「去掉布局机器本身的前几帧」后的签名分桶，报出现次数最高的几类
+func reportStackSignatures(skipFrames: Int, top: Int = 6) {
+	guard !capturedStacks.isEmpty else {
+		print("  ⚠ 栈采样已打开但采到 0 帧——探针没在工作，本次签名结论一律不可用")
+		return
+	}
+	if capturedStacks.count >= stackCaptureCap {
+		print(String(format: "  ⚠ 栈采样已达上限 %d，签名按前 %d 帧统计（截断）", stackCaptureCap, stackCaptureCap))
+	}
+	var counts: [String: Int] = [:]
+	for stack in capturedStacks {
+		guard stack.count > skipFrames else { continue }
+		var symbols = [String]()
+		let frames: [UnsafeMutableRawPointer?] = Array(stack[skipFrames...])
+		frames.withUnsafeBufferPointer { buffer in
+			guard let table = backtrace_symbols(buffer.baseAddress, Int32(buffer.count)) else { return }
+			for index in 0..<buffer.count {
+				if let entry = table[index] { symbols.append(shortSymbol(String(cString: entry))) }
+			}
+		}
+		guard !symbols.isEmpty else { continue }
+		counts[symbols.joined(separator: " < "), default: 0] += 1
+	}
+	let ranked = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+	print(String(format: "  栈签名（共 %d 帧被采，跳过最内 %d 帧布局机器；唯一签名 %d 类）：",
+				 capturedStacks.count, skipFrames, counts.count))
+	for entry in ranked.prefix(top) {
+		let shown = entry.key.count > 210 ? String(entry.key.prefix(210)) + "…" : entry.key
+		print(String(format: "    %5.1f%%  ×%d  %@", Double(entry.value) / Double(capturedStacks.count) * 100,
+					 entry.value, shown))
+	}
+}
 
 /// 数"面板这段时间在反复重排多少轮"。PanelHostingView 是 final，不能继承加计数，
 /// 于是把它的 layout IMP 换成"先自增再转调原实现"
@@ -64,6 +148,7 @@ func swizzleHostLayout() {
 	originalLayoutIMP = method_getImplementation(method)
 	let replacement: Impl = { target, command in
 		layoutPasses += 1
+		if captureStacks { sampleStack() }
 		guard let raw = originalLayoutIMP else { return }
 		unsafeBitCast(raw, to: Impl.self)(target, command)
 	}
@@ -94,7 +179,16 @@ struct ScrollCostProbe {
 		// idle 模式：只量"面板开着不滚"的重排级联，budget=no 时不给滚动预算（树里没有 NSScrollView）
 		// 用来判那条 2 秒一簇的级联到底来自滚动容器还是数据发布本身
 		if args.first == "idle" {
-			idleOnly(scrollable: (args.dropFirst().first ?? "yes") != "no")
+			// decay：只挂一次根、连测 60 个 1 秒窗，看轮次是否随"内容填完"衰减到地板值。
+			// 为什么需要它：`idle yes` 的 10 s 窗里冒出的 ~1 200–1 900 轮簇，与消融实测的
+			// 地板值 10 轮/10 s 差两个数量级——必须分清"站着一直在烧"和"开面板那一下付一次钱"，
+			// 这两件事的修法完全不同，而前一种如果不成立就不该去修。
+			let idleMode = args.dropFirst(2).first ?? ""
+			let stackAtSeconds: Double? = idleMode.hasPrefix("at=") ? Double(idleMode.dropFirst(3)) : nil
+			idleOnly(scrollable: (args.dropFirst().first ?? "yes") != "no",
+					 stacks: idleMode == "stack" || stackAtSeconds != nil,
+					 decay: idleMode == "decay",
+					 stackAtSeconds: stackAtSeconds)
 			return
 		}
 		NSApplication.shared.setActivationPolicy(.accessory)
@@ -300,8 +394,9 @@ struct ScrollCostProbe {
 	}
 
 	/// 只量静置：budget=no（不可滚）与 yes（钉矮到 600pt）各跑一次，比对 100ms 分桶
-	static func idleOnly(scrollable: Bool) {
+	static func idleOnly(scrollable: Bool, stacks: Bool = false, decay: Bool = false, stackAtSeconds: Double? = nil) {
 		NSApplication.shared.setActivationPolicy(.accessory)
+		captureStacks = stacks
 		let monitor = BatteryMonitor()
 		let historyRecorder = BatteryHistoryRecorder(monitor: monitor, defaults: .standard, backupDirectory: nil)
 		let configurationManager = ConfigurationManager.shared
@@ -325,11 +420,104 @@ struct ScrollCostProbe {
 			historyRecorder.objectWillChange.sink { _ in publishCount += 1 },
 		]
 		window.orderFrontRegardless()
+		if let offset = stackAtSeconds {
+			// decay 实测到两次"固定偏移风暴"（挂载后 +10s 约 1 400 轮、+54s 约 690 轮），
+			// 它们与 2 秒节奏的数据发布无关。这个模式就是**走到那个偏移再采栈**，
+			// 回答"是谁在那个时刻让整棵树重排上千遍"。
+			print(String(format: "  走到挂载后 %.0f 秒…", offset))
+			drain(seconds: offset)
+			capturedStacks = []
+			symbolSamples = []
+			symbolSamplesLeft = 40
+			// 布局栈在这条路上永远是同一条（display cycle 驱动），它点不出"谁变了"。
+			// 能点名的判据是：**风暴那几秒里哪个 ObservableObject 发了发布**——逐源计数。
+			var sourceCounts: [String: Int] = [:]
+			let sourceSubs: [AnyCancellable] = [
+				monitor.objectWillChange.sink { _ in sourceCounts["monitor", default: 0] += 1 },
+				configurationManager.objectWillChange.sink { _ in sourceCounts["configuration", default: 0] += 1 },
+				alertController.objectWillChange.sink { _ in sourceCounts["alertController", default: 0] += 1 },
+				historyRecorder.objectWillChange.sink { _ in sourceCounts["门面", default: 0] += 1 },
+				historyRecorder.sessions.objectWillChange.sink { _ in sourceCounts["sessions", default: 0] += 1 },
+				historyRecorder.charger.objectWillChange.sink { _ in sourceCounts["charger", default: 0] += 1 },
+				historyRecorder.daily.objectWillChange.sink { _ in sourceCounts["daily", default: 0] += 1 },
+				historyRecorder.sleep.objectWillChange.sink { _ in sourceCounts["sleep", default: 0] += 1 },
+				historyRecorder.soc.objectWillChange.sink { _ in sourceCounts["soc", default: 0] += 1 },
+				historyRecorder.events.objectWillChange.sink { _ in sourceCounts["events", default: 0] += 1 },
+				historyRecorder.health.objectWillChange.sink { _ in sourceCounts["health", default: 0] += 1 },
+			]
+			let base = layoutPasses
+			var perSecond: [Int] = []
+			var tick = layoutPasses
+			for _ in 0..<3 {
+				drain(seconds: 1.0)
+				perSecond.append(layoutPasses - tick)
+				tick = layoutPasses
+			}
+			sourceSubs.forEach { $0.cancel() }
+			print(String(format: "  采样窗（%.0f–%.0f 秒）内宿主重排 %d 轮 · 逐秒 %@",
+						 offset, offset + 3, layoutPasses - base,
+						 perSecond.map { String($0) }.joined(separator: " ")))
+			print("  逐源发布：" + sourceCounts.sorted { $0.value > $1.value }
+				  .map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+			reportStackSignatures(skipFrames: 2)
+			reportSymbolizedStacks(maxStacks: 4)
+			window.orderOut(nil)
+			return
+		}
+		if decay {
+			// 不排空预热——从挂上的那一秒开始逐秒记，因为要量的正是"入场/内容填充段"
+			var perSecond: [Int] = []
+			var busyMs: [Double] = []
+			var lastTick = layoutPasses
+			var lastCPU = threadCPU()
+			let cpuStart = threadCPU()
+			let viewsAt0 = countViews(in: host)
+			for _ in 0..<60 {
+				drain(seconds: 1.0)
+				perSecond.append(layoutPasses - lastTick)
+				let cpuNow = threadCPU()
+				busyMs.append((cpuNow - lastCPU) * 1000)
+				lastCPU = cpuNow
+				lastTick = layoutPasses
+			}
+			let busyTotalMs = max(0, threadCPU() - cpuStart) * 1000
+			let head = perSecond.prefix(10).reduce(0, +)
+			let tail = perSecond.suffix(20).reduce(0, +)
+			print("  decay（挂载后逐秒轮次，60 窗）：")
+			print("    " + perSecond.map { String($0) }.joined(separator: " "))
+			print("  decay 逐秒主线程忙时（ms）：")
+			print("    " + busyMs.map { String(format: "%.0f", $0) }.joined(separator: " "))
+			// 每轮均值：3 200 轮到底折多少毫秒，取决于"一轮多贵"。这条把两簇的单价分开算，
+			// 因为挂载轮与内容到达轮的树规模不同，混在一起除会得出假单价
+			let mountRounds = perSecond.prefix(2).reduce(0, +)
+			let mountBusy = busyMs.prefix(2).reduce(0.0, +)
+			let stormIndex = perSecond.dropFirst(2).enumerated().max { $0.element < $1.element }?.offset ?? -1
+			print(String(format: "  单价：挂载段（前 2 秒）%d 轮 / %.0f ms = 每轮 %@ ms；最大后续簇 第%d 窗 %d 轮 / %.0f ms = 每轮 %@ ms",
+						 mountRounds, mountBusy,
+						 mountRounds > 0 ? String(format: "%.3f", mountBusy / Double(mountRounds)) : "n/a",
+						 stormIndex + 2, stormIndex >= 0 ? perSecond[stormIndex + 2] : 0,
+						 stormIndex >= 0 ? busyMs[stormIndex + 2] : 0,
+						 stormIndex >= 0 && perSecond[stormIndex + 2] > 0
+						 ? String(format: "%.3f", busyMs[stormIndex + 2] / Double(perSecond[stormIndex + 2])) : "n/a"))
+			print(String(format: "  decay 判读：前 10 秒合计 %d 轮 · 后 20 秒合计 %d 轮（均 %.1f 轮/秒）· 主线程忙时 %.0f ms",
+						 head, tail, Double(tail) / 20.0, busyTotalMs))
+			// 自证「内容填完了」而不是「探针没工作」：视图数在 60 秒里不增长、而轮次塌到地板，
+			// 才支持"站着不烧"的读法。缺这条，地板值可能只是计数器的假零。
+			let viewsAt60 = countViews(in: host)
+			print(String(format: "  自证：视图数 t=0 %d · t=60 %d（增 %d）· 全窗总轮次 %d",
+						 viewsAt0, viewsAt60, viewsAt60 - viewsAt0, layoutPasses))
+			window.orderOut(nil)
+			return
+		}
 		drain(seconds: 2)
 		var buckets: [Int] = []
 		var last = layoutPasses
 		let cpu0 = threadCPU()
 		let wall0 = Date()
+		// 栈只归栈给「被测的那 10 秒静置窗」，入场/预热段的签名不该混进来
+		capturedStacks = []
+		symbolSamples = []
+		symbolSamplesLeft = stacks ? symbolSampleBudget : 0
 		for _ in 0..<100 {
 			drain(seconds: 0.1)
 			buckets.append(layoutPasses - last)
@@ -337,10 +525,14 @@ struct ScrollCostProbe {
 		}
 		let busy = max(0, threadCPU() - cpu0)
 		let wall = max(0.001, Date().timeIntervalSince(wall0))
-		print(String(format: "  idle(scrollable=%@)：%.1f%% 占空 · %.0f 轮/秒 · 发布 %@ 次",
+		print(String(format: "  idle(scrollable=%@)：%.1f%% 占空 · %.0f 轮/秒 · 发布 %@ 次%@",
 					 scrollable ? "yes" : "no", busy / wall * 100, Double(layoutPasses) / wall,
-					 String(publishCount)))
+					 String(publishCount), stacks ? " · 栈采样开" : ""))
 		print("  分桶：" + buckets.map { String($0) }.joined(separator: " "))
+		if stacks {
+			reportStackSignatures(skipFrames: 2)
+			reportSymbolizedStacks()
+		}
 		// ① 失效守恒：门面把 7 个子域的 objectWillChange 原样转发给视图。
 		// 转发不守恒只有两副面孔：多跳合并（子域发 k 次门面只发 1 次）或反向放大。
 		// 同一次运行内两侧对数是唯一不需要"A/B 两棵树"的读法，而且是**恒等式**而非

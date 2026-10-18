@@ -8,8 +8,20 @@ struct CascadeIn: ViewModifier {
 	let step: Int
 	let active: Bool
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
-	// 首块与每块间隔的延迟（秒）；档位封顶避免卡片多时尾部拖得太晚
-	private var delay: Double { min(Double(step) * 0.038, 0.3) }
+	// 首块与每块间隔的延迟（秒）；档位封顶避免卡片多时尾部拖得太晚。
+	// ↓ 2026-10-16 定数依据（面板显示后 2 秒的宿主重排轮次与主线程忙时）：
+	//   · 消融在 /tmp 整棵源码副本上做（轮17 先例：开关不进产码），**一臂一进程、一进程一棵树、严格交替 3 轮**：
+	//     基线 3 344 轮/1 041 ms｜全撤入场 173/269｜把手层整棵不挂 3 400/1 039｜探针整棵不挂 3 360/1 035
+	//     ⇒ 重排弹簧族与把手/探针**都不是账**（这与轮17/18 的旧线索相反）；
+	//   · 账在"入场动画在飞多久"。但**不是干净的单变量**——本组同时改了 response、步长与封顶，
+	//     并去掉了 blendDuration，未逐项分离；且"块数"也不是完全无关（22 块不错峰 747ms、
+	//     只留 2 块原时长 692ms），只是都比不上砍时长：本组常数 1 543 轮/618 ms。
+	//   · 产码侧可复跑验证（不依赖 /tmp）：`bash 工具/滚动成本.sh idle yes decay` 三轮
+	//     t=0 簇 3 208→1 520 轮、前 2 秒忙时 1 045–1 058→607–673 ms、+10s 簇 1 400→1 014 轮。
+	//   · 注意：错峰只在**每进程第一次打开**生效（`BatteryPopoverView.hasPlayedCascade` 之后 step 归零），
+	//     所以步长/封顶那半只影响首开，response 那半每次打开都吃得到。
+	//   · 观感（入场变快变硬）**未经用户眼睛验收，不得据此发布**。
+	private var delay: Double { min(Double(step) * 0.019, 0.15) }
 	
 	@ViewBuilder
 	func body(content: Content) -> some View {
@@ -22,8 +34,8 @@ struct CascadeIn: ViewModifier {
 				// 用轻微缩放替代 blur 做”聚焦感”：blur 是逐帧高斯模糊，多卡片同时入场会掉帧；
 				// scale 走 GPU 变换几乎零开销，丝滑得多（见项目 numericText/持续动画掉帧的同类教训）
 				.scaleEffect(active ? 1 : 0.96, anchor: .top)
-				// 更长更柔的弹簧（阻尼 0.9 基本不回弹），配 blendDuration 让插值更连贯不顿挫
-				.animation(.spring(response: 0.5, dampingFraction: 0.9, blendDuration: 0.1).delay(active ? delay : 0), value: active)
+				// 阻尼 0.9 基本不回弹；response 0.5→0.25 的实测依据见上方 delay 注释
+				.animation(.spring(response: 0.25, dampingFraction: 0.9).delay(active ? delay : 0), value: active)
 		}
 	}
 }
