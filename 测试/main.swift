@@ -3552,6 +3552,46 @@ do {
 	expect(IOKitBatteryReader.temperatureC(fromRawCentiC: 0) == nil, "温度换算：0 视为无数据")
 	expect(IOKitBatteryReader.temperatureC(fromRawCentiC: 12_345) == nil, "温度换算：123.45°C 越界拒绝")
 
+	// macOS 27 容量字段搬家：顶层优先，BatteryData 兜底（本机 7884/8694 → 91%）
+	let legacyCapacities = IOKitBatteryReader.batteryCapacities(props: [
+		"DesignCapacity": 8694,
+		"AppleRawMaxCapacity": 7884,
+	])
+	expectEqual(legacyCapacities.designMAh, 8694, "容量字段：旧机顶层设计容量")
+	expectEqual(legacyCapacities.maxMAh, 7884, "容量字段：旧机顶层 AppleRawMaxCapacity 优先")
+
+	let nestedCapacities = IOKitBatteryReader.batteryCapacities(props: [
+		"BatteryData": [
+			"DesignCapacity": 8694,
+			"NominalChargeCapacity": 7884
+		]
+	])
+	expectEqual(nestedCapacities.designMAh, 8694, "容量字段：macOS 27 嵌套设计容量兜底")
+	expectEqual(nestedCapacities.maxMAh, 7884, "容量字段：macOS 27 嵌套标称容量兜底")
+
+	let nominalTopCapacities = IOKitBatteryReader.batteryCapacities(props: [
+		"DesignCapacity": 8694,
+		"NominalChargeCapacity": 7811
+	])
+	expectEqual(nominalTopCapacities.maxMAh, 7811, "容量字段：旧机顶层标称容量路径不变")
+
+	let emptyCapacities = IOKitBatteryReader.batteryCapacities(props: ["BatteryData": [String: Any]()])
+	expect(emptyCapacities.designMAh == nil && emptyCapacities.maxMAh == nil, "容量字段：缺字段返回空")
+
+	var healthSnapshot = BatterySnapshot()
+	healthSnapshot.designCapacityMAh = 8694
+	healthSnapshot.maxCapacityMAh = 7884
+	expectEqual(healthSnapshot.healthPercent, 91, "健康度：7884/8694 四舍五入为 91%")
+
+	// SMC 温度兜底：flt 噪声按 0.1 取整，0/负值/越界/NaN 丢弃
+	expectEqual(SMCPowerReader.sanitizedTemperatureC(29.09999), 29.1, "SMC 温度：flt 噪声取到 29.1")
+	expectEqual(SMCPowerReader.sanitizedTemperatureC(29.06), 29.1, "SMC 温度：29.06 进到 29.1")
+	expect(SMCPowerReader.sanitizedTemperatureC(0) == nil, "SMC 温度：0 视为无数据")
+	expect(SMCPowerReader.sanitizedTemperatureC(-1) == nil, "SMC 温度：负值拒绝")
+	expect(SMCPowerReader.sanitizedTemperatureC(100.1) == nil, "SMC 温度：越界拒绝")
+	expect(SMCPowerReader.sanitizedTemperatureC(.nan) == nil, "SMC 温度：NaN 拒绝")
+	expect(SMCPowerReader.sanitizedTemperatureC(nil) == nil, "SMC 温度：无值返回空")
+
 	// 整机功率降级链：SystemPower → AvgSystemPower → AverageSystemPower → 遥测 → SystemPowerIn-充电
 	expectEqual(IOKitBatteryReader.systemPowerW(props: ["SystemPower": 5000], isExternalPowerConnected: true, chargingPowerW: 3.0), 5.0, "整机功率：SystemPower 优先")
 	expectEqual(IOKitBatteryReader.systemPowerW(props: ["AvgSystemPower": 4000], isExternalPowerConnected: true, chargingPowerW: 3.0), 4.0, "整机功率：AvgSystemPower 次选")

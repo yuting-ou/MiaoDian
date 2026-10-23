@@ -95,9 +95,11 @@ struct IOKitBatteryReader {
 		snapshot.stateOfChargePercent = metrics.stateOfChargePercent
 		
 		if let props = smartBatteryProps {
-			snapshot.designCapacityMAh = props.int("DesignCapacity")
-			snapshot.maxCapacityMAh = props.int("AppleRawMaxCapacity") ?? props.int("NominalChargeCapacity")
-			snapshot.temperatureC = readTemperatureC(props: props)
+			let capacities = Self.batteryCapacities(props: props)
+			snapshot.designCapacityMAh = capacities.designMAh
+			snapshot.maxCapacityMAh = capacities.maxMAh
+			// macOS 27 起 AppleSmartBattery 不再暴露 Temperature，SMC 是同一物理量的现成替代
+			snapshot.temperatureC = readTemperatureC(props: props) ?? smcReader.batteryTemperatureC()
 			// 电池端实时电流/电压，与功率计算同源（InstantAmperage 正充负放）
 			if let amperage = props.int64("InstantAmperage"), abs(amperage) < 100_000 {
 				snapshot.batteryAmperageMA = Int(amperage)
@@ -253,6 +255,19 @@ struct IOKitBatteryReader {
 		let celsius = Double(raw) / 100.0
 		guard (0...100).contains(celsius) else { return nil }
 		return (celsius * 10).rounded() / 10
+	}
+	
+	// macOS 27 把容量字段从 AppleSmartBattery 顶层搬进 BatteryData 子字典。
+	// 顶层优先保持旧机行为；不读 FullChargeCapacity——它与系统「最大容量」口径不同
+	// （本机 7640/8694=88%，系统与应用历史口径均为 91%）。
+	nonisolated static func batteryCapacities(props: [String: Any]) -> (designMAh: Int?, maxMAh: Int?) {
+		let batteryData = props.dictionary("BatteryData")
+		let design = props.int("DesignCapacity") ?? batteryData?.int("DesignCapacity")
+		let maxCapacity = props.int("AppleRawMaxCapacity")
+			?? props.int("NominalChargeCapacity")
+			?? batteryData?.int("AppleRawMaxCapacity")
+			?? batteryData?.int("NominalChargeCapacity")
+		return (design, maxCapacity)
 	}
 	
 	private func readTimeToFullChargeMinutes(internalBattery: [String: Any]?) -> Int? {
@@ -429,7 +444,7 @@ struct IOKitBatteryReader {
 			serialNumber: props.string("Serial"),
 			cellVendorName: BatteryIdentityDecoder.vendorDisplayName(parsed?.vendorCode),
 			manufactureDateText: manufactureDateText,
-			designCapacityMAh: props.int("DesignCapacity"),
+			designCapacityMAh: props.int("DesignCapacity") ?? batteryData?.int("DesignCapacity"),
 			cellVoltagesMV: BatteryIdentityDecoder.cellVoltages(from: batteryData)
 		)
 		return identity.isMeaningful ? identity : nil

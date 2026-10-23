@@ -1,3 +1,9 @@
+## v2.9.23（macOS 27 修复：电池健康度与温度恢复读取）
+
+- **修复｜macOS 27.0 起 `AppleSmartBattery` 把容量字段从顶层搬进 `BatteryData`，健康度与温度曲线自 2026-09-15 起静默失效**。健康度读取改为顶层优先、`BatteryData.DesignCapacity`／`NominalChargeCapacity` 兜底；温度在 `Temperature` 键缺失时改读 SMC `TB0T`（`TB1T`/`TB2T` 备用），保留 0–100°C 脏数据门与 0.1°C 取整。电池身份证的设计容量同步兜底。
+- **测试｜1755 → 1769（本机）／1756 → 1770（UTC、Berlin）**。新增 14 条断言覆盖旧机顶层路径、macOS 27 嵌套路径、健康度取整与 SMC 温度清洗；两条语义变异分别被 2 条／6 条断言杀死。
+- 本机实测：健康度恢复 91%，温度采样恢复（29.1°C），充电上限 80% 仍正常保持。
+
 ## v2.9.22（架构收口：提醒判定全部可测／面板布局断言补齐／入场时长定数）
 
 - **架构｜`BatteryAlertController` 889 → 839 行，13 台提醒判定全部脱离 UN 外壳**。在既有保养/充满/低电/高温四台之外，本轮把耗电异常、低电预判、温度骤升、健康里程碑、健康异常、外设低电、充满预告、慢充、睡眠掉电、电量计校准十台抽进纯判定层（`Services/DrainAlertEvaluators.swift`／`HealthAlertEvaluators.swift`／`DeviceAndChargingAlertEvaluators.swift`／`HistoryAlertEvaluators.swift`）。温度环形缓存、两种持久化写回时机（非发送路径的基准推进 / 发送成功后才落）、每设备集合边沿都变成可测的值状态；Controller 只剩"读配置成值 → 驱动判定 → 回写 → shouldSend 才 send"的外壳。

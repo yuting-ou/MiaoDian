@@ -74,6 +74,23 @@ final class SMCPowerReader {
 		readFloat("PPBR")
 	}
 	
+	// 电池温度（°C）：macOS 27 起 AppleSmartBattery 不再暴露 Temperature 键，
+	// SMC 的 TB0T 仍是 flt；TB1T/TB2T 是同组备用传感器。
+	func batteryTemperatureC() -> Double? {
+		for key in ["TB0T", "TB1T", "TB2T"] {
+			if let value = readFloat(key), let temperature = Self.sanitizedTemperatureC(value) {
+				return temperature
+			}
+		}
+		return nil
+	}
+	
+	// 与注册表温度同一口径：0 与越界值视为脏数据，一位小数四舍五入
+	nonisolated static func sanitizedTemperatureC(_ value: Double?) -> Double? {
+		guard let value, value.isFinite, value > 0, value <= 100 else { return nil }
+		return (value * 10).rounded() / 10
+	}
+	
 	private func fourCC(_ text: String) -> UInt32 {
 		text.utf8.reduce(0) { $0 << 8 | UInt32($1) }
 	}
