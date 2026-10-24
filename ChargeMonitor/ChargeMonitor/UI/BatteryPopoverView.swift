@@ -623,8 +623,18 @@ struct BatteryPopoverView: View {
 					if let frame = frameStore.frames[cardID], let card = CardID(rawValue: cardID) {
 						dragHandle(card)
 							.position(x: frame.midX - origin.x, y: frame.minY - origin.y + 14)
-							// 仅布局重排（拖拽/折叠）时跟手弹簧；滚动时 frame 表不变，不会触发
-							.animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameStore.frames[cardID])
+							// 跟手弹簧只在指针在场时挂（拖拽实时让位/悬停平滑）；
+							// 数据驱动的卡片插拔硬切——把手 frame 弹簧是插板重排簇的承载者
+							// （2026-10-24 五臂消融：324→77 轮/次，与三族全撤同带），
+							// 且旧形状把手比卡片晚 0.24s 落位本是"脱节"。判定进测试面：
+							// PanelMotionGate.allowsHandleTracking（接线有源文件级守卫）
+							.animation(
+								PanelMotionGate.allowsHandleTracking(
+									isDragging: dragState != nil,
+									isPointerOnHandles: isHandleHovering != nil
+								) ? .spring(response: 0.24, dampingFraction: 0.92) : nil,
+								value: frameStore.frames[cardID]
+							)
 					}
 				}
 			}

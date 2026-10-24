@@ -5174,6 +5174,11 @@ do {
 	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: true, isDragging: true), "动效门：拖拽中始终允许（交互不是装饰）")
 	expect(!PanelMotionGate.allowsRepackAnimations(isScrolling: true, isDragging: false), "动效门：滚动中禁止装饰性重排弹簧")
 	expect(PanelMotionGate.allowsRepackAnimations(isScrolling: false, isDragging: true), "动效门：未滚动拖拽允许")
+	// 把手门（2026-10-24）：四输入真值表穷尽——判定改任何一个连接词/取反都必红
+	expect(PanelMotionGate.allowsHandleTracking(isDragging: true, isPointerOnHandles: false), "把手门：拖拽中跟手（实时让位是既有体验，不许为省重算让路）")
+	expect(PanelMotionGate.allowsHandleTracking(isDragging: false, isPointerOnHandles: true), "把手门：悬停把手层时跟手（用户正看着把手）")
+	expect(PanelMotionGate.allowsHandleTracking(isDragging: true, isPointerOnHandles: true), "把手门：拖拽+悬停并存时跟手")
+	expect(!PanelMotionGate.allowsHandleTracking(isDragging: false, isPointerOnHandles: false), "把手门：指针不在场时数据插拔不飞弹簧（插板簇承载者，消融 324→77 轮/次）")
 }
 
 // MARK: - 滚动文档几何 PanelScrollGeometry

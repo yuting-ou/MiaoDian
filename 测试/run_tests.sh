@@ -252,6 +252,21 @@ run_source_guards() {
 	fi
 	echo "==> 动效门守卫：头部墙钟动画 5 处、其中充电 3 处经滚动门控（警示 2 处按规矩豁免）；配对已核对（3 处带门控）"
 
+	# 把手门守卫（2026-10-24）：把手层 frame 弹簧是数据插板簇的承载者（五臂消融 ×3：
+	# 插板簇 276~324 轮/次，只撤把手族 → 21~77，与三族全撤同带），必须经
+	# PanelMotionGate.allowsHandleTracking 门控——拆掉门控恢复裸弹簧，晚到数据跨门槛
+	# 插板时就会重新逐帧整树重排。UI/ 不进测试编译面，接线只能按源文件查。
+	# 两个计数：门控调用恰 1 处；弹簧字面（0.24/0.92 全文件独此一族）也恰 1 处——
+	# 拆门控（0）或在别处长出第二枚裸弹簧（2）都红。
+	POPOVER_UI="$SRC/UI/BatteryPopoverView.swift"
+	HANDLE_GATES="$(grep -o 'PanelMotionGate\.allowsHandleTracking(' "$POPOVER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+	HANDLE_SPRINGS="$(grep -o 'response: 0\.24, dampingFraction: 0\.92' "$POPOVER_UI" 2>/dev/null | wc -l | tr -d '[:space:]')"
+	if [ "${HANDLE_GATES:-0}" != "1" ] || [ "${HANDLE_SPRINGS:-0}" != "1" ]; then
+		echo "==> 把手门守卫失败：把手 frame 弹簧门控 $HANDLE_GATES 处（期望 1）、0.24/0.92 弹簧字面 $HANDLE_SPRINGS 处（期望 1，只许存在于门控内）"
+		exit 1
+	fi
+	echo "==> 把手门守卫：把手 frame 弹簧经 allowsHandleTracking 门控（数据插板不飞弹簧；接线按源文件核对）"
+
 	# 单一出口守卫：v2.9.16 收口的 #20 起源于"同一判断抄了两遍"——面板传全 8 条来源、
 	# 资格侧只传 5 条，于是"面板出着洞察卡、资格集判无数据"，那张卡没落进 rows，
 	# 被 PanelFlow.normalize 追加到行表尾 → 甩在面板最底独占整行，连「极简」都赶不走它。
@@ -736,6 +751,41 @@ fi
 rm -rf "$MOTION_PROBE"
 trap - EXIT
 echo "==> 元守卫：门控挪位（计数 5/3 全对但配对错） → 动效门守卫以预期信息变红"
+
+# 把手门守卫的专属变异（2026-10-24）：上面的探针都不触碰把手层那处动画，证明不了
+# 这条新守卫会红。变异用回归的原始形态——把门控表达式整段换回裸弹簧（正是
+# "拆掉门控、性能回归无人报警"的形状），守卫必须红、且红的信息必须是把手门守卫自己的。
+HANDLE_PROBE="$(mktemp -d)"
+trap 'rm -rf "$HANDLE_PROBE"' EXIT
+cp -R "$SRC" "$HANDLE_PROBE/src"
+python3 - "$HANDLE_PROBE/src/UI/BatteryPopoverView.swift" <<'MUTATE_HANDLE'
+import pathlib, sys, re
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+# 从 .animation( 起到 value: frameStore.frames[cardID] 收尾的整段门控表达式 → 裸弹簧一行
+mutated, n = re.subn(
+	r"\.animation\(\s*\n\s*PanelMotionGate\.allowsHandleTracking\([^\n]*\n(?:[^\n]*\n)*?[^\n]*value: frameStore\.frames\[cardID\]\s*\n\s*\)",
+	".animation(.spring(response: 0.24, dampingFraction: 0.92), value: frameStore.frames[cardID])",
+	s, count=1)
+if n != 1:
+	sys.exit("变异没打上：找不到把手门控那处真调用（形状若已改，请同步变异与守卫）")
+p.write_text(mutated, encoding="utf-8")
+MUTATE_HANDLE
+HANDLE_GOT_RED=0
+HANDLE_OUT="$( SRC="$HANDLE_PROBE/src"; run_source_guards 2>&1 )" || HANDLE_GOT_RED=1
+if [ "$HANDLE_GOT_RED" -ne 1 ]; then
+	echo "==> 元守卫失败：把手门控被拆回裸弹簧后守卫仍然全过——把手门守卫没在工作，本次「全绿」不作数" >&2
+	printf '    探针实际输出：%s\n' "$HANDLE_OUT" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$HANDLE_OUT" | grep -q "把手门守卫失败"; then
+	echo "==> 元守卫失败：拆掉门控后守卫红了，但红的不是把手门守卫（错误信息不匹配）" >&2
+	printf '    实际输出：%s\n' "$HANDLE_OUT" >&2
+	exit 1
+fi
+rm -rf "$HANDLE_PROBE"
+trap - EXIT
+echo "==> 元守卫：把手门控拆回裸弹簧 → 把手门守卫以预期信息变红（性能回归必红）"
 
 # 测试面用默认 SDK（不钉旧）：逻辑层排除了宏宿主与 UI，不需要 SwiftUIMacros 插件，
 # 因此这份信号反映的正是本机最新 SDK 下逻辑层的真实编译状态——与 build.sh 为 UI 层
