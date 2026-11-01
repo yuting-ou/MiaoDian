@@ -42,7 +42,7 @@ for i in $(seq 1 "$steps"); do
 	cur="$(secs "${marks[$i]}")"
 	delta=$(python3 -c "print('%.3f' % ($cur - $prev))")
 	pct=$(python3 -c "print('%.2f' % (($delta / $per) * 100))")
-	echo "  段$i（${per}s）：CPU ${delta}s → ${pct}% 单核"
+	echo "  段${i}（${per}s）：CPU ${delta}s → ${pct}% 单核"
 	prev="$cur"
 	peak=$(python3 -c "print(max($peak, $pct))")
 done
