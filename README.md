@@ -8,7 +8,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 
 - **液态玻璃界面**：macOS 26 Tahoe 的 Liquid Glass 设计语言——外壳玻璃板真正采样桌面、卡片为发丝分区、控件/徽章/仪表可交互；**面板上每一处文字**（正文、标签、数值、徽章）的可读性都以 WCAG 对比度纯函数**可证明**——任意壁纸最坏情况达标，锁进测试门；语义色只交给图标、曲线与参考线这些图形承担。并适配「降低透明度 / 增加对比度 / 减少动态」三个系统辅助开关。macOS 15–25 自动降级为原质感，不牺牲覆盖面。
 
-- **菜单栏显示**：电量图标（精确到 1% 的自绘填充）/ 温度 / 功耗 / 剩余时间 / 24 小时走势图 / 三页轮换，充电时图标播放流光动画
+- **菜单栏显示**：电量图标（精确到 1% 的自绘填充，接电时画壳内插头，样式对齐 macOS 27 原生）/ 温度 / 功耗 / 剩余时间 / 24 小时走势图 / 三页轮换
 
 - **状态面板**：充电协议与协商档位、输入/充电/整机功率（SMC 实时读取）、循环次数、健康度、电池温度、电流电压、电池身份证（电芯厂商/生产日期/电芯均衡）
 
@@ -20,7 +20,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 
 - **充电场景预设**：办公 / 外出满充 / 长期存放 / 快充四档，一键切换「保养线 + 低电警示线 + 提醒/免打扰」组合；回显反查真实落盘配置——手动改任何参数即回「自定义」，切换失败不会被界面谎报；说明承诺的提醒开关由预设自己打开，送达条件诚实呈现
 
-- **提醒通知**：充满 / 低电量及预判 / 高温与骤升 / 慢充 / 耗电异常点名应用 / 睡眠掉电（点名阻止睡眠的进程）/ 健康里程碑 / 周报月报，免打扰时段可配，防轰炸设计；保养提醒可一键延后，慢充可复制诊断信息
+- **提醒通知**（16 类）：充满 / 低电量及预判 / 高温与骤升 / 慢充 / 耗电异常点名应用 / 睡眠掉电（点名阻止睡眠的进程）/ 健康里程碑与健康异常 / 外设低电 / 充满预告 / 电量计校准 / 保养提醒 / 周报月报，免打扰时段可配，防轰炸设计；保养提醒可一键延后，慢充可复制诊断信息
 
 - **数据自主**：历史数据本地存储并带滚动备份，一键导出纯文本报告 / CSV / 体检分享卡片 / 全量历史存档（换机迁移）
 
@@ -32,7 +32,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 
 ## 安装
 
-从 [Releases](https://github.com/yuting-ou/MiaoDian/releases) 下载最新 DMG，拖入应用程序文件夹即可。universal binary（arm64 + x86_64），需 macOS 15+（macOS 26 起呈现液态玻璃）。
+从 [Releases](https://github.com/yuting-ou/MiaoDian/releases) 下载最新 DMG，拖入应用程序文件夹即可。universal binary（arm64 + x86_64），需 macOS 15+（macOS 26 起呈现液态玻璃；macOS 27 已适配——健康度与温度读取走新字段布局，见 v2.9.23）。
 
 > 注意：本 fork 不走上游的 Homebrew 渠道，也没有应用内更新机制，请以 Releases 页为准。
 
@@ -41,7 +41,7 @@ macOS 菜单栏电池监控工具，基于开源项目 [ChargeMonitor](https://g
 只需 Command Line Tools，无需完整 Xcode：
 
 ```bash
-bash build.sh    # 先跑单元测试（约 1222 项断言），全过才编译打包
+bash build.sh    # 先跑单元测试（约 1777 项断言），全过才编译打包
 ```
 
 > SDK 27 起 SwiftUI 的属性包装器（`@State` 等）改为宏实现，而 CLT 27 的工具链不带 SwiftUIMacros 插件——build.sh 不猜你在什么环境，直接拿探针实测当前工具链能编哪个 SDK：能编就用默认 SDK，不能就自动回落到最新的可编译旧 SDK（26.x 的 SwiftUI 尚不依赖宏插件），全都编不动就停下来告诉你缺什么。装完整 Xcode 后自动走默认 SDK，无需手工配置。
@@ -60,7 +60,7 @@ bash build.sh    # 先跑单元测试（约 1222 项断言），全过才编译�
 
 ## English
 
-MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 15 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary); ~1222 unit tests run first as a build gate.
+MiaoDian is a Chinese-localized, heavily enhanced fork of [ChargeMonitor](https://github.com/CrashSystemZ/ChargeMonitor) — a macOS menu-bar battery monitor built with Swift/SwiftUI. It adopts Apple's Liquid Glass design on macOS 26 (adaptive-label text contrast is provable by WCAG pure functions, the material system is accessibility-aware, and there is a graceful fallback on macOS 15–25), and shows live power/temperature/SoC charts, battery health & identity, charger diagnostics with user-namable third-party chargers, a user-editable card layout, and 16 kinds of local notifications. Everything stays on your Mac — no network, no telemetry. Build with `bash build.sh` (Command Line Tools only, macOS 15+, universal binary, macOS 27 ready — the v2.9.23 fix adapts to the new AppleSmartBattery field layout); ~1777 unit tests run first as a build gate.
 
 ## 致谢与许可
 
