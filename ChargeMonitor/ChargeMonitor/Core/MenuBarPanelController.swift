@@ -68,7 +68,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		panel.delegate = self
 		self.panel = panel
 
-		// 标签与面板共用数据源：任一状态变化重画按钮（流光/轮换由 iconAnimator 驱动）
+		// 标签与面板共用数据源：任一状态变化重画按钮（轮换由 iconAnimator 驱动）
 		for publisher in [
 			services.monitor.objectWillChange,
 			services.configurationManager.objectWillChange,
@@ -226,9 +226,9 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 		let low = isLowBattery(snapshot)
 		let batteryImage = MenuBarIconRenderer.batteryImage(
 			percent: snapshot.stateOfChargePercent ?? 0,
-			isCharging: snapshot.isCharging,
-			isLowBattery: low,
-			shimmerPhase: services.iconAnimator.shimmerPhase
+			// 接电就画壳内插头（含插着电但保持电量不充的状态），同原生
+			isPluggedIn: snapshot.powerSource == .powerAdapter,
+			isLowBattery: low
 		)
 		button.image = nil
 		button.attributedTitle = NSAttributedString(string: "")

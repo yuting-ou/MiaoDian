@@ -543,21 +543,30 @@ do {
 	expect(report.contains("充满电"), "报告补全：电源事件中文化")
 }
 
-// MARK: - MenuBarIconRenderer 缓存
+// MARK: - MenuBarIconRenderer 缓存与配色语义
 
 do {
-	let a = MenuBarIconRenderer.batteryImage(percent: 50, isCharging: false, isLowBattery: false)
-	let b = MenuBarIconRenderer.batteryImage(percent: 50, isCharging: false, isLowBattery: false)
+	let a = MenuBarIconRenderer.batteryImage(percent: 50, isPluggedIn: false, isLowBattery: false)
+	let b = MenuBarIconRenderer.batteryImage(percent: 50, isPluggedIn: false, isLowBattery: false)
 	expect(a === b, "图标缓存：同参数应命中缓存")
-	
-	let low = MenuBarIconRenderer.batteryImage(percent: 50, isCharging: false, isLowBattery: true)
+
+	let low = MenuBarIconRenderer.batteryImage(percent: 50, isPluggedIn: false, isLowBattery: true)
 	expect(a !== low, "图标缓存：低电量标志应参与缓存 key")
-	
-	let over = MenuBarIconRenderer.batteryImage(percent: 150, isCharging: false, isLowBattery: false)
-	let hundred = MenuBarIconRenderer.batteryImage(percent: 100, isCharging: false, isLowBattery: false)
+
+	let plugged = MenuBarIconRenderer.batteryImage(percent: 50, isPluggedIn: true, isLowBattery: false)
+	expect(a !== plugged, "图标缓存：接电标志应参与缓存 key")
+
+	// 配色语义（2026-10-31 对齐原生）：接电态也是单色模板图随系统染色，
+	// 只有低电量保留红色非模板警示
+	expect(a.isTemplate, "图标配色：普通态应为模板图")
+	expect(plugged.isTemplate, "图标配色：接电态应为模板图（原生接电是单色）")
+	expect(!low.isTemplate, "图标配色：低电态应为彩色非模板（红色警示）")
+
+	let over = MenuBarIconRenderer.batteryImage(percent: 150, isPluggedIn: false, isLowBattery: false)
+	let hundred = MenuBarIconRenderer.batteryImage(percent: 100, isPluggedIn: false, isLowBattery: false)
 	expect(over === hundred, "图标缓存：越界百分比应被夹紧到 100")
-	
-	let negative = MenuBarIconRenderer.batteryImage(percent: -5, isCharging: false, isLowBattery: false)
+
+	let negative = MenuBarIconRenderer.batteryImage(percent: -5, isPluggedIn: false, isLowBattery: false)
 	expect(negative.size.width > 0, "图标渲染：负百分比不崩")
 }
 
