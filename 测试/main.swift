@@ -2772,6 +2772,30 @@ do {
 	expect(false, "备份抢救：测试构造不应失败（\(error)）")
 }
 
+// MARK: - 解码失败的诊断分类
+
+// load 的日志选词由这个纯函数决定：真损坏与旧档缺字段必须分开记，
+// 否则升级后的旧档会被误报成「数据损坏」误导排查（AGENTS 架构节已知缺口）
+do {
+	let session = ChargeSession(startDate: t0, endDate: t0.addingTimeInterval(600), startPercent: 40, endPercent: 50, peakInputW: 30)
+	let good = try PropertyListEncoder().encode([session])
+	let garbage = Data([0xFF, 0xFE, 0xFD, 0xFC])
+	// 结构合法但缺 endDate 字段的旧档（PropertyListDecoder 默认把 Date 存成参考秒）
+	let legacy = try PropertyListSerialization.data(
+		fromPropertyList: [["startDate": t0.timeIntervalSinceReferenceDate, "startPercent": 40]],
+		format: .binary,
+		options: 0
+	)
+
+	expect(HistoryPersistence.decodeFailureKind([ChargeSession].self, data: good) == nil, "失败分类：正常档案不报失败")
+	expectEqual(HistoryPersistence.decodeFailureKind([ChargeSession].self, data: garbage), .corrupt, "失败分类：解析不了的字节记损坏")
+	expectEqual(HistoryPersistence.decodeFailureKind([ChargeSession].self, data: legacy), .schemaMismatch, "失败分类：缺字段的旧档记模型不符")
+	// 两类都不影响抢救语义：分类只管日志选词，回退策略不变
+	expect(HistoryPersistence.decodingWithFallback([ChargeSession].self, primaryData: legacy, backupData: good)?.count == 1, "失败分类：缺字段旧档照样回退备份")
+} catch {
+	expect(false, "失败分类：测试构造不应失败（\(error)）")
+}
+
 // MARK: - CSV 数据导出
 
 do {

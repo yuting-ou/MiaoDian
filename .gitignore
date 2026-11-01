@@ -21,3 +21,12 @@ DerivedData/
 # 循环内部记忆（与作业书/报告同性质，不入库）
 经验账本.md
 .build-tests/
+PROGRESS.md
+BLOCKED.md
+妙电3.0计划.md
+
+# 其他 AI 工具的本地会话/配置（与 .qoder/ 同性质）
+.zcodeignore
+.zcode/
+.video_agent/
+.workbuddy/

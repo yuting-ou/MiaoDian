@@ -4,6 +4,7 @@
 - **性能｜充电流光动画撤除**：20fps 逐帧驱动器整个删除（`MenuBarIconAnimator` 从流光驱动+轮换节拍两职收缩为轮换一职），菜单栏不再有充电期间的常驻逐帧重绘；`MenuBarIconRenderer` 缓存 key 相应从三参（含 shimmerPhase）回到三布尔位。
 - **测试｜1773 → 1777（本机）／1774 → 1778（UTC）**。新增 4 条配色语义断言（普通态/接电态应为模板图、低电态应为彩色非模板）+ 接电标志参与缓存 key 断言；接口 `isCharging` → `isPluggedIn` 的调用点（生产 1 处 + 测试 8 处）全同步。
 - **收口｜2026-11-02 补验收后提交**：该轮 10-31 曾"已部署未提交"悬空（产物含未提交代码但无验收无记账），本轮按"先补验收证据再提交"补正——独立渲染 harness（编译真渲染器源文件）产出三态验收图（普通/接电×三种子形态/低电，亮暗双底色 + SF Symbol 原生参照并排，`输出/图标验收/图标三态验收.png`）；代码自检修掉 `MenuBarPanelController.swift` 一处过期注释（流光字样残留）。详见 `PROGRESS.md` 2026-11-02 轮。
+- **修复｜历史档案解码失败的诊断分类**（`HistoryPersistence`）：旧档缺字段与真损坏此前一律记成 `history-corrupt-*`，误导排查方向。现在 `decodeFailureKind` 纯函数按 `DecodingError` 分类——`dataCorrupted` 记 `history-corrupt-*`（损坏），`keyNotFound`/`typeMismatch`/`valueNotFound` 记 `history-schema-*`（与当前模型不符，多半是旧版存档）；回退抢救语义不变。测试 1777 → 1781（+4 条分类断言）。
 
 ## v2.9.23（macOS 27 修复：电池健康度与温度恢复读取）
 
